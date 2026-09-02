@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>办事师爷 · social card</title>
+<!--
+  1200×630 的社交卡。**它自己就是一份遵守这个应用那条墨水规矩的文书**，
+  不是在「介绍」产品，是产品的一页样张：
+
+  - 左栏是你写的那一句，石墨黑；
+  - 右栏是师爷拆出来的三条，任务标题仍然是石墨黑（那是你的事，不是它写的），
+    圈和它从那句话里**推断出来**的时间是群青；
+  - 中间一条界行——跟图标里那三道竖笔之间的行间是同一个东西。
+
+  这跟卡片上真实的渲染规则一字不差（TaskCard.tsx 截止/提醒那两行、
+  theme.css 的 --ink-ai）。颜色全部取自 :root，一个新颜色都没引。
+-->
+<style>
+  :root {
+    --paper: #EFEDE8;
+    --sheet: #FAF8F5;
+    --ink-you: #211F1D;
+    --ink-ai: #2E3ED4;
+    --rule: #D4CEC3;
+    --dim: #6D655A;
+    --font-cjk: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+    --font-serif: "Songti SC", "SimSun", "Noto Serif SC", Constantia, Cambria, serif;
+    --font-mono: Consolas, "Cascadia Code", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1200px; height: 630px; }
+  body {
+    background: var(--paper);
+    font-family: var(--font-cjk);
+    color: var(--ink-you);
+    -webkit-font-smoothing: antialiased;
+    padding: 44px;
+  }
+  .sheet {
+    width: 100%; height: 100%;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 42px 52px;
+    display: flex; flex-direction: column;
+  }
+
+  /* 题头。跟应用顶栏那个字标同一套：宋体、0.24em 字距、后面一枚群青的点。 */
+  .head { display: flex; align-items: baseline; }
+  .wordmark { font-family: var(--font-serif); font-size: 28px; letter-spacing: 0.24em; }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ink-ai); margin-left: 10px;
+  }
+  .where {
+    margin-left: auto;
+    font-family: var(--font-mono); font-size: 16px; color: var(--dim);
+  }
+
+  /* 两栏：左边你写的，右边它拆的。中间那条竖线是界行。 */
+  /* 两栏在竖向居中：内容比 630 高的版心矮一截，顶对齐会在底下空出一条，
+     居中之后那点余量匀到上下两边，看着才是有意的留白。界行仍然通天
+     （`align-self: stretch`）——它是版心的界，不是这两栏的框。 */
+  .body { flex: 1; display: flex; align-items: center; gap: 48px; margin: 30px 0 0; }
+  .said { flex: 1 1 0; }
+  .quote {
+    font-family: var(--font-serif);
+    font-size: 46px; line-height: 1.54;
+    text-indent: -0.5em;      /* 「 挂到版口外，首行才对得齐 */
+  }
+  .gutter { flex: 0 0 1px; align-self: stretch; background: var(--rule); }
+
+  .made { flex: 0 0 330px; display: flex; flex-direction: column; gap: 32px; }
+  .task { display: flex; gap: 14px; }
+  /* 圈跟图标里那一枚是同一个东西：句读的圈，群青，配给制。 */
+  .ring { flex: 0 0 auto; margin-top: 4px; }
+  .what { font-size: 22px; line-height: 1.35; }
+  /* 时间是它从那句话里推出来的，所以是它的墨——摆在标题下面一行，
+     跟卡片上那条 meta 行同一个位置。 */
+  .when {
+    display: block; margin-top: 5px;
+    font-family: var(--font-mono); font-size: 16px; color: var(--ink-ai);
+  }
+
+  .foot { margin-top: auto; font-size: 20px; color: var(--dim); }
+</style>
+
+<div class="sheet">
+  <div class="head">
+    <span class="wordmark">办事师爷</span>
+    <span class="dot"></span>
+    <span class="where">全部跑在本机 · localhost:30035</span>
+  </div>
+
+  <div class="body">
+    <div class="said">
+      <p class="quote">「下周三前把季度报告交了，顺便找老张确认下数据」</p>
+    </div>
+
+    <div class="gutter"></div>
+
+    <div class="made">
+      <div class="task">
+        <svg class="ring" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="7.4" fill="none" stroke="#2E3ED4" stroke-width="2.5"/>
+        </svg>
+        <div class="what">找老张确认数据<span class="when">周一 18:00</span></div>
+      </div>
+      <div class="task">
+        <svg class="ring" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="7.4" fill="none" stroke="#2E3ED4" stroke-width="2.5"/>
+        </svg>
+        <div class="what">写季度报告<span class="when">周二 全天</span></div>
+      </div>
+      <div class="task">
+        <svg class="ring" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="7.4" fill="none" stroke="#2E3ED4" stroke-width="2.5"/>
+        </svg>
+        <div class="what">交季度报告<span class="when">周三 09:00 提醒</span></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">随手记一句话，AI 拆成任务，到点提醒</p>
+</div>

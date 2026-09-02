@@ -1,0 +1,21 @@
+# cmd.exe 用 LF 会吃掉每行开头一两个字符：`chcp 65001` 变成
+# "'5001' 不是内部或外部命令"，服务照样起来但满屏报错。必须 CRLF。
+*.cmd text eol=crlf
+
+# 镜像风险，另一个方向：这仓库的工作副本在 Windows 上，core.autocrlf=true 是常见默认值，
+# 会在 checkout 时把这两类文件转成 CRLF。bash 的 shebang 行一旦带上 CRLF，`bad interpreter:
+# ...^M` 就出来了——克隆到 WSL / Git Bash 里跑 .sh，或者整个目录拷到 Mac 上，都会踩到。必须 LF。
+*.sh text eol=lf
+*.command text eol=lf
+
+# 其余一切：仓库里一律存 LF，检出时按各自平台还原。
+#
+# **这条以前不写，靠的是「每个克隆碰巧都设了 core.autocrlf=true」。** 那不是保证：
+# Mac/Linux 上的默认是 false，在那儿改一个 CRLF 的工作副本再提交，CRLF 就进仓库了。
+# 而且它**已经破过一次**——加这行之前 `git cat-file blob HEAD:web/src/App.test.tsx`
+# 里有 6913 行 CRLF，没有任何东西发现过（`git status` 干净，因为本机的 autocrlf
+# 把两边都归成 LF 再比）。写成属性之后这件事跟谁的本地配置无关。
+#
+# 注意 `git show HEAD:<file>` 会套用检出转换、看到的是 CRLF——查仓库里真实存了什么
+# 要用 `git cat-file blob`。这一处骗过一次人。
+* text=auto

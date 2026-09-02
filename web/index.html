@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>办事师爷</title>
+    <meta name="description" content="随手记一句话，AI 拆成任务，到点提醒。全部跑在本机。" />
+
+    <!-- 标签页图标。用 SVG 那份（浏览器自己缩，各个尺寸都清楚），
+         再挂一张 PNG 给不认 SVG 图标的老浏览器和手机主屏。
+         两份都在 web/public/ 下，源头是 brand/mark.svg，改了要重跑
+         `npx electron brand/render.mjs`。 -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/social-card.png" />
+
+    <!-- 分享出去长什么样。**这个应用跑在 localhost，多数时候没人会去分享一个
+         本机地址**——这几行真正的用处是：谁把它挂到局域网/内网域名上时，
+         贴进聊天窗口不至于是一条光秃秃的链接。仓库首页那张预览图是同一张，
+         在 GitHub 的 Settings → Social preview 里传 brand/social-card.png。 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="办事师爷" />
+    <meta property="og:description" content="随手记一句话，AI 拆成任务，到点提醒。全部跑在本机。" />
+    <meta property="og:image" content="/social-card.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

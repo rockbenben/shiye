@@ -1,0 +1,75 @@
+# 打三个平台的桌面版产物。**这个 workflow 从来没有真的跑过**——跟 ci.yml 顶上
+# 那句同一个道理，仓库还没有远程。第一次推 tag 才会验证它，那次红了是预期内的。
+#
+# ── 为什么必须是矩阵，不能一台机器全包 ──
+#
+# **macOS 的包只能在 macOS 上打。** dmg 要 hdiutil，.icns 要 iconutil，都是系统
+# 自带的东西，Windows/Linux 上没有替身。Linux 的 AppImage 理论上能在别的系统上
+# 用容器打，但那是另一套复杂度。所以三个 runner 各打各的，谁也不替谁。
+#
+# ── 为什么不跑测试 ──
+#
+# ci.yml 已经在 windows 上跑全量了，而那套测试**从没在 mac/Linux 上跑过一次**
+# （理由写在 ci.yml 里：server 有几处要绕开真实的 device.json，desktop 有
+# 路径归一化的平台假设）。在这里顺手加一条 `npm test` 只会得到两个没法在本地
+# 复现的红，把「出包」这件事也一起拦下。要跑就单独做一次，别搭在发布路上。
+#
+# ── ELECTRON_SKIP_BINARY_DOWNLOAD ──
+#
+# 跟 ci.yml 同一个理由，而且这里更明确：**electron-builder 不用
+# `node_modules/electron/dist` 那份二进制**，它按 package.json 里的版本号自己
+# 下一份 zip 到缓存（本机打包日志里那两行 `downloaded label=electron` /
+# `downloaded electron zip extracted successfully` 就是它）。postinstall 那次
+# 下载在这条路上纯属浪费，一个 job 省掉上百 MB。
+#
+# ── 签名 ──
+#
+# 三个平台都不签（个人使用，没买证书）。后果各不相同，README 里各写了一句：
+# Windows 是 SmartScreen 拦一次；**macOS 是 Gatekeeper 直接报「已损坏」**，
+# 用户看不出这是「没签名」；Linux 的 AppImage 没有这一层。
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # 手动也能跑一次，不用为了试它专门打一个 tag。
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      # 一个平台挂了，另外两个照打完——发布时手上有两个能用的包，比三个都没有强。
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      # 里面已经含 npm run build（web + server）和 desktop 的 tsc。
+      - run: npm run dist:desktop
+
+      # 只捞最终产物，不要 win-unpacked / mac 那个 .app 目录——那两个是打包
+      # 中间态，几百 MB，上传上去没人会去下。
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.zip
+            desktop/release/*.dmg
+            desktop/release/*.AppImage

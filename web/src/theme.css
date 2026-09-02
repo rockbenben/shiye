@@ -1,0 +1,5936 @@
+/*
+ * 手稿与批注：唯一的手写全局样式表。这里只放 antd token 表达不了的东西——
+ * 自定义排版角色（引句/边注的衬线、时间与标签的等宽）、antd 没有暴露 token
+ * 的个别细节（List 条目之间的点线、Collapse 折叠头的字重）。颜色/圆角/字体
+ * 这些 token 能覆盖的，一律走 web/src/theme.ts，不在这里重复painted一遍。
+ *
+ * :root 里的变量是 theme.ts 里 `ink` 常量的手写 CSS 副本——两处颜色值必须
+ * 一起改，各自留了一句指向对方的注释。
+ */
+
+:root {
+  /* 见 web/src/theme.ts 的 `ink` 常量，颜色值必须跟那边一起改。
+     **这一整排中性色是暖的（色相 30–40°），不是灰的。** 头一版全部落在
+     219–240° 那一段蓝里（纸 220°、页 240°、墨 220°、界 220°、次要字 219°），
+     加上唯一的强调色群青也是 234°——屏幕上九成的像素是蓝灰，唯二的暖色
+     （过期橙、中优先级琥珀）平时根本露不了面，整个界面读起来是凉的。
+     而这张样式表第一行写着「手稿与批注」：手稿纸本来就是暖的，冷灰从一开始
+     就跟这个立意对不上。
+     换的时候**明度一格没动**，只转色相 + 抬了一档饱和，所以所有对比度基本
+     原样（`theme.test.ts` 里那几条 AA 断言盯着）；`--dim` 顺带压深了 1%
+     明度，把它对纸的对比度从 4.69 补回 4.90——纯转色相会让它的 AA 余量从
+     0.44 缩到 0.19，太薄。 */
+  --paper: #EFEDE8;
+  --sheet: #FAF8F5;
+  --ink-you: #211F1D;
+  --ink-ai: #2E3ED4;
+  --overdue: #A8380A;
+  --rule: #D4CEC3;
+  /* 滚动条滑块。**不复用 --rule**：那是画线的颜色，1.34:1，当滑块看不见
+     （WCAG 1.4.11 对控件要 3:1）。这个值在纸/页/侧栏三种面上是 3.43 / 3.79
+     / 3.07，是沿 --rule→--dim 那条暖灰线上最浅的、三种面都过的一档。 */
+  --scrollbar: #857E73;
+  /* --dim 跟 `color-mix(in srgb, var(--ink-you) 45%, transparent)` **不是同一个
+     颜色**，别把它俩「统一」掉——这条被当成技术债挂了两批，2026-08-16 量过之后
+     才发现前提就是错的：45% 那档叠在 --paper 上算出来是 #92908D，
+     而 --dim 是 #6D655A，三通道各差 37/43/51，明度差约 17%。合并等于把导航和
+     回顾里那几处次要文字**整体压暗一档**，是改设计，不是消除重复。
+     真正的次要文字色现在有两类：不透明的 --dim（十几处在用），和半透明的
+     color-mix 三档——45%（.ink-nav-add 那几处、.ink-review-kind）、
+     55%（.ink-review-dismiss）、70%（.ink-trash-title）。后者没有 token、
+     各处自己挑百分比，那才是仅有的那点漂移——但三处三个值，提成 token 也
+     省不掉什么，留着。
+     （这段注释第一版把 70% 那档挂在了导航/回顾名下，而它其实属于垃圾箱标题；
+     整批审查逐条量过才发现。挡人踩坑的注释自己写错一档，下一个人照它去找
+     就找不到——跟它要挡的那条暂缓项犯的是同一个病：看见就下结论，没量。） */
+  /* **这个值是量出来的，不是挑出来的。** 上一版是 `#6D655A`，它在页面底
+     （#EFEDE8）上是 4.90:1、勉强过 WCAG 的 4.5，但**侧栏那层底色更深**
+     （rgb(227,225,220)），同一个色在那儿只有 4.39:1 —— 于是导航上的计数徽标、
+     标签前那个 `#`、日历里的农历那一行，全都压在线下。这个色当初是照页面底
+     调的，没人量过它在别的面上会怎样。
+     现在这个值三个面都过：页面 5.71 / 侧栏 5.11 / 卡片 6.30。
+     判据和量法见 `theme.css.test.ts` 里「对比度」那一节。 */
+  --dim: #635B50;
+
+  /* 优先级三档的填充色（高=砖红/中=琥珀/低=灰）。不进 LIST_COLORS（App.tsx
+     顶部那盘）、不落在群青 #2E3ED4 邻域——重了就分不清「这是它的优先级」
+     还是「这是它属于哪个清单」。
+
+     这也不是巧合：`priority` 这面旗从来不该借群青。规格正面答过「这面旗算谁
+     写的」（2026-08-13-full-rebuild-design.md 「`updates` 的字段白名单扩容」
+     一节）——AI 拆解时不能直接写它（一律落 0），但可以在 `updates` 里建议，
+     人点「接受」才算数，规格原话「这看着矛盾，其实正是建议机制存在的意义」。
+     等它显示到卡片上时，这个值要么是人手填的、要么是人接受过的建议，
+     不存在「AI 写的、还没经人过目」这种中间态——群青标的正是那种中间态
+     （见 --ink-ai 和 TaskCard.tsx 截止/提醒那两行），这面旗天生用不上，
+     固定三色，跟 t.source 没有关系。 */
+  /* **中/低两档是量出来后调深的。** 上一版 `--pri-2: #C2740A` 在卡片底上
+     只有 3.42:1、`--pri-1: #8A9099` 只有 3.03:1（窄屏行档更白，反而更差：
+     3.10 / 2.75），而这面旗是 12px 的字形，门槛是 4.5。三档只靠颜色区分，
+     看不清哪一档等于这个字段白设了——读屏那边有 `aria-label="优先级：中"`
+     兜底，肉眼这边没有。现在：中 5.02、低 4.60（都按卡片底算，纯白底更高）。
+     高那档（砖红 #B3261E）本来就过，没动。 */
+  --pri-3: #B3261E;
+  --pri-2: #9C5C09;
+  --pri-1: #5F6771;
+
+  /* 正文行宽上限。单位是 em 不是 ch——1em 约等于一个汉字的字宽（CJK 字体里
+     全角字符的字符前进量本身就是 1em），而 ch 量的是「0」这个字形的宽度，
+     在中文里只有全角字符的一半，写 60ch 只会得到你以为的一半字数。
+     38em 大致是「一行三十来个汉字」，中文正文常见的舒适区间。
+     卡片的宽度上限和右侧留白网格的第一条轨道都用它——两处必须是同一个数，
+     不然卡片收窄之后留白里的东西（边注、序号）会被推到轨道尽头，
+     跟它标注的那张卡隔着一大片空白，这个 bug 真实发生过。 */
+  --measure: 38em;
+
+  /* **行档列表的宽度上限，比正文那个宽。**
+     一行任务不是一段正文：标题短、右边一串元数据右对齐，`--measure`（38em）
+     那个「一行三十来个汉字」的舒适区是给连续阅读定的，套在行上只会把整份
+     列表压成左边一条窄带——实测 1920 下内容区有 1520px 而列表只占 532px，
+     2560 下右边空着 1830px，看着不像留白，像是没加载完。
+     60em 这个数不是拍的：照着滴答清单自己量的——它「四象限」那一屏在 1849px
+     宽的窗口里，每个象限约 855px，里面的任务行就是铺满那 855px 的，换算过来
+     约 61em。取 60em。 */
+  --row-measure: 60em;
+
+  --font-cjk: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+  --font-serif: "Songti SC", "SimSun", "Noto Serif SC", Constantia, Cambria, serif;
+  --font-mono: Consolas, "Cascadia Code", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink-you);
+  font-family: var(--font-cjk);
+  -webkit-font-smoothing: antialiased;
+  /* **原生表单控件的选中色。** 不写的话浏览器给的是系统强调色（Windows 上
+     那个亮蓝 #0d6efd 一类）——纪念日的「每年」、日历的五个显示开关都是裸的
+     `<input type=checkbox>`，勾上之后是一块跟这张纸毫无关系的蓝。
+     这不只是不好看：群青（--ink-ai）在这个界面里是**配给制**，只标 AI 产出
+     的东西，而屏幕上凭空多出一块比群青还艳的蓝，那条约定就没人看得出来了。
+     落到石墨黑：这些开关是人自己按的。一条规则管住所有原生控件，不用逐个
+     去换成 antd 组件。 */
+  accent-color: var(--ink-you);
+}
+
+/* 这个仓库被横向滚动坑过好几次——宁可多一条防御规则。 */
+html,
+body {
+  overflow-x: hidden;
+}
+
+/* 滚动条也纳入这套纸墨：默认那条亮蓝滑块在暖纸上是整屏唯一一处冷色，而它出现
+   的位置又恰恰是眼睛扫得最多的地方（右边缘，从头贯到尾）。
+
+   **两套语法不是并存的，是二选一，而且新浏览器选的是标准那套。** 这段原来
+   写着「同时写不冲突」——那句是错的，实测过：Chromium ≥121 只要在一个元素上
+   看见非初始值的 `scrollbar-width`/`scrollbar-color`，就**整个忽略**它身上的
+   `::-webkit-scrollbar*`。而下面那条 `*` 规则两个都设了，于是在 Electron
+   （Chromium 142）和新版安卓 WebView 里，下面那一整块 webkit 伪元素——10px 宽、
+   圆角、内缩两像素、**以及 `:hover` 换深色那一条**——全是死代码。
+
+   量法（Chromium 151 实测）：一个 `overflow-y: scroll` 的探针，两个标准属性都
+   还原成 `initial` 时滚动条宽 10px（webkit 规则生效），只要 `scrollbar-color`
+   还挂着就变回 15px（webkit 被忽略）。
+
+   **所以静止态的颜色本身必须够**：hover 那条在新浏览器上根本不会执行，触摸屏
+   更没有 hover。滑块用 `--scrollbar`（3.43:1 起，见那个 token 上面的注释），
+   不是 `--rule`（1.34:1，几乎看不见）。槽是透明——底色跟着它所在的面走，
+   纸上是纸、卡上是卡，不用为每种面各写一条。
+
+   webkit 那一块留着不删：旧安卓 WebView 只认它。
+
+   宽度 10px：默认 17px 在这套疏朗的排版里太重，而低于 8px 就不好抓了。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 5px;
+  /* 内缩两像素：滑块不贴着边，看起来是浮在面上的一条，而不是一道凹槽。
+     用透明边框 + `background-clip` 做，比调 width 更稳——width 一改，
+     鼠标能抓的宽度也跟着变小了。 */
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--dim);
+  background-clip: content-box;
+}
+
+/* 两条轴的交角。不写的话 Chromium 会画一块浅灰方块，在深一点的面上很扎眼。 */
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 无障碍底线：全站统一的可见焦点环，用群青——规格明确批准的、AI 墨水在
+   「AI 产出」之外唯一的用途。antd 的 focusOutline 只管它自己组件内部的
+   描边，这条兜住普通元素（比如按 Tab 落到纯文本按钮上）。 */
+:focus-visible {
+  outline: 2px solid var(--ink-ai);
+  outline-offset: 2px;
+}
+
+/* 视觉隐藏但屏幕阅读器读得到——TodayView 手动排序结果的播报用这个：
+   不能用 display:none/visibility:hidden，那两个连带把内容从可访问树里
+   摘掉，aria-live 也不会念。标准的「clip 到 1px」写法。 */
+.ink-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 「跳到任务列表」——跳过重复区块那颗（WCAG 2.4.1 A 级，理由和实测数在 App.tsx
+   那段注释里）。平时挪出屏幕，键盘聚焦时才落回左上角。
+   **不用 `display: none` / `visibility: hidden` 把它藏起来**：那两个连焦点一起
+   摘掉，这颗按钮就永远聚焦不到，也就永远没用——跟 `.ink-sr-only` 上面那段
+   讲的是同一条。这里也不能直接复用 `.ink-sr-only`：它是「一直藏着、只给读屏」，
+   而这颗要在聚焦那一刻真的显形给人看。
+   **`:focus-visible` 不是 `:focus`**：鼠标点到它（几乎不会发生）不该让一颗按钮
+   凭空跳出来。焦点环走全站那条统一的，不在这儿另画。 */
+.ink-skip {
+  position: fixed;
+  left: -9999px;
+  top: 8px;
+  z-index: 100;
+  padding: 6px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--sheet);
+  color: var(--ink-you);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ink-skip:focus-visible { left: 8px; }
+
+/* 空状态：一行安静的字，不是 antd 自带的 Empty 插画（那张灰色信封图正是这次
+   重做要去掉的「开箱即用的 antd 观感」，手机上还白占一整屏），见
+   2026-08-12-ux-audit.md「收件箱空状态用了 antd 自带的 Empty 插画」。 */
+.ink-empty-note {
+  margin: 4px 0;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── 排版角色 ── */
+
+/* 引句：被引用出来的你的原话（TaskBoard 按来源分组时的那句「源句」），
+   衬线、你的墨水，不斜体——斜体、群青是「边注」（AI 的拆解理由）专用，
+   那个角色和方括号一起留到 pass 2 按来源分组落地时再定义。 */
+.ink-quote {
+  font-family: var(--font-serif);
+  color: var(--ink-you);
+}
+
+/* 时间、标签、状态一类的小字：等宽。 */
+.ink-mono {
+  font-family: var(--font-mono);
+}
+
+/* ── 页面外壳 ── */
+
+/* 四栏结构（仿滴答清单）：最左竖图标栏 → 清单侧栏 → 任务列表 → 详情面板。
+   这一层只管**第一刀**：把竖栏和「其余的一整块」并排放。后三栏在 .ink-main
+   里由 antd 的 Row/Col 分（见 App.tsx）。
+
+   **`.ink-modrail` 跟 `.ink-rail-col` 是两个东西**，名字像纯属历史：前者是这
+   一批新加的最左竖图标栏（模块），后者一直是「清单侧栏」那一列的容器。 */
+/* **整个应用是一个不滚动的外壳，滚的是里面各栏自己**（仿滴答清单：它四栏
+   各滚各的，顶栏和最左那条竖栏永远不动）。
+
+   在这之前是整页一起滚，代价有两处实打实的：① 侧栏底下那个随手记只能靠
+   `position: sticky; bottom` 去追视口底部，清单一多它就压在「标签」那一段
+   上面，两层字叠着；② 右边详情面板也得自己算一份 `calc(100vh - …)`。两处
+   都是同一个根因：谁都不知道自己有多高。给外壳一个确定的高度，这两处的
+   算术全都不用做了。 */
+.ink-page {
+  height: 100vh;
+  display: flex;
+  /* 外壳自己绝不出现滚动条——真要滚的是下面 .ink-main 那一块。 */
+  overflow: hidden;
+}
+
+/* 竖栏右边那一整块（顶栏 + 内容）。`min-width: 0` 是 flex 子项能被压缩的前提，
+   没有它，里面某个不肯换行的宽东西（长标题、看板）会把整页撑出横向滚动条
+   ——跟 App.tsx 里每个 Col 的 minWidth: 0 是同一件事、同一个理由。 */
+.ink-shell {
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  /* `min-height: 0` 跟 min-width 是同一件事的另一个方向：没有它，里面那块
+     内容再高也不会被压缩，overflow 永远不触发。 */
+  min-height: 0;
+}
+
+/* ── 最左那条竖图标栏（Rail.tsx，仿滴答清单第一栏）─────────────────────
+   56px：一个 15px 的记号 + 上下各 10px 的点击余量（按钮 36px 高，比 24px 的
+   下限还宽出一截），再加两边留白。比这窄，记号贴着界行；比这宽，它开始像一
+   栏内容而不是一条边。
+
+   sticky + 100vh：整页滚动时这条栏不动。它回答的是「用哪个模块」，跟你滚到
+   哪儿无关。 */
+.ink-modrail {
+  flex: 0 0 56px;
+  /* 不用 sticky、也不用 100vh：外壳自己就是一屏高（.ink-page），这一栏被
+     stretch 拉满就行。 */  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 0 12px;
+  border-right: 1px solid var(--rule);
+  /* **别在这一层滚。** 上一版在这儿写了 `overflow-y: auto` + 藏滚动条，本意是
+     矮屏上别把按钮压扁（812×375 实测两颗被压成 36×15）。代价没算到：「搜索」
+     和「设置」是 `.ink-modrail-list` 的**兄弟**，整条栏一滚它们跟着卷出屏幕
+     ——实测设置齿轮落在 y=406，而视口只有 375 高，两种滚动条又都被藏了，于是
+     它成了一颗看不见也够不到的按钮。而 `onOpenSettings` 全应用**只有这一个
+     入口**（没有命令面板项、也没有快捷键）。压扁但点得到，比好看但够不到强。
+     现在滚的是下面 `.ink-modrail-list`，那两颗光杆按钮钉在滚动区外面。 */
+}
+
+/* 应用自己的记号。跟下面那排按钮之间留一段——它不可点，挨太近会被当成第一
+   颗按钮。 */
+.ink-modrail-mark {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  color: var(--ink-you);
+}
+
+/* 模块按钮那一列。**`list-style: none` 是承重的**：它是个 `<ul>`，这条规则
+   一旦没了就退回浏览器默认——每颗图标左边冒出一个项目符号，`display` 从
+   flex 变回 block、`gap: 4px` 也没了，按钮间距从 4px 变成行盒的默认行距。
+   这条真的被误删过一次（一次「加了又撤」的编辑把整条规则一起带走了），
+   屏幕上就是那个样子：一列点 + 间距忽大忽小。 */
+.ink-modrail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* **只在宽屏（竖着摆）时让模块导航自己滚。**
+   `.ink-modrail` 的直接子元素是 mark、这个 `<nav>`（模块导航，没有类名）、
+   搜索、设置四个；`.ink-modrail-list` 是 nav **里面**的 ul，给它写 overflow
+   不起作用——flex 的收缩只发生在直接子项上，实测 ul 高 308、内容也 308，
+   一点没收。`min-height: 0` 是必需的：flex 子项的自动最小尺寸是内容高，
+   不压到 0 它不会真的滚。
+
+   **必须关在这条媒体查询里。** 一个轴设了非 visible 的 overflow，另一个轴会
+   跟着算成 `auto`——窄屏上这条栏是横着的，于是 nav 自己横向滚了起来（实测
+   宽 239px、scrollWidth > clientWidth），把本该由 `.ink-modrail` 承担的横滚
+   抢了过去；而藏滚动条那两条只挂在 `.ink-modrail` 上，nav 上没有，全局
+   `* { scrollbar-width: thin }` 就在一条只有一行高的栏里画出一条横滚条。
+
+   `align-self: stretch`：外层是 `align-items: center`，不写这条 nav 只有一颗
+   按钮那么宽（实测 46px），而 `:focus-visible` 的描边是 2px + 2px 偏移，
+   横向会被 overflow 裁掉——Tab 到那九颗模块按钮时看不见焦点环。撑满就有余量。
+
+   滚动条不藏：56px 宽里一条细滚动条确实占地方，但「下面还有按钮」总得有个
+   说法，而滑块颜色已经是过了 3:1 的 `--scrollbar`。 */
+@media (min-width: 768px) {
+  .ink-modrail > nav {
+    align-self: stretch;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+.ink-modrail-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  /* 次要态用 --dim，选中/悬停才是墨色。整条栏都满黑会跟旁边那列真正要读的
+     东西抢，而多数时候人并不在这几个模块里。 */
+  color: var(--dim);
+  cursor: pointer;
+  /* **不许被压扁**，横竖两根轴都是：放不下时该滚的是整条栏，不是把按钮
+     压小——36px 是这个应用所有图标按钮的统一尺寸。理由整段在窄屏那节。 */
+  flex-shrink: 0;
+}
+
+.ink-modrail-btn:hover { color: var(--ink-you); background: rgba(0, 0, 0, 0.04); }
+
+/* 选中：**整块填成墨色、记号反白**。这条栏上一次只有一个「当前」，而它旁边
+   没有文字可以加粗——只靠一点浅底在余光里看不出来。填色是这一屏最重的一档
+   强调，用在这儿是对的：它回答「我现在在哪个模块」。 */
+.ink-modrail-btn[aria-current='page'] {
+  background: var(--ink-you);
+  color: var(--sheet);
+}
+
+/* 角标：记号右上角一个小数字。不上群青——它数的是任务，不是 AI 产出。 */
+/* 数字挂在记号右上角。字号 11px——全站下限，`.ink-trow-due` 那几条守着的
+   同一条。原来是 10px：徽标里是阿拉伯数字不是汉字，看着「还行」，但下限
+   一旦有例外就不是下限了，而这一颗恰恰是整条栏上唯一带字的东西。
+   胶囊跟着从 14px 长到 15px，数字才不会贴着边。 */
+.ink-modrail-count {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--rule);
+  color: var(--ink-you);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 15px;
+  text-align: center;
+}
+
+/* 选中态下角标换一套颜色，浅灰底压在墨块上会糊成一团。 */
+.ink-modrail-btn[aria-current='page'] .ink-modrail-count {
+  background: var(--sheet);
+  color: var(--ink-you);
+}
+
+/* 设置沉到底。 */
+.ink-modrail-foot { margin-top: auto; }
+
+/* 竖栏上段与段之间的分隔（功能模块分两批：日历/四象限 是「换个界面看同一批
+   任务」，习惯/专注统计/纪念日/回顾 是「另一件事」）。**一道短线，不是通栏**：
+   通栏会把这条 56px 的窄栏切成两截，看着像两个东西。
+
+   **线画在 ::before 上，不画在 li 自己身上。** 原来是 `width: 20px` +
+   `border-top` 直接落在这个 li 上——那个 20px 是想让线短一点，结果连**里面
+   那颗按钮**一起框住了：按钮声明的是 36×36，可它是个能收缩的 flex 项
+   （`flex: 0 1 auto`），于是段首那两颗（日历、习惯）被压成 20×36，比同一条
+   栏上别的按钮窄 44%，也掉到 24px 点击目标下限以下。量测夹具在六个宽度下
+   都把这两颗数了出来，而屏幕上它俩看起来跟别的一样——按钮里的记号是 16px
+   居中画的，缩到 20px 也还没被切到，只有点的时候才发现边上一圈是死的。 */
+.ink-modrail-sep {
+  margin-top: 8px;
+  padding-top: 8px;
+  position: relative;
+}
+
+.ink-modrail-sep::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 20px;
+  margin-left: -10px;
+  border-top: 1px solid var(--rule);
+}
+
+
+/* 窄屏：竖栏躺平成一条横栏钉在最上面。56px 一条竖的在手机上是纯粹的浪费
+   ——那点宽度正是任务标题最缺的。 */
+@media (max-width: 767px) {
+  .ink-page { flex-direction: column; }
+  .ink-modrail {
+    flex: 0 0 auto;
+    align-self: stretch;
+    height: auto;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 2px;
+    padding: 6px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+    /* 放不下就自己横滚，别把按钮压扁——理由整段在下面 .ink-modrail-btn 上。
+       滚动条藏掉：这条栏只有一行高，一条横滚条会吃掉三分之一。 */
+    overflow-x: auto;
+    scrollbar-width: none;
+    /* **右缘渐隐，告诉人「还能往右滑」。**
+       上面那条决定（放不下就横滚、不压扁按钮）是对的，但它留下一个问题：滚动条
+       藏掉之后，唯一的线索是最右边那颗图标被切掉一半——那读起来像画坏了，不像
+       「后面还有」。实测 390px（最常见的那档手机宽度）上被切掉的正好是「设置」。
+
+       **常驻不判断**：这条栏是 `justify-content: flex-start`，放得下的时候右端
+       本来就是空的底色，渐隐落在空处，看不出来；只有真的溢出时它才落在图标上。
+       所以不需要一个「溢出了没有」的 JS 判断。
+       代价：滑到最右端时渐隐还在（纯 CSS 判断不了滚动位置）。比起「图标像坏了」
+       这是更小的问题。 */
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
+  .ink-modrail::-webkit-scrollbar { display: none; }
+  .ink-modrail-mark { margin: 0 8px 0 0; flex-shrink: 0; }
+  .ink-modrail-list { flex-direction: row; }
+  /* **躺平之后 9 颗 36px 的按钮在 375px 的屏上放不下**（9×36 + 记号 + 内边距
+     + 间隙 ≈ 392px），而这条栏原来没拦着 flex 收缩，于是浏览器把收缩量全摊给
+     了外层那两个光杆按钮——「搜索」和「设置」（另外七颗包在 `.ink-modrail-list`
+     里，那是一个有内容的嵌套 flex，压不动）。实测：
+
+       320px → 搜索/设置各 15px；375px → 各 18px；414px 及以上 → 36px
+
+     36px 高、15px 宽的按钮在手机上按不准，而这两颗恰恰是这条栏上最常按的
+     （搜索、设置）。**这不是横向溢出**：`scrollWidth === clientWidth`，页面
+     不横滚——只盯溢出的检查一辈子也发现不了它，是「点击目标够不够大」那一维
+     量出来的。
+
+     改法是让它们保持原尺寸、整条栏自己横滚，跟手机上的标签条同一个手势。
+     不去调小按钮：36px 已经是这个应用所有图标按钮的统一尺寸，为了塞下而缩小
+     等于把问题从两颗摊到九颗。整条栏横滚那半写在上面 `.ink-modrail` 里。 */
+  /* `flex-shrink: 0` 已经提到媒体查询外面了（横竖两根轴都要），这儿不再重复。 */
+  /* `margin-left: auto` 在能横滚的容器里会把「设置」推到内容尽头而不是屏幕
+     右缘——那正是要的：它仍然是这条栏的最后一项，只是要滑到头才看得见。 */
+  .ink-modrail-foot { margin-top: 0; margin-left: auto; }
+}
+
+/* **顶栏整条删了**（`.ink-header` / `.ink-wordmark` 两条规则跟着删）。它只装
+   着一个字号和右边一串状态，却吃掉最上面 68px——应用名在窗口标题栏上已经有
+   一份，竖栏顶上那个记号是第三份。别再照着写。
+
+   状态那几句挪到了视图标题那一行右边，规则原样留着（下面）。 */
+.ink-header-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* 数字用群青——它数的是 AI 产出的东西（还没拆的、还没确认的），跟收件箱那个
+   计数同一个语义。 */
+.ink-header-status b {
+  color: var(--ink-ai);
+  font-weight: 500;
+}
+
+.ink-main {
+  /* 底部那 60px 原来是给「随手记别贴着窗口底边」留的；各栏自己滚之后
+     不需要了，留着反而在每一栏底下切掉一截。
+
+     **左边从 32 收到 16。** 左边紧挨着的是那条 56px 的模块栏，本来就是一块
+     空的竖条；再加 32px 内边距，模块栏边缘到侧栏第一个字之间有整整 32px 的
+     白带（量出来的），而右边挨着的是窗口边缘，那 32px 是有用的。两边不对称
+     是有理由的，写在这儿免得下一个人「顺手改齐」。 */
+  padding: 24px 32px 24px 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 横幅（同步冲突、打不开的文件……）竖排在上面，那一行栏吃掉剩下的高度。
+   横幅是页面级的提示，钉在上面不跟着滚是对的。 */
+.ink-main-stack {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 那一行栏（清单侧栏 / 任务列表 / 详情）。 */
+.ink-cols {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/**
+ * **两栏都拖到最宽时，别把看板挤没。**
+ *
+ * 侧栏和详情都能拖（各自上限 460 / 640），两个都拉满就是 1100px——加上模块栏和
+ * 内边距，1280 的屏幕上给看板只剩 88px，实测内容横向溢出；1024 上更糟：Row 默认
+ * `flex-wrap: wrap`，详情整个**换到第二行**，看板被顶出屏幕外。
+ *
+ * 两条一起才够：
+ * ① `nowrap`——换行是这里最坏的失败方式，它不是「挤了一点」，是「那一栏不见了」。
+ *    **只在宽屏关**：窄屏那一档 `xs={24}` 的堆叠正是靠换行实现的。
+ * ② 看板一个 `min-width`——不用写一行 JS，也不用一个「视口宽度」的监听。
+ *
+ *    **真正让看板不参与收缩的是它自己的 `flex: 1 1 0%`**（App.tsx 那个 Col），
+ *    不是邻居身上的 `min-width: 0`。flex 分配负空间是按「flex-shrink × flex 基准
+ *    尺寸」加权的：看板的基准是 `0%`，加权因子就是 1×0 = 0，一点都摊不到它头上；
+ *    它的宽度全来自 grow 阶段分剩余空间，再被这条 `min-width` 从下面托住。
+ *    这句话原来写成「因为邻居能缩到 0，所以 flex 去缩它们」——**是错的**，
+ *    而且是那种下一个人会照着动手的错：他把看板改成看着更顺眼的 `flex: 1 1 auto`，
+ *    我说的两个前提都还成立，于是他以为没问题，而基准尺寸一变成内容宽度，
+ *    看板就跟着一起缩了。`ColGrip.tsx` 顶上记着 `1 1 0%`「修过一次真实回归」。
+ *
+ * 320 是量出来的：把看板列压到各种宽度看 `scrollWidth`，内容的固有最小宽度是
+ * 211px（再窄就横向溢出）。取 320 是让一行任务还读得出来，不只是「不溢出」。
+ *
+ * 代价说清楚：挤到这一步时，界线报的 `aria-valuenow`（存着的那个数）会比屏幕上
+ * 实际的宽度大——存着的是他的偏好，屏幕上是这次放得下多少。窗口一变大就对上了。
+ */
+/* 基线（含窄屏堆叠那一档）：三栏都能一路缩到 0。下面那块在宽屏下把它们各自
+   顶回自己的下限——**必须写在这条之后**，两者特异度一样（媒体查询不加特异度），
+   谁写在后面谁赢，theme.css.test.ts 有一条专门盯这个顺序。 */
+.ink-rail-col,
+.ink-board-col,
+.ink-detail-col { min-width: 0; }
+
+/* 宽屏下三栏各自的下限。**加起来（200 + 380 + 300 = 880，再加外壳约 92）就是
+   `narrow.ts` 里 999 那个门槛的由来**——低于它详情整个退成浮层，只剩侧栏和任务
+   列表，880 那笔账也就不用算了。
+
+   - 侧栏 200 / 详情 300：就是 `NavShell.tsx` 的 `NAV_MIN` 和 `App.tsx` 的
+     `DETAIL_MIN`。不钉这两条的话，把一栏拉满会把另一栏挤到它自己写着的下限以下
+     ——实测侧栏拉满、详情留默认，1000px 上详情只剩 258。
+   - 任务列表 380：内容的固有最小宽度实测是 211px，但这一列还装着四象限，
+     2×2 那个网格每格要 ~170px 才画得出标题（见这个文件里 `.ink-quad-grid` 那段
+     实测），380 - 12 内边距 - 22 间隙再对半分正好 173。取内容下限（211）的话
+     四象限每格只剩 143，比那段注释里记着的「实测标题宽度是 0」还窄。 */
+@media (min-width: 1000px) {
+  .ink-rail-col { min-width: 200px; }
+  .ink-board-col { min-width: 380px; }
+  .ink-detail-col { min-width: 300px; }
+}
+
+/* **每一栏各滚各的。** 这是「整屏外壳」的兑现处：三栏都拿到确定的高度
+   （Row 有高度 → Col 的 height:100% 解析得出来），谁的内容长谁自己出滚动条，
+   不再互相顶。 */
+.ink-rail-col,
+.ink-board-col,
+.ink-detail-col {
+  height: 100%;
+  min-height: 0;
+}
+
+/* 两条可拖界线的定位基准。绝对定位要有个 relative 的祖先，否则它会骑到
+   最近的定位祖先上去（这儿就是整个页面外壳），跑到屏幕左边缘。 */
+.ink-rail-col,
+.ink-detail-col { position: relative; }
+
+/* 栏与栏之间那条可拖的界线，两处共用（侧栏↔看板、看板↔任务详情）。
+   **贴在某一列的边缘上，不另占一列**：Row 的 gutter 是列的内边距，界线要落在
+   两列中间那条缝里，只能绝对定位骑上去。宽 8px（比看得见的那 2px 宽得多）
+   ——一条一两像素的东西鼠标瞄不准，是所有可拖界线的通病；看得见的部分只在
+   悬停/聚焦时亮出来，平时透明，不给这套安静的纸面再添一根竖线。
+
+   左右两个变体只差贴哪一边：侧栏那条贴右缘（往右拖变宽），详情那条贴左缘
+   （详情在最右边，往右拖是把它拖窄）。 */
+.ink-col-grip {
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 2;
+}
+
+.ink-col-grip:hover::after,
+.ink-col-grip:focus-visible::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--scrollbar);
+}
+
+/* 负 6px 让 8px 的热区骑在两列之间那条缝的中间，而不是压在某一列的内容上。 */
+.ink-col-grip-right { right: -6px; }
+.ink-col-grip-left { left: -6px; }
+
+/* 它没有内容，全局那条 :focus-visible 的描边画在一条 8px 宽的透明块上不够
+   明显，所以上面那条 ::after 负责把线亮出来，这儿把默认描边关掉。 */
+.ink-col-grip:focus-visible { outline: none; }
+
+/* **详情那一列刻意不在这儿**：它的滚动归里面的 `.ink-detail`（见下面那条）。
+   列自己一旦 `overflow-y: auto`，骑在它左缘上的那条可拖界线（`.ink-col-grip`，
+   `left: -6px`）伸出去的部分就被裁掉——实测 `elementFromPoint` 打在界线正中央
+   命中的是隔壁的看板列，界线看得见却点不着。侧栏那一列是 `overflow: visible`，
+   所以它那条一直好使，两条界线的差别只在这一个属性上。 */
+.ink-board-col { overflow-y: auto; }
+
+/* **这一块必须摆在上面那几条后面。** 媒体查询不加特异度：`@media` 里的
+   `.ink-main` 跟外面那条 `.ink-main` 一样重，谁写在后面谁赢。这一块原来放在
+   `.ink-page` 那一段旁边（文件靠前），于是 `.ink-page` 的覆盖生效了、
+   `.ink-main` 的没生效——手机上整页照样被切在屏幕底边，而且看上去像是
+   「写了覆盖但没用」。实测过一次，别再往上挪。 */
+
+/* ── 窄屏：把上面那套「整屏外壳、各栏各滚」整个退回普通文档流 ────────────
+   手机上四栏是竖着摞起来的（Row 换行），「各栏各滚」这件事在那个形状下不成立
+   ——每一栏都拿 `height: 100%`，摞起来就是三倍屏高，而外壳 `overflow: hidden`
+   会把露在外面的部分直接切掉：实测 390×780 下任务列表被齐刷刷切在屏幕底边，
+   而且滚不动。窄屏就该是最朴素的那种「整页往下滚」。 */
+@media (max-width: 767px) {
+  .ink-page {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+  /* `html, body, #root { height: 100% }`（文件顶上那条）在窄屏得跟着放开：
+     不放的话 body 自己变成滚动容器（高度钉死 100%、内容 1178），页面能用手指
+     滚，但 `window.scrollTo` / `scrollIntoView` 这类按视口算的东西全都指错
+     地方——实测 `window.scrollTo(0, 700)` 一动不动。改成 auto + min-height，
+     滚的就是文档本身，跟任何一个普通网页一样。 */
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+  .ink-main {
+    display: block;
+    overflow: visible;
+  }
+  .ink-rail-col,
+  .ink-board-col {
+    height: auto;
+    overflow: visible;
+  }
+  /* 详情面板窄屏是整屏浮层（下面那条 .ink-detail-col 的 position: fixed），
+     它的滚动要留着——只把宽屏那份 height: 100% 让开。 */
+  .ink-detail-col { height: auto; }
+}
+
+
+@media (max-width: 480px) {
+  .ink-main {
+    padding: 16px 16px 40px;
+  }
+}
+
+/* ── 左栏（导航）／收件箱视图 ──
+   .ink-rail-col 是页面外壳的左栏容器，现在装的是导航（Sidebar 组件）；
+   .ink-sidebar 是「收件箱」这个视图自己内部的布局（InboxSidebar 组件），
+   两者不是同一个东西——收件箱现在只是导航里的一个去处，不再独占左栏。 */
+
+/* 收件箱那一屏收在 --measure 里。里面全是他自己随手打的整句话（「妈说下个月
+   要来住几天，得把次卧收拾出来，被子也要晒」），是正文不是列表行——不收的话
+   一行跑满 1040px，而「立即拆解」被顶到一千像素外，跟它上面那句「待拆解 · 2」
+   看着毫无关系。跟「回顾」那一屏同一条理由、同一个 token。 */
+.ink-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: var(--measure);
+}
+
+/* .ink-rail-col 是这一列真正的 flex 容器——nav 和随手记（.ink-nav-composer）
+   是兄弟节点，不是 nav 的孩子（一个输入框不是导航项，landmark 该只包导航项，
+   见 Sidebar 组件的注释）。「随手记推到底部」落在这一层，靠的是
+   .ink-nav-composer 的 margin-top: auto + App.tsx 里 Row 的 align="stretch"
+   （两栏对齐到较高那一栏，见那处注释）——这一列被撑高之后自然有多余空间。
+   **不要在这里写 height: 100%**：这是 flexbox 一个反直觉的地方，stretch 只在
+   flex 子项自己的高度是 auto（没写任何值）时才生效；显式写 height: 100%，
+   哪怕它因为父级没有确定高度而解析不出来，也会让子项的「高度属性」不再是
+   auto，直接关掉 stretch——踩过这个坑：加了 height: 100% 之后 Col 反而
+   卡死在自己内容的高度，跟 align="top" 时一模一样，margin-top: auto 照样
+   没有余量可分。留空、什么都不写，才是让 stretch 生效的写法。 */
+.ink-rail-col {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (min-width: 768px) {
+  /* 清单侧栏在宽屏是**自己一栏、通高、自己滚**（仿滴答清单）。
+
+     在这之前它跟着整页滚，而底下那个随手记是 `position: sticky; bottom: 12px`
+     ——于是清单/标签一多，它就压在「标签」那一段上面，两层字叠着（实测截图
+     里就是这样，输入框透明，后面的标签名从下面透出来）。给这一栏一个确定的
+     高度、让**导航那一段自己滚**，随手记就自然待在栏底，不用再 sticky 去追
+     视口底部。
+
+     `top`/高度里的 24px 是 .ink-main 的上内边距——不减掉的话这一栏底部会有
+     一截探到视口外面，随手记跟着看不见。 */
+  .ink-rail-col {
+    border-right: 1px solid var(--rule);
+    padding-right: 24px;
+    /* 高度由外壳给（上面 .ink-rail-col 那条 height: 100%），这里只管
+       「里面怎么分」：导航那一段滚，搜索框和随手记钉在两头。 */
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* 会滚的是导航这一段，不是整栏：上面的搜索框和下面的随手记都该钉着。
+     `min-height: 0` 是 flex 子项能被压缩到比内容还矮的前提——没有它，
+     `overflow-y: auto` 永远不会触发，这一段会顶着整栏一起变高。 */
+  .ink-nav {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    /* 滚动条压着最右边的计数不好看，让开一点。 */
+    padding-right: 4px;
+  }
+
+  /* 上面那条 sticky 是为了「跟着整页滚也够得着」——这一栏现在自己滚，不再
+     需要它，留着反而会在这一栏内部再粘一次。 */
+  .ink-nav-composer {
+    position: static;
+    /* 上面一段用 flex:1 吃掉了全部余量，这里不用再 auto 推。 */
+    margin-top: 0;
+  }
+}
+
+/* 手机宽度下曾经用 order 把这两栏的视觉顺序反过来（任务在前、导航在后）——
+   那是 .ink-rail-col 还装着「收件箱输入框 + 空状态」的年代定下的取舍，理由是
+   那些内容占满第一屏、任务列表要先滚过去才看得到，见 2026-08-12-ux-audit.md
+   「手机上顺序是反的」。这一批把 .ink-rail-col 换成了导航（含底部随手记），
+   那条理由整个倒转了：继续反转的话，换视图、随手记一句都要先滚过整份任务
+   列表——而「随手记的成本不能变高」是这个产品的硬约束，跟当年要防的问题
+   刚好对调了主次。宽屏（≥768px）本来就是导航在左、看板在右，跟 JSX 书写
+   顺序（导航先写）一致；手机宽度下不再用 order 反转，直接沿用同一份顺序。 */
+
+/* ── 第三栏：详情面板（TaskDetail，仿滴答清单）─────────────────────────
+   宽屏：跟左栏对称——一条 1px 界行 + 24px 内边距，界行在左边（左栏那条在
+   右边）。里面装的就是一张 TaskCard，卡片自己的样式一个字不用改。
+
+   **这里不再有 `position: sticky` + `max-height: calc(100vh - …)`**（这段注释
+   一度还在讲那一版，规则里其实早就没有了）：整个应用换成「不滚动的外壳 + 各栏
+   各滚各的」之后，这一栏的高度是外壳直接给的，那份算术整个不用做了——见上面
+   `.ink-page` 那段。现在滚的是下面那条 `.ink-detail`。 */
+.ink-detail {
+  outline: none;
+}
+
+/* 详情内容自己滚，不让外面那一列滚——理由见上面 `.ink-board-col` 那条注释：
+   列一滚就会把可拖界线裁掉。高度取满外壳给这一列的确定高度（`.ink-detail-col`
+   的 `height: 100%`），`min-height: 0` 是 flex 子项能收缩的老规矩。
+   窄屏不适用：那一屏这一列是铺满整屏的浮层，滚动归它自己（下面那个媒体查询）。 */
+@media (min-width: 1000px) {
+  .ink-detail {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+@media (min-width: 1000px) {
+  .ink-detail-col {
+    border-left: 1px solid var(--rule);
+    padding-left: 24px;
+  }
+  /* **滚动不在这一列上**，在里面的 `.ink-detail`（上面那条）——列一滚就会把
+     骑在它左缘上的可拖界线裁掉。这里只管那条 1px 界行和内边距。 */
+}
+
+/* **放不下三栏的时候（< 1000px）：整屏浮层，不是接在列表下面。**
+
+   门槛原来是 767（antd 的 md 断点），这一批抬到 999。理由是把三栏各自的下限加起来
+   算得出来：侧栏 200 + 任务列表 380 + 详情 300 再加外壳，大约要 972px。低于这个数
+   就没有「挤一挤都放得下」这回事了——实测 768 上三栏是 157 / 320 / 199，两侧栏都
+   低于自己写着的下限，字被压得读不出来。与其三栏都难看，不如让详情退回它在手机上
+   本来就是的那种形态。跟 `lib/narrow.ts` 的 `TIGHT_QUERY` 是同一个数。
+
+   为什么是浮层而不是接在下面：antd 的 Col xs={24} 会让这一栏换行掉到任务列表底下
+   ——点一条任务，屏幕上什么都不动，得往下滚过整份列表才看得见详情，那正是这个仓库
+   最不想制造的「写成功了界面没反应」。铺满一屏是「打开一条任务」本来该有的样子
+   （滴答清单手机版也是推一整页）。
+   底色写实心 --paper，不写透明：下面那份列表透上来会让两层文字叠在一起。 */
+@media (max-width: 999px) {
+  .ink-detail-col {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: var(--paper);
+    padding: 16px;
+    overflow-y: auto;
+  }
+}
+
+/* 面板顶上那一条：左边一个小标题说明这是什么，右边「关闭」。**贴在滚动的
+   顶上不动**——一条备注很长的任务滚到底之后，关不掉的面板等于一扇没有门的
+   房间。 */
+.ink-detail-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+}
+
+.ink-detail-title {
+  font-size: 12px;
+  color: var(--dim);
+  letter-spacing: 0.08em;
+}
+
+/* ── 详情面板那张形（仿滴答清单第三栏，见 TaskCard.tsx 的 `detail`）──────
+   顶上一行「勾选圈 + 日期」，下面一个大标题，再下面一整块正文，最底下一条
+   「归在哪个清单」。标题和正文都是**点一下就地改**——所以它俩平时长得不像
+   输入框，但摸上去必须有反应：hover 一层浅底（--paper，比卡片的 --sheet
+   深一档），把「这块能写」说出来。没有这一层的话，那两块就是两段死文字，
+   谁也不会想到去点它。
+   `cursor: text` 而不是 `pointer`：点下去发生的事是「开始写这行字」，不是
+   「触发一个动作」。
+   **这一族一个群青都没有**——群青是配给制，只标 AI 产出的内容，而这里每一
+   下都是人自己按的。焦点环例外，那是全站统一的那一条（文件靠前 :focus-visible），
+   规格正面批准过的唯一一处借用。 */
+.ink-dt-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+/* 日期药丸：编辑表单里那个 DatePicker 去掉边框摆成一颗药丸（`variant` 和
+   `suffixIcon` 在 TSX 那侧关掉，这里只管形状）。`min-width: 0`：这一栏宽
+   360px，不给它收窄的余地的话，一个「2026-08-25 18:00」会把整行顶出横向
+   滚动条——那是这个仓库的量测夹具一直在盯的缺陷。 */
+.ink-dt-date {
+  min-width: 0;
+  padding-left: 6px;
+  padding-right: 6px;
+  border-radius: 999px;
+}
+
+.ink-dt-date:hover { background: var(--paper); }
+
+/* **这个 `<h2>` 是 flex 子项**（`.ink-card-titlerow` 是 `display: flex`），
+   不给 `flex: 1` 它就按内容收边——而它里面那颗按钮写着 `width: 100%` 又带
+   `margin-left: -6px`，两件事撞在一起：收边算的是「文字宽 + 左右内边距 12 −
+   负外边距 6」，按钮随后按这个宽度铺满，**内容盒因此比文字本身窄 6px**，
+   于是每一行都差一点点，短标题当场被折断。实测「晨跑」：标题盒 46px 宽、
+   62px 高——两个字竖着码成两行；`flex: 1` 之后 347px 宽、35px 高，一行。
+   只有短标题会中招：标题长到超过这一栏时收边被可用宽度截住，本来就是满宽。
+   `min-width: 0` 是配套的那一半——`.ink-dt-title` 上有 `overflow-wrap:
+   anywhere`，它把这一支的 min-content 压到**一个字**，不解除 flex 子项默认的
+   `min-width: auto`，一条挤得下的长标题照样可能被收到一个字宽。 */
+.ink-dt-h {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 大标题本体是一颗按钮（`<h2>` 里套 `<button>`，读屏按标题跳得到、键盘
+   Tab 过去回车就能改）——按钮那套边框/底色/内边距全归零，只留标题的分量。
+   负的左外边距抵掉自己的左内边距：标题的第一个字要跟下面正文对齐在同一条
+   竖线上，不因为多了个 hover 底色就往右缩一格。 */
+.ink-dt-title {
+  display: block;
+  width: 100%;
+  margin: 0 0 0 -6px;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink-you);
+  text-align: left;
+  border-radius: 6px;
+  cursor: text;
+  /* 一整段不带空格的长标题（比如一个 URL）不能撑破这一栏——跟
+     .ink-note-text 同一条，要的是 anywhere 不是 break-word。 */
+  overflow-wrap: anywhere;
+}
+
+.ink-dt-title:hover { background: var(--paper); }
+
+.ink-dt-title-done {
+  text-decoration: line-through;
+  color: var(--dim);
+}
+
+/* 改的时候那个输入框得跟标题一样大：不一样的话，点一下标题那一刻字会当场
+   「跳」小一号，看起来像点坏了。 */
+.ink-dt-title-edit {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+/* 正文：**一整块，不是一行。** 空着的时候也得有这么高——「点正文开始写」
+   在一条还没写过备注的任务上，得有地方可点。 */
+.ink-dt-notes {
+  min-height: 96px;
+  margin: 0 0 0 -6px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: text;
+}
+
+.ink-dt-notes:hover { background: var(--paper); }
+
+.ink-dt-notes-empty { color: var(--dim); }
+
+/* 页脚：一条界行 + 这条归在哪个清单。**这一栏里「它属于什么」只说这一处**，
+   卡片里那个清单小标签在 detail 下不画，见 TaskCard.tsx。 */
+.ink-detail-foot {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule);
+}
+
+.ink-detail-foot-none { color: var(--dim); }
+
+/* 优先级旗在顶栏靠右（滴答清单也是摆这儿）。`margin-left: auto` 写在旗自己
+   这个类上，不写成 `.ink-dt-top .ink-pri-flag`——祖先打头的选择器会从
+   theme.css.test.ts 那条前缀扫描里整条隐形。 */
+.ink-dt-flag { margin-left: auto; }
+
+/* 详情面板里那张卡**不要卡片外壳**：这一栏自己已经有界行 + 24px 内边距，
+   里面再套一层带阴影的卡片就是一栏之内两层边框，而且页脚会被那层壳挤得像
+   浮在外面（实测截图确认）。`max-width` 也一起松开——`--measure` 那条约束
+   是给正文栏一行多少字用的，这一栏本来就只有 360px。 */
+.ink-task-card-plain {
+  box-shadow: none;
+  background: none;
+  max-width: none;
+}
+
+/* ── 搜索弹层（SearchModal，仿滴答清单最左那条栏上的搜索）────────────────
+   一个浮在整屏之上的框：上面一条输入，下面一列结果。**不是把右边那一栏换掉**
+   ——搜索是「找一下，然后回到你本来在做的事」，不是一个待着的去处。 */
+.ink-searchmodal { padding: 0; }
+
+.ink-searchmodal-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.ink-searchmodal-icon { flex: 0 0 auto; color: var(--dim); display: inline-flex; }
+
+.ink-searchmodal-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  /* 24px 是这一套设计里点击目标的下限（.ink-trow-check 那条注释）。这个框
+     去掉了边框和内边距，自己的高度只由字号和行高定——实测 23.x px。
+     （原来这儿写「它是弹层里唯一一个够不到线的」：那是**我们自己写的**弹层里
+     唯一一个。antd 日期面板内部还有几颗更小的——清除图标 14×14、翻页箭头
+     22×40、「此刻」28×19——那是三方组件内部，为 2px 去覆盖它不划算，留着不改。）
+     外面那层 .ink-searchmodal-box
+     有 14px 内边距，但那是个 div、点它不会聚焦，撑不起这一条。 */
+  min-height: 24px;
+  font-size: 15px;
+  color: var(--ink-you);
+}
+
+/* **去掉全站那条焦点环，就得自己补一条看得见的。**
+   `.ink-searchmodal-input:focus` 比文件靠前那条 `:focus-visible`（0,1,0）更
+   具体（0,2,0），所以它一写 `outline: none`，这个框聚焦时**一点变化都没有**
+   ——实测聚焦前后的 outline / 盒子下界线 / 阴影三项计算值完全相同。
+   这份文件里另外三处同样的写法都补了替代：`.ink-quickadd-input`（配
+   `.ink-quickadd:focus-within` 把下界线从 --rule 提到 --ink-you，实测生效）、
+   `.ink-tag-input`、`.ink-nav-addinput`。这里照着同一条来，不新发明一种。
+   （命令面板那个输入框走的是另一条路：它**不覆盖** `:focus-visible`，
+   保留全站默认的群青焦点环，见 `.ink-cmd-input` 上面那段。） */
+.ink-searchmodal-input:focus { outline: none; }
+.ink-searchmodal-box:focus-within { border-bottom-color: var(--ink-you); }
+.ink-searchmodal-input::placeholder { color: var(--dim); }
+
+/* **左边留出放大镜那一格，让下面每一行的第一个字跟上面那句查询词对齐。**
+   41 = 盒子内边距 16 + 放大镜 15 + 它跟输入框之间的 gap 10（`.ink-searchmodal-box`
+   上那三个数，实测放大镜占 400~415、查询词从 425 起）。
+   原来这儿跟结果行一样只写 16px，于是查询词在 425、下面的结果标题和这句提示都在
+   400——**比放大镜还靠左 5px**，一列东西读出来是错开的。这条规矩是这份样式表自己
+   立的：`.ink-dt-title` 那个负 margin 存在的全部理由就是「标题的第一个字要跟下面
+   正文对齐在同一条竖线上」，这里是同一件事。
+   右边不用动：输入框和结果行的右缘本来就都在 880（各自 16px 内边距）。 */
+.ink-searchmodal-empty {
+  margin: 0;
+  padding: 18px 16px 18px 41px;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.ink-searchmodal-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+/* 一条结果：标题吃满，右边挂「哪个清单 · 什么时候」。跟任务行同一套
+   左重右轻的排法，不新造一种。 */
+.ink-searchmodal-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  /* 左边这 41px 跟 `.ink-searchmodal-empty` 是同一个数、同一个理由（见那条
+     规则上面那段）：让结果标题的第一个字跟上面那句查询词落在同一条竖线上。
+     底色是整行铺的（下面 :hover），所以只挪文字、不缩窄可点区域。 */
+  padding: 7px 16px 7px 41px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: var(--ink-you);
+  cursor: pointer;
+}
+
+.ink-searchmodal-hit:hover { background: rgba(0, 0, 0, 0.05); }
+
+.ink-searchmodal-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ink-searchmodal-meta {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.ink-searchmodal-more {
+  display: block;
+  width: 100%;
+  padding: 9px 16px;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ink-searchmodal-more:hover { color: var(--ink-you); background: rgba(0, 0, 0, 0.04); }
+
+/* ── 侧栏导航 ──
+   密度跟全站一致：行高、字号、间距都沿用现有的量，不因为换了布局就收紧——
+   拥有者看过两档更密的版本、选了现状。 */
+.ink-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ink-nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ink-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  /* flex 子项默认 `min-width: auto`——不解除它，这一颗就不肯缩到内容宽度以下。
+     光给外面那行封顶（`.ink-nav-tag-row` 的 max-width）不够：行封住了，这一颗
+     照旧撑到 520px，把「⋯」顶到行外去（实测「⋯」右缘 350px vs 侧栏 339px）。
+     两条得一起在。 */
+  min-width: 0;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-you);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.ink-nav-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* 当前那一项。用左边一条竖线加浅底，不用整行反白——反白在这个安静的纸面上
+   太重，而且会把石墨黑的字压成白色，等于让「当前」这件事去抢「谁写的」那个
+   通道。 */
+.ink-nav-item[aria-current='page'] {
+  background: rgba(0, 0, 0, 0.05);
+  box-shadow: inset 2px 0 0 var(--ink-you);
+  font-weight: 600;
+}
+
+/* 选中那一行的记号跟着从 --dim 拉回墨色——整行都重了，记号还淡着会像没跟上。 */
+.ink-nav-item[aria-current='page'] .ink-nav-icon,
+.ink-nav-item[aria-current='page'] .ink-nav-hash {
+  color: var(--ink-you);
+}
+
+.ink-nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ink-nav-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* **窄屏摊成三列那条规则删了。**
+   它是为「侧栏在手机上占着文档流」那个形状写的：那时候这一列竖着铺开吃掉
+   约 660px，第一张任务卡落在折叠线以下，摊成三列能把导航从 330px 收到
+   128px，把任务拉进第一屏。
+   现在侧栏在窄屏根本不在文档流里——整条收进了抽屉（`components/NavShell.tsx`），
+   任务列表就是第一屏本身，那 200px 不用再从导航身上省。而抽屉只有 296px 宽，
+   三列摊下来一列不到 90px，「收件箱 2」被截成「收件...」——省下来的空间没人
+   要了，代价倒是照付。 */
+
+.ink-nav-group {
+  margin: 14px 0 2px;
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--dim);
+  /* 「清单」标题旁边挂了个新建入口（.ink-nav-add），两端对齐把它推到最右边。
+     「标签」复用同一个类但没有按钮，flex 对纯文本没有可见影响。 */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ink-nav-add {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--dim);
+  /* 13px 字号 + line-height: 1 + 2px 横内边距算下来只有十几像素高，够不到
+     全站 24px 点击目标下限（量测夹具会逮到，跟 .ink-nav-tag、.ink-alert-close、
+     .ink-move-btn 是同一条教训）。min-height/min-width 把可点区域撑到下限，
+     不改视觉密度——字号、内边距、`.ink-nav-group` 那行的高度都没动，「＋」
+     看起来还是那么小，只是点击判定区域变大了。 */
+  min-height: 24px;
+  min-width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ink-nav-add:hover {
+  color: var(--ink-you);
+}
+
+.ink-nav-addform {
+  padding: 2px 8px;
+}
+
+.ink-nav-addinput {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink-you) 25%, transparent);
+  background: none;
+  font: inherit;
+  color: var(--ink-you);
+  padding: 2px 0;
+}
+
+.ink-nav-addinput:focus {
+  outline: none;
+  border-bottom-color: var(--ink-you);
+}
+
+/* 清单色。**只上 background，永不上 color。**
+   这个界面的字色是一个已经被占满的通道：石墨黑=你写的、群青=AI 写的、
+   警示橙=出事了。分类色标的是第三个维度（归属），塞进同一个通道必然打架——
+   一个属于「工作」清单、AI 推断了时间、已经过期的任务，标题该染什么色？
+   换个通道：分类色只出现在记号上，清单名本身仍是石墨黑。 */
+/* 导航项里的清单 emoji 图标。宽度钉成跟 .ink-nav-dot 的占位一致（6px 圆点
+   两边各有 gap），不然有 emoji 的行和没有的行文字左边缘对不齐，一列扫下来
+   是参差的。 */
+
+/* 记号槽。**这一列里每一行的记号都得占同样宽的一块**，名字才落在同一条
+   竖线上：智能清单那几行是 15px 的线描图标，清单是 6px 的圆点，emoji 又是
+   另一个尺寸，标签是一个井号——四种东西，一个槽宽。左边缘对不齐正是这一栏
+   看着乱的一半原因（另一半是原来压根没有记号，十几行纯文字）。 */
+.ink-nav-slot {
+  flex: 0 0 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 线描记号（NavIcon.tsx）。颜色一律继承那一行的 color，自己不上色。 */
+.ink-nav-icon {
+  flex: 0 0 15px;
+  /* **这儿不写 `color`。** 图标是 `stroke="currentColor"` 的 svg，在这条规则上
+     钉死颜色，外面那颗按钮选中时的反白就传不进来——实测选中项的图标还是灰的，
+     而那一行的底已经是墨色了，图标几乎看不见。颜色交给下面两条按状态给。 */
+}
+
+/* 没选中时比正文淡一档：这一列真正要读的是名字，记号是帮你「认」的，不该
+   跟名字一样重。 */
+.ink-nav-item .ink-nav-icon { color: var(--dim); }
+
+/* 选中那一行把图标拉回墨色，跟名字同重。 */
+.ink-nav-item[aria-current='page'] .ink-nav-icon { color: var(--ink-you); }
+
+.ink-nav-hash {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--dim);
+}
+.ink-nav-emoji { flex: 0 0 auto; font-size: 13px; line-height: 1; }
+
+.ink-nav-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  /* Sidebar.tsx 用行内 style 的 backgroundColor 盖上清单自己的颜色——这里
+     只给一个默认底色，不让没有内联样式时的圆点变成空心透明的。 */
+  background: var(--dim);
+}
+
+/* 智能清单的记号——「存下来的查询」跟普通清单看得出区别，见 scoped.ts 顶部
+   的注释、task-3-brief 要点③。用 --dim（跟 .ink-nav-count 同一个「次要信息」
+   色），不是群青：这不是 AI 产出的内容，是界面自己的分类记号。 */
+.ink-nav-smart {
+  flex: 0 0 auto;
+  /* 11px 是全站字号下限（`.ink-trow-due` 那几条守着的同一条）。原来 10px：
+     ✦ 是个符号不是汉字，但它是「这份清单是存下来的查询」这件事在屏幕上
+     唯一的表示，压到下限以下只会让它更难被注意到。 */
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.ink-nav-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 4px;
+}
+
+/* 二级标签（仿滴答清单）。子标签整体往右缩一档，不给子标签换一套外观——
+   它跟父标签是同一种东西，位置说明层级就够了。前面那条竖线是「这一支属于
+   上面那个」的最轻表达，比再画一个图标便宜。 */
+.ink-nav-subtags {
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--rule);
+}
+/* 父节点自己没有任务时（只有 `#工作/项目A`、没人打过 `#工作`）：字轻一档。
+   **不禁用它**——点进去看得到子标签下的全部任务，那是它存在的意义；
+   只是别让它看起来跟一个真的有任务的标签一样重。 */
+.ink-nav-tag-group { opacity: 0.7; }
+
+/* 一个标签 = 胶囊 + 改名 + 删除。整行是一颗胶囊那么高的 flex，
+   `.ink-nav-tags` 本身是 wrap 的 flex，所以这一行作为一个整体参与换行——
+   不套这一层的话三颗按钮会各自换行，「×」跑到下一行去当孤儿。 */
+.ink-nav-tag-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  /* **`inline-flex` 是按内容收边的，不写这条就没有任何东西拦得住它。**
+     里面那颗 `.ink-nav-item` 写着 `width: 100%`，而 100% 是相对这个收边盒
+     算的——等于「要多宽给多宽」。实测一个长名字的清单：侧栏 267px，这一行
+     520px，右边缘落在侧栏外 253px 处。后果不止是难看：
+     - `.ink-nav-label` 那三条 `overflow/text-overflow: ellipsis` 从来没生效过
+       （它拿到了它想要的全部宽度，`scrollWidth === clientWidth`）；
+     - 计数和「⋯」被一起推到框外——而「⋯」是这个清单**重命名/删除的唯一入口**，
+       于是名字一长，那份清单在侧栏里就再也改不动、删不掉了。
+     `max-width: 100%` 是相对外面那个 `li` 算的，短名字的行照旧按内容收边
+     （「⋯」还是紧跟在文字后面，不会被推到最右边），只有真的放不下时才封顶。 */
+  max-width: 100%;
+}
+
+/* 改名/删除那两颗。跟 .ink-nav-add 一模一样的处理：字很小，靠 min-height/
+   min-width 把可点区域撑到全站 24px 下限，视觉密度不变。 */
+.ink-nav-tag-act {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dim);
+  min-height: 24px;
+  min-width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ink-nav-tag-act:hover {
+  color: var(--ink-you);
+}
+
+/* 改名的就地输入框。跟 .ink-nav-addform 同一个位置感——它占的正是那颗胶囊
+   原来的位置，不另开一层浮层。 */
+.ink-nav-tag-rename {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ink-nav-tag-rename input {
+  width: 7em;
+  font-size: 12px;
+  min-height: 24px;
+}
+
+/* 「已归档」那一小节的标题：比「清单」「标签」那几个组标题轻一档——
+   它不是一个并列的分区，是同一份清单列表的尾巴。 */
+.ink-nav-group-sub {
+  opacity: 0.7;
+}
+
+/* 「清空垃圾箱」。跟列表里那些行内按钮同一套外观（.ink-trash-btn
+   /.ink-trash-purge 都已经在用），只把它顶到列表上方、自己占一行——
+   它作用在整份列表上，混在某一条的行内会看不出作用范围。 */
+.ink-trash-purge-all {
+  display: block;
+  margin: 0 0 8px;
+}
+
+/* 备注框里的「/」菜单（仿滴答清单任务描述里的斜杠命令）。外壳只为定位，
+   菜单贴着备注框下沿浮出来。 */
+.ink-slash-wrap {
+  position: relative;
+}
+
+.ink-slash-menu {
+  position: absolute;
+  z-index: 10;
+  left: 0;
+  top: 100%;
+  margin: 2px 0 0;
+  padding: 2px;
+  list-style: none;
+  min-width: 8em;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.ink-slash-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 13px;
+  /* 12～13px 的一行够不到 24px 这条全站点击目标下限，跟 .ink-nav-tag、
+     .ink-move-btn 是同一条教训。 */
+  min-height: 24px;
+}
+
+/* 键盘选中的那一条。**不上群青**：这是人在自己的备注里挑一个片段，
+   群青是配给制、只标 AI 产出。 */
+.ink-slash-on {
+  background: color-mix(in srgb, var(--ink-you) 10%, transparent);
+}
+
+/* 文件夹标题行（仿滴答清单）：它是一个小标题 + 一颗 ⋯，两端对齐——
+   跟「清单」那行大标题带「＋」是同一个形状，只是轻一档。 */
+.ink-nav-folder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* 文件夹标题前那颗收/放三角。**槽宽跟 .ink-nav-slot 一样是 15px**——文件夹
+   标题和它底下那几行清单的文字要对齐在同一条竖线上，那几行的记号（圆点/emoji）
+   坐的就是 15px 的槽。不一样宽的话标题的字比清单的字左移或右移几个像素，
+   而「一列名字对不齐」正是这一栏看着乱的一半原因（见 .ink-nav-slot 那处注释）。
+
+   自己不上色：跟侧栏别的记号同一条，颜色继承那一行。 */
+.ink-nav-fold {
+  flex: 0 0 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* 文件夹里的清单整体往右缩一档，前面一条竖线——跟 .ink-nav-subtags（二级
+   标签）一模一样的处理，两处表达的是同一件事「这一支属于上面那个」。
+   不为文件夹另发明一套外观。 */
+.ink-nav-infolder {
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--rule);
+}
+
+/* 已归档的清单：还在、点得进去、能取消归档，只是别跟真在用的那几份争
+   注意力。跟 .ink-nav-tag-group（自己没有任务的父标签）同一个处理。 */
+.ink-nav-archived {
+  opacity: 0.6;
+}
+
+.ink-nav-tag {
+  width: auto;
+  padding: 1px 7px;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  /* 12px 字号 + 1px 竖内边距只够 21px 高，够不到 24px 这条全站点击目标下限
+     （量测夹具在六个宽度下都会逮到，跟 .ink-move-btn 是同一条规矩）。
+     min-height 不改视觉上的胶囊矮扁感——.ink-nav-item 的 flex + align-items:
+     center 会把内容居中撑开这段高度，不是简单地在文字周围加一圈空白。 */
+  min-height: 24px;
+}
+
+/* 随手记推到底部。margin-top: auto 而不是 position: absolute——现在跟 nav
+   是兄弟节点，两个一起装在 .ink-rail-col 那个 flex 列里，让它自然占住剩下
+   的空间，内容变多时不会盖在导航上。
+   这条要生效，.ink-rail-col 必须真的比自己内容高——它默认是 auto（跟内容
+   一样高，没有多余空间可分），撑开它的是 App.tsx 里 Row 的 align="stretch"：
+   两栏对齐取两者中较高的那个（通常是任务列表），侧栏矮的话就跟着拉到那个
+   高度，随手记才有地方可推。之前 Row 是 align="top"（antd 默认值），侧栏
+   高度永远等于自己内容高度，这条 margin-top: auto 从来没有余量可分——
+   实测 computed margin-top 恒为 0px，改这里之前先改那个 align。
+
+   但 align="stretch" 生效之后带出了另一个问题：随手记在页面里的实际位置
+   变成由看板的高度决定——用真实的 7 条任务实测，1280×1000/1440×900/
+   1920×1080 三档下随手记都被推到了首屏折线以下（任务再多几条，更宽的
+   屏幕也会掉下去），而「随手记的成本不能变高」是这个产品的硬约束，等于
+   这条修复自己把硬约束撞破了。
+   加 position: sticky; bottom: 12px 解决：没滚动时它仍然贴在侧栏视觉上的
+   底部（margin-top: auto 负责这一半，.ink-composer 本身的不透明底色+边框
+   撑住「贴底」的观感），一旦看板比视口高、需要往下滚，它会钉在离视口底边
+   12px 处跟着滚动条走，不需要滚到底也够得着。这两件事只有 sticky 能同时
+   满足：position: fixed 会丢掉「贴侧栏底部」——它相对视口定位，脱离了
+   .ink-rail-col 的流，宽屏下会悬在整个页面宽度上而不是侧栏那一列里；单纯
+   缩小 padding 或者把 Row 改回 align="top" 都只是换个位置重新触发同一个
+   问题（看板够长照样把它顶下去，或者 margin-top: auto 又因为侧栏矮回退到
+   0px）。 */
+/* 随手记钉在侧栏底部。**原来这里还有 `position: sticky; bottom: 12px`**——
+   那是「整页一起滚」年代的补丁：它得自己去追视口底部，于是清单/标签一多就
+   压在「标签」那一段上面，两层字叠着（截图里实测过）。现在导航那一段自己滚
+   （上面 .ink-nav 的 overflow-y），它待在栏底不用追任何东西，sticky 删掉。 */
+.ink-nav-composer {
+  margin-top: auto;
+  padding-top: 12px;
+  flex: 0 0 auto;
+}
+
+.ink-view-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink-you);
+}
+
+/* ── 收件箱输入框 ── */
+
+/* 框自己的名字。命令面板（`N 随手记`）、快捷键表、空状态那句话都管它叫
+   「随手记」，而框上一直没有这三个字——照着说明去找的人找不到它。
+   借侧栏段标题那一套（等宽、11px、宽字距）：它在屏幕上就是侧栏的最后一段，
+   不该长成另一种东西。 */
+.ink-composer-name {
+  margin: 0 0 6px;
+  padding: 0 1px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  font-weight: 400;
+  color: var(--dim);
+}
+
+.ink-composer {
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  padding: 12px 13px;
+}
+
+.ink-composer textarea {
+  font-family: var(--font-cjk);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.ink-composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dotted var(--rule);
+}
+
+/* 11px 是这一套排版里的字号下限，理由见 .ink-overdue-mark 上面那段注释：
+   这些标签渲染的是汉字，不是拉丁小字。原本 10.5px 是照着「灰度小字」的
+   西文排版直觉定的，量测夹具在六个宽度下把它们全数了出来。 */
+.ink-hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.02em;
+}
+
+/* ── 收件箱条目列表 ── */
+
+.ink-pending-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ink-section-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* List 组件没有暴露「分隔线用什么线型」这个 token（只有颜色/宽度），
+   点线只能用一条限定作用域的选择器补——不是行内样式，也没有 !important。
+   antd 自己的边框规则是 `.ant-list-split .ant-list-item`（两个类选择器），
+   跟它同优先级的选择器谁赢要看插入顺序，不保险，这里多叠一个类把优先级
+   稳稳压过去。 */
+.ink-note-list.ant-list .ant-list-item {
+  border-block-end-style: dotted;
+  padding-block: 11px;
+  /* antd List.Item 默认是 flex-wrap: nowrap：正文和操作按钮（编辑|删除）挤
+     在同一行，操作区自己不换行、还带 48px 的 margin-inline-start（假设有
+     大把横向空间）。侧栏栏宽只有 280px 出头，实测两个按钮就吃掉 180px+，
+     正文被压到 74px 宽，长一点的条目逐字换行——用 flex-wrap 让操作区掉到
+     正文下面一行，而不是抢正文的宽度。 */
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+/* 正文（.ink-note-text + .ink-note-meta 那个 div，编辑态则是 TextArea）
+   永远独占一行——flex-basis 100% 逼着它后面的任何兄弟节点（操作按钮）
+   都装不进同一行，不用判断内容长不长，280px 的栏宽从来就没有「够宽」
+   这回事。 */
+.ink-note-list.ant-list .ant-list-item > *:not(.ant-list-item-action) {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.ink-note-list.ant-list .ant-list-item-action {
+  margin-inline-start: 0;
+  margin-left: 0;
+  margin-top: 6px;
+}
+
+.ink-note-text {
+  font-size: 14px;
+  line-height: 1.55;
+  /* 一整段不带空格的长文本（比如粘一个 URL）不许撑破 280px 宽的侧栏。
+     不能用 break-word：它不参与 min-content 尺寸计算，撑破布局那条 bug
+     要的正是「min-content 会跟着允许折行一起缩小」——只有 anywhere 有这个
+     效果，另见 App.tsx 里 Row/Col 那处 minWidth: 0 的同一条注释。 */
+  overflow-wrap: anywhere;
+}
+
+.ink-note-pending .ink-note-text {
+  font-weight: 600;
+}
+
+/* 备注编辑器上那颗「预览 / 继续写」。靠右，跟备注框右边缘对齐——它是这一块
+   的开关，不是表单里的又一个字段。 */
+.ink-md-toggle {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 2px;
+}
+
+/* 预览态：**画一个跟 textarea 一样的框**。不画的话切过去像是内容散在表单里，
+   分不清哪一段是备注；有框才读得出「这块地方还是那个备注框，只是换了个
+   看法」。最小高度跟 autoSize 的 minRows: 1 对齐。 */
+.ink-md-preview {
+  border: 1px solid var(--rule);
+  padding: 4px 11px;
+  min-height: 32px;
+  background: var(--sheet);
+}
+
+.ink-note-done .ink-note-text {
+  color: #7c828b;
+}
+
+.ink-note-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  /* 11px 是全站字号下限（见 .ink-hint 那处注释）。这一条上一轮没被逮到，
+     是因为它只在收件箱**有待拆解条目**时才渲染，而真实数据当时是 0 条——
+     这就是为什么这一轮改用一份摆满各种状态的夹具数据来量。 */
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.ink-done-collapse.ant-collapse .ant-collapse-header {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+/* ── 右：任务按「来自哪句话」分组 ──
+   这是这次重做的核心结构：inbox.taskIds 里本来就有的血缘关系，见
+   lib/taskView.ts 的 groupBySource。签名元素是群青方括号（.ink-bracket）
+   和边注（.ink-margin-note）——其余一律安静，见规格「收敛：线要少」，
+   卡片内、组间都不再加分隔线，靠留白和两种墨水的对比撑。 */
+
+.ink-view-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* 窄屏下「打开清单侧栏」那颗（组件层只在窄屏渲染它，见 App.tsx）。
+   `margin-right: auto` 让它和标题贴在一起靠左，而不是被 space-between
+   推到标题和右边那组控件正中间——跟 .ink-view-actions 那条是同一个坑。 */
+.ink-view-nav {
+  flex: 0 0 auto;
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ink-view-nav:hover { color: var(--ink-you); background: rgba(0, 0, 0, 0.04); }
+
+/* 标题跟着那颗按钮走：有它的时候标题别再吃掉 auto 的余量。 */
+.ink-view-nav + .ink-view-title { margin-right: auto; }
+
+/* 抽屉里的侧栏。抽屉自己已经有 24px 的内边距，侧栏那套「贴着栏边」的
+   留白在里面会显得离边太远；同时抽屉的 body 是 flex 容器，侧栏靠
+   `margin-top: auto` 把随手记推到底那一套在窄屏用不上（随手记压根不在
+   抽屉里），这里只保证它能撑满高度、导航那段自己滚。 */
+.ink-nav-drawer .ant-drawer-body {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 8px;
+}
+
+/* 窄屏下随手记的位置：任务列表下面。上面留一道线跟列表分开——它跟上面那些
+   任务不是一件事。 */
+.ink-narrow-composer {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+
+/* 键盘提示在窄屏上整条藏掉：**手机上没有 Ctrl 键**，「Ctrl+Enter 存下」在那儿
+   是一条做不到的指示，而它旁边就是那颗按得到的按钮。这一条按屏宽判断（跟全站
+   同一个断点），不是按「有没有键盘」——把浏览器窗口拖窄的桌面用户会跟着看不到
+   这句话，代价是他少看一句提示，而按钮就在旁边。 */
+@media (max-width: 767px) {
+  .ink-kbd-hint { display: none; }
+}
+
+/* 窄屏：标题那一行摞成两行。一行里挤着标题 +「收件箱 2 条待拆解 / AI 建议
+   1 条待确认」+ 行/卡 + 列表/看板，390px 下 space-between 会把标题压到
+   最窄——实测「今天」两个字被竖着断成「今 / 天」。让右边那一组整体落到
+   第二行，标题就有整行可用。 */
+@media (max-width: 767px) {
+  .ink-view-bar {
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .ink-view-title {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .ink-view-actions {
+    flex: 1 1 100%;
+    justify-content: space-between;
+    /* 再摞一层：那两句状态（「收件箱 2 条待拆解」「AI 建议 1 条待确认」）和
+       两组开关（列表/看板、行/卡）在 390px 下同一行放不下——不给换行的话
+       开关会被 .ink-density-switch 的 overflow: hidden 从右边切掉，「看板」
+       只剩一个「看」字。实测就是这样。 */
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  /* 状态自己占满一行，开关整组落到下一行去。 */
+  .ink-header-status {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+}
+
+/* 标题右边那一组——密度开关（只在部分视图出现）+「新任务」，用一个内层
+   flex 容器把两个控件锁在一起靠右，不然 .ink-view-bar 的 space-between
+   会把密度开关摆到标题和按钮正中间那条缝隙里，不像「跟新任务并排」。 */
+.ink-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 行/卡密度开关：纯 CSS 两颗按钮，不用 antd Segmented/Radio.Group——绕开
+   antd 选中色直接读全局 colorPrimary（群青）那个已知盲区，跟 TaskRow.tsx
+   同一个选择（那份组件顶部注释、theme.ts 顶部注释）。密度是人这一侧的
+   偏好，不该借群青——选中态走 --ink-you 填色，跟 .ink-trow-check-done
+   同一条视觉语言。 */
+.ink-density-switch {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ink-density-btn {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  padding: 3px 10px;
+  /* 两个字的按钮不许竖着断行。390px 下这一行挤着标题、两句状态和两组开关，
+     「列表」「看板」会被折成上下两个字——实测就是那样，两颗方块各占两行高，
+     看着像坏了。 */
+  white-space: nowrap;
+  /* 12px 字号 + 3px 竖内边距，接近 24px 点击目标下限——跟
+     .ink-nav-add 同一条教训，不赌那几像素。 */
+  min-height: 24px;
+}
+
+.ink-density-btn + .ink-density-btn {
+  border-left: 1px solid var(--rule);
+}
+
+.ink-density-btn-active {
+  background: var(--ink-you);
+  color: var(--sheet);
+}
+
+/* 新建表单展开时跟下面的列表拉开一点，别贴着看板第一张卡。 */
+.ink-task-composer {
+  margin-bottom: 20px;
+}
+
+/* ── AI 的提议 ──
+   借边注那一套视觉语言（群青、衬线、左边一条虚线）：它跟 aiComment 是同一类
+   东西——另一个人写的话。不新造第三套记号。跟边注的区别只在于它带两颗按钮，
+   而且落在卡片**里面**（边注在卡片外的留白轨道里）——因为它要改的就是这张卡。 */
+.ink-proposal {
+  padding: 8px 0 8px 14px;
+  border-left: 1px dotted var(--ink-ai);
+  color: var(--ink-ai);
+}
+
+/* 「从什么变成什么」。不用 <table>，两三行的东西不值得一张表格。 */
+.ink-proposal-diff {
+  margin: 2px 0 6px;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.9;
+}
+
+/* 短值一行「字段 旧 → 新」；长值（标题、备注这种整段文字）摞成三行，
+   不然删除线跟着折行、跟新值绞成一团，见 ProposalNote 里那处注释。 */
+.ink-proposal-diff li + li {
+  margin-top: 2px;
+}
+
+.ink-proposal-stacked {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 8px;
+  margin: 6px 0;
+}
+
+.ink-proposal-stacked .ink-proposal-field {
+  grid-row: 1 / 4;
+}
+
+.ink-proposal-stacked .ink-proposal-arrow {
+  justify-self: start;
+}
+
+.ink-proposal-field {
+  opacity: 0.8;
+}
+
+/* 旧值压暗、加删除线——一眼看出哪个是要被换掉的那个，不用逐字比对。 */
+.ink-proposal-was {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.ink-proposal-diff li:not(.ink-proposal-stacked) .ink-proposal-was,
+.ink-proposal-diff li:not(.ink-proposal-stacked) .ink-proposal-arrow {
+  margin: 0 6px 0 8px;
+}
+
+.ink-proposal-now {
+  font-weight: 600;
+}
+
+/* 子任务一行一条：勾选状态要看得见，见 ProposalNote 的 subtaskLines 注释。 */
+.ink-proposal-sub {
+  display: block;
+}
+
+/* 理由用衬线斜体，跟边注正文一致——那是「另一个人在说话」的记号。 */
+.ink-proposal-reason {
+  margin: 0 0 8px;
+  font-family: var(--font-serif);
+  font-size: 13px;
+  line-height: 1.72;
+  font-style: italic;
+}
+
+.ink-proposal-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* 两处共用：看板末尾那句「有 N 条过期了，去回顾看看」，和回顾那一屏底部那颗
+   「让 AI 回顾一遍」按钮所在的那一行。安静到几乎看不见——它是一条路标，不是
+   催办：真正要紧的信息（哪几条过期了）已经在卡片上用过期橙标着了，这句话只补
+   「还有这么条路可以走」。放在看板末尾，滚到底才看到，跟它「顺带一提」的分量
+   相称。 */
+.ink-review-nudge {
+  /* 20 + 10（原来 28 + 14）。这条虚线本来就是路标，不是分节——它上面那个列表
+     自己已经有 padding-bottom 收边了，两边各让一点，合起来才不至于在内容和
+     一句 12px 的小字之间留下七十多像素。 */
+  margin: 20px 0 0;
+  padding-top: 10px;
+  border-top: 1px dotted var(--rule);
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--dim);
+}
+
+.ink-review-nudge code {
+  background: var(--paper);
+  padding: 2px 8px;
+  color: var(--ink-you);
+}
+
+/* 回顾那一屏底部那一行：一颗「让 AI 回顾一遍」+ 一句说明。**按钮和说明同一行**，
+   窄屏才折行——说明讲的是「点下去会发生什么」（只提建议、不直接改任务），
+   跟按钮拆成上下两块的话，它读起来就成了一段跟按钮无关的脚注。
+   `flex: 1 1 12rem`：说明占满剩下的宽度，但窄到 12rem 以下就整条折到下一行，
+   不去挤按钮——按钮是这一行里唯一能点的东西，压成两行字宽就点不准了。 */
+/* 回顾那一屏底部这一行。
+   **`max-width` 要跟上面 `.ink-review-todo` 一样**：两者都带一条横线、上下只隔
+   二十来像素，而 `.ink-review-todo` 收在 `--measure`（38em）里、这一行原来不收，
+   于是屏幕上是一条 604px 的线紧挨着一条 1414px 的线——读起来像两套排版规则打架。
+   看板末尾那处 `.ink-review-nudge` 不加这条：那儿它上面是整幅的卡片网格，
+   没有第二条线可以对齐，收窄反而显得断掉。 */
+.ink-review-run {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  max-width: var(--measure);
+}
+
+.ink-review-run-hint {
+  flex: 1 1 12rem;
+}
+
+/* 设置弹层里的命令提示块。回顾**现在有按钮了**（回顾那一屏底部），这一块留着是
+   为另一件按钮做不到的事：**定期自动跑**。服务不会替他排回顾的节奏（拆解会，
+   回顾不会），想让它一周跑一次，只能自己排个定时任务去跑这条命令。
+   命令单独占一行、加一条竖线，是这一块里唯一要被抄走的东西，不能埋在说明文字
+   中间。 */
+/* 竖线和命令文字都用石墨黑，不用群青。这一块讲的是「AI」，但群青的规矩是
+   「只标 AI 产出的和 AI 推断的内容」——一条你自己敲的命令两样都不是。
+   把它染成群青读起来是顺，代价是这个颜色开始意味着「跟 AI 沾边」，
+   那它在卡片上区分「谁写的这个时间」的能力就废了。强调交给竖线和底色。 */
+.ink-cmd-hint {
+  margin-top: 24px;
+  padding-left: 12px;
+  border-left: 2px solid var(--ink-you);
+}
+
+.ink-cmd-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-you);
+}
+
+.ink-cmd-line {
+  margin: 0 0 8px;
+}
+
+.ink-cmd-line code {
+  background: var(--paper);
+  padding: 2px 8px;
+  color: var(--ink-you);
+}
+
+.ink-cmd-body {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--dim);
+}
+
+/* 行内 <code>（设置弹层里那条 /review 命令）：antd Typography 给 code 定的是
+   父级字号的 85%，套在 12px 的说明文字里就成了 10.2px——正好掉到 11px 这条
+   字号下限之下，量测夹具当场逮到。命令本来就是要被人照着敲的，比周围的说明
+   更需要看清楚，不该更小。 */
+.ink-page code,
+.ant-drawer code {
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+/* **弹出菜单最多半屏高。** 手机宽度（390×844）上实拍出来的：任务那颗 ⋯ 的菜单
+   高 689px、从 388 处往下弹，底边落到 1077——「删除」和整组「情境」在屏幕外面。
+   antd 给 `ul` 的 `overflow-y: auto` 没有 `max-height` 配套，没东西可滚，那几项
+   是**真的点不到**，不是要多滚一下。
+
+   **为什么是「半屏再减一点」，不是「别超过一屏」。** 菜单本来就没超过一屏
+   （689 < 844），是放不下：antd 把它锚在那颗按钮上，上下两边谁也塞不进 689。
+
+   `- 32px` 那一截是实测出来的，不是保险余量。antd 的规矩是**先试着往下放，
+   放不下就往上翻，而且不再检查上面放不放得下**；往下放时菜单顶不在锚点那一行，
+   而是在它下面约 27px（按钮高度 + 一点间距）。于是锚点落在中间偏下时两边都
+   差那么一点：390×844 上锚点 y=414、上限 50vh=422，往下要 441+422=863 超屏、
+   往上只有 414 可用——菜单被顶在 top:-12，第一项「编辑」的上沿被切掉。
+   实测这条线：50vh 切边，`calc(50vh - 32px)`（390px）落在 441…831，不切。
+
+   代价是长菜单在宽屏上也会滚一下（1080 高的屏 = 508px，21 行里看得见 15 行）。
+   换来的是**摆哪儿都完整、都点得到**，而滚动是每个长菜单都在用的、认得出来的
+   动作；落在屏幕外面的那几项则没有任何迹象说明它们还在。
+
+   顶格写、不挂在某个 `.ink-*` 祖先下面：菜单渲染在 body 层的传送门里，够不着
+   应用自己的类名（`.ant-drawer code` 那条同一个理由）。这条对**每一个**下拉都
+   成立，不只任务那颗——「移动到」列清单、「打标签」列标签，两组都随着他自己建
+   的东西一起变长，早晚都会走到同一处。 */
+.ant-dropdown-menu {
+  max-height: calc(50vh - 32px);
+  overflow-y: auto;
+}
+
+/* 横幅里的字也收在 --measure 以内。彩色底条该通栏（它是页面级的提示，
+   缩窄会显得像卡片里的一小块），但里面的**文字**没理由比正文宽——1920 下
+   实测横铺约 1780px，是全站行宽上限的近三倍，一条两行的报错读起来像一堵墙。
+   这是唯一一处漏掉 --measure 的正文，因为前三轮的量测都碰不到横幅：
+   它只在「有任务到点」「拆解失败」这类事件真的发生时才出现。 */
+.ink-main .ant-alert-message,
+.ink-main .ant-alert-description {
+  max-width: var(--measure);
+}
+
+/* 横幅（到期提醒、拆解结果、提议汇报）右上角那颗关闭 ×：antd 默认 12×13，
+   够不到 24px 这条点击目标下限。之前没量出来只是因为截图时页面上没有横幅，
+   而横幅是这个应用的常客。图标本身不放大，只把可点区域撑到 24。 */
+.ink-page .ant-alert-close-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+.ink-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 28px;
+}
+
+.ink-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--dim);
+  padding: 3px 11px;
+  cursor: pointer;
+}
+
+.ink-chip[aria-pressed='true'] {
+  border-color: var(--ink-you);
+  color: var(--ink-you);
+}
+
+.ink-group {
+  margin-bottom: 40px;
+}
+
+.ink-group:last-child {
+  margin-bottom: 0;
+}
+
+/* 源句：被引用出来的你的原话，衬线、你的墨——跟 .ink-quote 是同一个角色，
+   这里额外加尺寸和引号，引号本身用灰字，不抢正文的墨色。 */
+.ink-source {
+  margin: 0 0 3px;
+  font-size: 19px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+.ink-source::before {
+  content: '\201C';
+  color: var(--dim);
+}
+
+.ink-source::after {
+  content: '\201D';
+  color: var(--dim);
+}
+
+/* 「单独记的」那组没有原话可引，标题就是纯说明文字，不装成一句引用。 */
+.ink-source-none {
+  margin: 0 0 3px;
+  font-size: 19px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--dim);
+}
+
+.ink-source-meta {
+  margin: 0 0 16px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 行宽上限，见 :root 里 --measure 的注释。不设上限时，独占整条轨道的卡片
+   在 1536px 宽的看板列下一行能跑到 1150px+，见 2026-08-12-ux-audit.md
+   「正文没有行宽上限」。源句是引文、比正文更该短一点，单独收窄。 */
+.ink-source,
+.ink-source-none {
+  max-width: 30em;
+}
+
+.ink-task-card {
+  /* 一张纸放在桌上，边上有一点点影——这是「暖」的另一半，光靠色相转不出来。
+     影子是**暖的**（rgba 里那三个数偏红），冷影压在暖纸上会把纸重新拉回灰。
+     只给卡片，不动 `borderRadius: 0` 那个全局 token：控件保持直角，只有承载
+     内容的那张「纸」有软边——这是一层区分，不是把整套都磨圆。
+     两层阴影：1px 的贴地投影给厚度，0 扩散的那层顶替原来那道 1px 描边，
+     免得描边 + 阴影叠成两条边。 */
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgba(60, 48, 32, 0.10), 0 0 0 1px rgba(60, 48, 32, 0.05);
+  max-width: var(--measure);
+  /* 序号绝对定位在右上角，靠这个做定位上下文；右内边距留出它的位置，
+     免得长标题跑到数字底下。 */
+  position: relative;
+}
+
+.ink-task-card:has(.ink-rank) .ant-card-body {
+  padding-right: 52px;
+}
+
+/* 群青方括号：把同一句话拆出的任务框在一起。视觉上说「这几条同源」——
+   跨越 .ink-bracket 里所有的任务+边注行，不管有几条。 */
+.ink-bracket {
+  position: relative;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ink-bracket::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 9px;
+  border-left: 1.5px solid var(--ink-ai);
+  border-top: 1.5px solid var(--ink-ai);
+  border-bottom: 1.5px solid var(--ink-ai);
+}
+
+/* 「单独记的」那组：同一套行布局（卡片+边注对齐），但不画方括号——
+   这些任务没有共同来源，画一个「同源」符号是在撒谎。 */
+/* 没有方括号也让出同样的 22px。不让的话这一组的容器比带方括号那组宽 22px，
+   `useColumns` 按容器宽度算列数，算出来的列距也跟着差几个像素——一页往下看，
+   两组的列各走各的（实测 1920 下：带括号那组列起点 334 / 列距 392，这组
+   312 / 398）。缩进本身不占信息，对齐占。 */
+.ink-bracket-none {
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── 左右拖拽改状态 ──
+   卡片跟手平移，底下露出松手会发生的那一步。用指针事件不用 HTML5 拖放，
+   见 TaskCard 里那段注释。 */
+.ink-swipe {
+  position: relative;
+  /* 卡片在**自己的宽度内**滑动，滑出去的部分裁掉。不裁的话往右划会直接盖到
+     右侧留白里的序号（或者「按来源」的边注）上——实测 150px 就压过去了，
+     而提交阈值 88px 本身就已经越界。
+     max-width 必须跟卡片一样是 --measure，不能只靠容器：卡片所在的格子可能
+     比卡片本身宽（列宽是 1fr，卡片封顶在 --measure），容器不收窄的话裁切
+     边界离卡片边缘还有一段距离，等于没裁。 */
+  overflow: hidden;
+  max-width: var(--measure);
+  /* 横向手势归我们，纵向留给浏览器滚页面——不写的话手机上想往下滚会被
+     卡片吃掉。 */
+  touch-action: pan-y;
+}
+
+/* 只在手指离开、卡片弹回原位时给一点缓动；跟手的过程中不能有过渡，
+   否则卡片会拖泥带水地追着手指跑。减少动效那条全局规则会把它一起关掉。 */
+.ink-swipe .ink-task-card {
+  transition: transform 160ms ease-out;
+}
+
+.ink-swipe-active .ink-task-card {
+  transition: none;
+  /* 拖动中不选中卡片里的文字 */
+  user-select: none;
+}
+
+/* 露出来的那一格。压暗 = 还没够到提交距离，松手会弹回去；实心 = 松手就生效。
+   用石墨黑不用群青——改状态是人的判断，群青只标 AI 产出的东西。 */
+.ink-swipe-hint {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--ink-you);
+  opacity: 0.35;
+}
+
+.ink-swipe-hint-right { left: 0; }
+.ink-swipe-hint-left { right: 0; }
+
+.ink-swipe-hint-armed {
+  opacity: 1;
+  font-weight: 600;
+}
+
+/* ── 清单归属 ── */
+/* 规格「第三条通道」：清单色只出现在 background——卡片左边一条 3px 竖条、
+   清单名前一个 6px 实心圆点。**清单名本身是石墨黑。** .ink-swipe 已经有
+   position: relative 和 overflow: hidden（滑出去的部分裁掉），但这条竖条
+   实际定位相对的是 .ink-task-card（它自己也有 position: relative，见上面
+   序号那条注释）——left: 0 贴着卡片左边缘，不会被 .ink-swipe 的裁切边界
+   碰到。 */
+.ink-list-bar {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  border-radius: 3px 0 0 3px;
+}
+.ink-list-name {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--ink-you);
+}
+.ink-list-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+/* 清单名最前面那个 emoji 当图标时**替掉**上面那颗圆点（仿滴答清单，判据在
+   lib/listIcon.ts）。`line-height: 1` + `flex-shrink: 0`：emoji 的默认行高
+   比周围文字高一截，不压的话它会把整行撑高，一列清单里有 emoji 的和没有的
+   行高不一样，扫下来是锯齿状的。 */
+.ink-list-emoji { font-size: 12px; line-height: 1; flex-shrink: 0; }
+.ink-list-select {
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px; background: none; font: inherit; font-size: 12px;
+  min-height: 24px; padding: 2px 6px; color: var(--ink-you);
+  /* **原生 `<select>` 的固有宽度 = 最长那条选项的宽度，而选项里装的是用户写的
+     东西**（专注统计那屏列的是任务标题，表单里列的是清单名），所以它没有上限
+     ——一条长标题就能把它撑到比整栏还宽。实测 375px 下：一条 42 字的任务标题
+     把它撑成 502px，而外面那栏只有 343px，多出来的 159px 被无声裁掉
+     （`<select>` 的计算值是 `overflow-x: clip`，浏览器默认，**不是这个文件里的
+     规则**，去 CSS 里 grep 是找不到的）。宽屏上这条不改变任何事（1440 下父容器
+     1320px，502 < 1320，量过）——只在真放不下时才生效。 */
+  max-width: 100%;
+}
+
+/* 列表容器留一段下边距，让「最后一行下面的空白」真的有面积可落。
+   不留的话这个容器的高度等于内容高度，末尾那片空白压根不在它里面——
+   放置处理器接了也永远不触发（第一版就是这样：代码在、承诺在、面积没有）。
+   顺带也是列表和下面那句 /review 路标之间的呼吸空间，不算白占。 */
+ /* 卡片网格。**两个视图共用这一条**——「今天」的列表和「按来源」每一组的
+    卡片都用它，不然两处会各写一套、迟早长歪。
+    auto-fill + minmax(340px, 1fr)：宽屏自动多开几列，窄屏自动落回一列。
+    340 是按钮那一行（待办/开始/搁置/编辑/删除 + ↑↓）挤得下的最小宽度；
+    上限交给卡片自己的 max-width: var(--measure)，列再宽正文也不会拉长。
+    改这个之前是单列：1920 下看板列 1600px 而卡片只有 532px，67% 的横向空间
+    空着，7 条任务把页面撑到 1500px 高。 */
+.ink-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 14px;
+}
+
+/* 同一行的卡片拉成一样高，操作那排按钮钉在卡片底部。
+   默认的 align-items: start 会让每张卡各按自己的内容高度收边，一行三张卡
+   停在三个不同的高度，卡与卡之间留下用不上的洞——一张带三条子任务的高卡
+   配两张只有标题的矮卡，洞能有一百多像素。拉齐之后每一行下沿是一条直线，
+   矮卡内部那点空白读起来是留白，不是坏掉的排版。
+
+   「按来源」不需要这一段：那边已经换成瀑布流（antd Masonry），压根没有「行」。
+   只有「今天」还是等分网格——那边顺序是人自己拖出来的，就是内容本身，
+   瀑布流会把它打乱，见 TodayView。
+
+   下面这串是一条 flex 链：网格格子 → 手势层 → Card → Card 的 body →
+   body 里那个 Space，一层不撑满高度，margin-top: auto 就钉不住。层数多是
+   因为中间几层是 antd 的结构，不是我们能合并的。 */
+.ink-card-grid > *,
+.ink-card-grid > * > .ink-swipe,
+.ink-card-grid .ink-task-card {
+  height: 100%;
+}
+
+.ink-card-grid .ink-task-card,
+.ink-card-grid .ink-task-card > .ant-card-body,
+.ink-card-grid .ant-card-body > .ant-space {
+  display: flex;
+  flex-direction: column;
+}
+
+.ink-card-grid .ink-task-card > .ant-card-body,
+.ink-card-grid .ant-card-body > .ant-space {
+  flex: 1;
+}
+
+.ink-card-grid .ant-card-body > .ant-space > .ant-space-item:last-child {
+  margin-top: auto;
+}
+
+/* 行档列表容器（task-3-brief 第二条要点）：跟 .ink-card-grid 互斥，TaskGrid/
+   TodayView 按 density 二选一渲染其中一个，不是叠加。卡片两列是对的（一张卡
+   本来就宽），行不是——两列会让手动排序（「今天」）的行左右横跳着排，第 1 条
+   在左、第 2 条在右、第 3 条又回左边，顺序读不出来；「全部」这类分组视图
+   两列同样把纵向扫描减半、横向跳视翻倍。单列不需要 grid，flex 纵向堆叠就够
+   ——.ink-trow 自己已经用 border-bottom 画分隔线，这里不用再叠一层 gap。
+   上限用 --row-measure，不是正文那个 --measure：一行任务不是一段正文，理由
+   和那 60em 是怎么量出来的都写在 :root 里那个 token 上。左对齐、不居中——
+   多出来的宽度留在右边，跟侧栏、跟上面的筛选栏对齐成一条左边线。 */
+.ink-row-list {
+  display: flex;
+  flex-direction: column;
+  max-width: var(--row-measure);
+}
+
+/* 最后一条底下留一点气口，别让列表贴着下面那条虚线路标。
+   **12 不是 32**：原来这儿是 32px，没有注释、也没人选过那个总数——它跟下面
+   `.ink-review-nudge` 的 `margin-top: 28px` 和 `padding-top: 14px` 叠在一起，
+   实测从最后一行到那句提示的文字之间有 74px 空白。三个互不相干的决定加出来的
+   数，比任何一个单独看都大得多。 */
+.ink-today-list {
+  padding-bottom: 12px;
+}
+
+/* 打卡条：连续打卡天数，规格「在『今天』里显示成连续打卡条」。只从
+   TodayView.tsx 渲染——HabitStreak.tsx 不被别的视图引用，TaskCard 不认识
+   这个组件，见 HabitStreak.tsx 顶部注释，这里不用再挡一次「只在今天」。
+   打卡是人自己做的事，不上群青（--ink-ai）——群青是配给 AI 产出内容的颜色。
+   照 .ink-status-pill 的样子写：等宽字体、11px、浅底胶囊。 */
+.ink-habit-streak {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin-bottom: 8px;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  background: var(--paper);
+  color: var(--ink-you);
+  border-radius: 999px;
+}
+
+/* 「今天还没打卡」那半句次要一档，用 --dim 不用 --ink-ai。 */
+.ink-habit-pending {
+  color: var(--dim);
+}
+
+/* 行档（task-5）：卡片下面留 8px 呼吸空间是给约 400px 高的 TaskCard 配的，
+   TaskRow 一整行只有约 32px 高，同样的间距比例失衡——收窄成 4px，
+   内边距也跟着降一档。见 TodayView.tsx density === 'row' 分支的注释。 */
+/* 编辑表单里那个「当成习惯」勾选框。跟 `.ink-cal-pref`（日历那排显示开关）
+   一模一样的处理：原生 checkbox + 一行文字，只要一点排版。
+   落在 `.ink-habit-*` 这一族里是因为它说的就是习惯这件事——虽然渲染它的是
+   TaskFields 而不是 HabitStreak。族里每一条照旧一个群青都不许有。 */
+/* 「当成习惯」那个勾选。min-height 24px——跟它两个结构上的双胞胎
+   `.ink-cal-pref` 和 `.ink-cd-yearly` 一样，那两个早就有了，这个漏了。 */
+.ink-habit-toggle {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font-size: 12px;
+  min-height: 24px;
+}
+
+.ink-habit-streak-compact {
+  margin-bottom: 4px;
+  padding: 1px 6px;
+}
+
+/* 拖拽：抓手是序号本身。抓起来的那张压暗——原来这里还有一条「落点画一条
+   插入线」，task-3-brief 换成 @dnd-kit 之后删掉了（见下面 .ink-row-pending
+   之后那条注释），这条压暗规则本身留着，不受影响。
+   压暗用**石墨黑**不用群青。第一版写的是群青，理由是「这是操作反馈、
+   跟焦点环同一类」——那个理由站不住：2026-08-11-ink-redesign.md 原话是
+   「群青是有配额的颜色。它只标记『这是 AI 写的/推断的』。任何别的地方用它，
+   这个隐喻就散了」，而这条压暗标的恰恰是**人**拖出来的位置。焦点环那次是
+   规格明确批准过的例外，不是可以照着援引的先例。同一个错误这轮里犯了
+   第二次（上一次是设置弹层里的命令提示块）。 */
+.ink-row-dragging {
+  opacity: 0.4;
+}
+
+/* 拖放提交之后、新顺序落盘刷新回来之前，被移动的那张卡保持压暗——
+   按钮那条路这几秒里有转圈可看，拖放没有，而列表这时候还是旧顺序，
+   卡片会当着你的面弹回原位。不给点反馈的话，读起来就是「拖失败了」。 */
+.ink-row-pending {
+  opacity: 0.55;
+}
+
+/* 插入线（.ink-row-drop-before/.ink-row-drop-after）在 task-3-brief 这一批
+   删掉了：拖拽换成 @dnd-kit 之后，拖动经过哪个位置由它自己的 reflow 动画
+   现场演示（其它行让开的位置就是落点），不再需要额外画一条静态插入线。
+   TodayView.tsx 不再引用这两个类名。 */
+
+/* 序号：网格化之后从页边挪进卡片右上角。多列排布下「读序」不能靠位置推断
+   （横着读还是竖着读？），数字写在每张卡上就没有歧义。
+   仍然是石墨黑、衬线、不斜体——那一整套群青斜体是边注的记号，专属 AI，
+   序号是人自己排的。也仍然是拖拽抓手。 */
+.ink-rank {
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  font-family: var(--font-serif);
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 400;
+  color: var(--ink-you);
+  opacity: 0.26;
+  font-variant-numeric: oldstyle-nums;
+  cursor: grab;
+  padding: 4px 8px;
+  user-select: none;
+}
+
+.ink-rank:active {
+  cursor: grabbing;
+}
+
+/* 上一次重排还没落定时 draggable 是 false，光标和 title 也得跟着改口——
+   不然抓手在宣传一个它会拒绝的操作：按下去拖毫无反应，没有光标变化、
+   没有提示、没有解释，而旁边的上/下按钮至少是明确的禁用态。 */
+.ink-rank-locked {
+  cursor: default;
+}
+
+/* ── 批量操作：卡片选中态 ──
+   群青不出现在这里——选中是人自己点出来的状态，不是 AI 产出，见文件顶部
+   「群青是配额制」。.ink-task-card-selected 是选中标记本身（浅底 + 描边，
+   都走 --rule）；.ink-sel-check 只管勾选框的定位，钉在左上角，跟钉在右上角
+   的 .ink-rank 分居两个角不打架。 */
+.ink-task-card-selected {
+  background: color-mix(in srgb, var(--rule) 18%, var(--sheet));
+  box-shadow: inset 0 0 0 1.5px var(--rule);
+}
+
+.ink-sel-check {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  /* 24px 点击目标。实测（批量条那一屏，390/1280/1920 三个宽度各逮到 7 个）
+     这个勾选框只有 16×22：antd 的 .ant-checkbox-wrapper 本身是 22px 高，而
+     这一颗**不带文字**（名字走 aria-label），所以宽度也只有方框那 16px——
+     跟 .ink-subtask 那条是同一个形状，只是那条至少还有一整行文字可点。
+     这一屏以前一次都没量过（夹具够不着：要 Ctrl 点两张卡才出现），
+     所以这条一直没人发现。
+     用 flex 居中，方框还在原来的视觉位置上，只是可点范围往外扩到 24×24。 */
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 勾选框出现时，正文（旗+标题那一行）的左内边距要让开，不然长标题会跑到
+   勾选框底下——跟上面 .ink-task-card:has(.ink-rank) 让右边同一个道理。 */
+.ink-task-card:has(.ink-sel-check) .ant-card-body {
+  padding-left: 34px;
+}
+
+/* 边注（aiComment）。网格化之前它在卡片外的页边栏里，左边一条虚线；
+   现在挪进卡片、接在正文之后，虚线跟着从左边挪到上边——在页边时那条线说的是
+   「另起一栏」，在卡片里说的是「下面这段是另一个人写的」。
+   群青、衬线、斜体这套记号不变，那是「谁在说话」的标记，跟它站在哪儿无关。 */
+/* Typography.Paragraph（收成两行的那段）自带 .ant-typography 的颜色和字号，
+   会把边注的群青/衬线/斜体盖掉。这段把它交还给外层——「谁在说话」的记号
+   属于 .ink-margin-note，不属于里面用哪个组件渲染。 */
+.ink-margin-note .ant-typography {
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-style: inherit;
+  line-height: inherit;
+}
+
+/* 「展开」那颗。默认会拿主色——这里它是边注的一部分，跟着边注走，
+   只靠下划线表示可点。
+   min-height/padding 是为了点得着：光靠 12px 字它只有 24×21，比全站
+   24px 的点击目标下限矮 3px（量测夹具会报出来）。inline-block 让纵向
+   padding 真的撑开命中区，行内元素的纵向 padding 不占位、撑不开。 */
+.ink-margin-note .ant-typography-expand {
+  color: inherit;
+  font-style: normal;
+  font-size: 12px;
+  text-decoration: underline;
+  margin-inline-start: 4px;
+  display: inline-block;
+  min-height: 24px;
+  padding-inline: 4px;
+}
+
+.ink-margin-note {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dotted var(--ink-ai);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  line-height: 1.72;
+  color: var(--ink-ai);
+  font-style: italic;
+}
+
+/* 「AI 的拆解理由」这行小标签之前是 9.5px——全篇最小的字，而且是汉字。
+   提到 11px 之后它跟边注正文（13px）的对比会变弱一点，靠 0.16em 的字距和
+   等宽字形维持「这是标签不是正文」的区别，不再靠单纯压小字号。 */
+.ink-margin-who {
+  display: block;
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  margin-bottom: 6px;
+  opacity: 0.75;
+}
+
+/* 设置弹层的表单：把每一项之间拉开，让「说明属于上面那个控件」看得出来。
+   antd 默认 Form.Item 之间是 24px，而标签到控件、控件到说明各约 8px——三个
+   间距太接近，四项设置读成了一整段连续文字，说明文字挨着下一项的标签，
+   分不清「只在 Windows 上有效」说的是上面的开关还是下面那个。
+   这里只加大项与项之间的距离，不动项内部的间距——差别拉开，分组自然出来。
+
+   !important 是必要的，不是偷懒：带 help 的 Form.Item 里，antd 会额外渲染一个
+   .ant-form-item-margin-offset，用**行内** style 写上 margin-bottom 等于本项
+   margin-bottom 的相反数（这里就是 -30px），好让「有说明」和「没说明」的项
+   保持同一个节奏。它是读了本项的 margin-bottom 现算的，所以单改 margin-bottom
+   会被精确抵消掉，实测下来项与项之间只剩 0～8px。行内样式没法用选择器优先级
+   压过，只能 !important。把补偿归零之后，说明文字的高度才真的算进本项，
+   上面那条 margin-bottom 才生效。 */
+.ink-settings-form .ant-form-item {
+  margin-bottom: 30px;
+}
+
+.ink-settings-form .ant-form-item-margin-offset {
+  margin-bottom: 0 !important;
+}
+
+/* 子任务复选框：真正的可点区域是整条 <label>（antd 的 .ant-checkbox-wrapper，
+   把方框和文字都包在里面），不是里面那个 16×16 的 <input>——量测夹具一开始
+   照着 input 量，把这些本来就有两三百像素宽的目标误报成 16×16，那是夹具的
+   假阳性，不是这里的 bug。但 label 自己只有 22px 高，差 2px 够不到 24px 这条
+   下限，这个是真的。只加 min-height，不动 antd 自己的对齐方式——子任务文字
+   在窄屏下会折行，改成居中对齐会让方框浮到两行中间去，而方框该跟第一行齐。
+
+   `display: flex`（把 antd 的 inline-flex 换成块级）是实测补的：TaskCard 里
+   这些 Checkbox 是**平铺的兄弟节点**，没有一层块级容器包着，inline-flex 让它们
+   按行内流排——两条短子任务会并排挤进同一行（读起来像一条），长的那条折行之后
+   方框和后半截文字之间还会插进别的子任务。文件上方那句「子任务一行一条」
+   （.ink-task-times 上面那节）说的就是这个约束，但从来没有一条规则真的落实它。
+   只换外部显示类型，内部 flex 行为（方框跟第一行齐）原样不动。
+
+   **`width: fit-content` 是这条规则的另一半，别单独删。** 块级盒子默认铺满整行，
+   而这个盒子是一条 `<label>`——`<label>` 的整块面积都是它那个 checkbox 的点击
+   目标。只写 `display: flex` 的话，「买牛奶」这种短子任务右边那三百多像素的空白
+   也变成开关：在卡片空白处点一下就把子任务勾掉、并且当场 PATCH 出去，而那块地方
+   之前什么都不是。`fit-content` 让盒子仍然按内容收（长文字照旧在可用宽度处折行），
+   一行一条的效果不变，点击目标回到「方框 + 文字」那么大。 */
+.ink-subtask.ant-checkbox-wrapper {
+  display: flex;
+  width: fit-content;
+  min-height: 24px;
+}
+
+/* 一条检查事项 = 勾选框 + 「转为子任务」那颗按钮，横着摆。
+   **不能把 flex 加在 .ink-subtask 自己身上**：上面那条规则的 `width: fit-content`
+   正是为了让 `<label>` 的点击面积只有「方框 + 文字」那么大，按钮塞进 label 里
+   就变成「点按钮 = 勾掉这一项」。所以外面套一层行容器。 */
+.ink-subtask-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 跟 .ink-move-btn 同一个问题：antd size="small" 的按钮高 24px，左右内边距
+   只有 7px，装一个「⤴」这样的窄字形整颗只有 23px 宽，差 1px 够不到 24px 这条
+   点击目标下限。 */
+.ink-subtask-promote {
+  min-width: 28px;
+}
+
+/* 编辑态里检查事项那一行的输入框。跟着内容宽，不铺满——一行检查事项通常
+   就几个字，铺满整行会让这一列看起来像备注框。 */
+.ink-subtask-edit {
+  font-size: 13px;
+  min-height: 24px;
+  min-width: 8em;
+}
+
+/* 「加一条」那个空框：轻一档，它是入口不是内容。 */
+.ink-subtask-add {
+  opacity: 0.85;
+}
+
+/* 删掉某一项。跟 .ink-subtask-promote 同一条点击目标下限。 */
+.ink-subtask-del {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--ink-you) 45%, transparent);
+  min-height: 24px;
+  min-width: 24px;
+}
+
+.ink-subtask-del:hover { color: var(--ink-you); }
+
+/* 上移/下移：antd size="small" 的按钮高 24px，但左右内边距只有 7px，装一个
+   「↑」这样的窄字形时整颗按钮只有 23px 宽——差 1px 就够到 24px 这条点击目标
+   下限，量测夹具在六个宽度下都逮到这两颗（见 2026-08-12-ux-audit.md
+   「小于 24px 的点击目标」）。给个 28px 的最小宽度，比下限再宽一点，
+   两颗并排时也不至于挤成一团。 */
+.ink-move-btn {
+  min-width: 28px;
+}
+
+/* 「开始专注」被别的卡占着锁时，外面包的那层 span（FocusTimer.tsx，只有
+   blocked 时才有）。它扛着那句「已经在专注另一件事了」——挂在禁用按钮自己
+   身上的话浏览器不会渲染 tooltip，见那边的注释。
+   把按钮的指针事件关掉，命中的才是这个 span：实测（CDP `elementFromPoint`
+   打在按钮正中）不关的话命中的仍是那颗 disabled 按钮，tooltip 显不显示又
+   回到「浏览器怎么对待禁用控件」那条靠不住的路上。
+   `not-allowed` 补回来是因为指针事件关掉之后，antd 给 disabled 按钮设的那个
+   光标也跟着失效了——光标得留着，它是「这颗现在按不动」的第一眼信号。 */
+/* 休息那一段前面那两个字（仿滴答清单番茄钟的短休息）。轻一档、小一号——
+   它是个状态标签，不是内容；倒计时本身才是要看的东西。**不换配色**：
+   专注和休息的形状一样（一个倒计时 + 一颗退出按钮），靠这两个字区分就够，
+   多一套颜色就多一条要守的规则。 */
+.ink-focus-tag {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-right: 4px;
+}
+
+.ink-focus-blocked {
+  cursor: not-allowed;
+}
+
+.ink-focus-blocked > .ant-btn {
+  pointer-events: none;
+}
+
+/* 任务卡内部：截止/提醒这一行。「AI 拆解出的时间」才用群青标注键名
+   （.ink-time-ai），手工任务自己填的时间跟正文一样安静——群青是有配额的颜色，
+   只标「这是 AI 写的/推断的」，不是「这是一个时间」。 */
+.ink-task-times {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--dim);
+}
+
+.ink-time-ai {
+  color: var(--ink-ai);
+}
+
+/* 备注按 markdown 渲染（Markdown.tsx）。这里只管排版密度——**不新开尺寸
+   档位**：字号沿用这条备注原来（Typography.Paragraph type="secondary"）
+   的 14px，标题/粗体只靠字重跟正文拉开，不放大；代码块的字号交给下面
+   已有的 `.ink-page code` 规则（12px + 等宽），这里不重复定义一遍。
+   颜色用 --dim（这套设计自己的「次要文字」token），不借 antd Typography
+   的 secondary——react-markdown 渲染出来的是原生标签（h1/ul/pre……），
+   套不上 antd 那层类名。链接色是石墨黑不是群青：群青是配给制，只标
+   「这是 AI 写的/推断的」，markdown 的排版本身不是那一类。 */
+.ink-notes-md {
+  font-size: 14px;
+  line-height: 1.5714285714285714;
+  color: var(--dim);
+  /* 一整段不带空格的长文本（比如粘一个 URL）不许撑破卡片宽度——同一条理由、
+     同一个写法见 .ink-note-text 那条注释：break-word 不参与 min-content
+     尺寸计算，只有 anywhere 会让 min-content 跟着「允许折行」一起缩小。 */
+  overflow-wrap: anywhere;
+}
+
+/* `<Markdown inherit>` 那一档：块级排版（列表/引用/表格）照旧共用，只把字号
+   字色交还给外面。收件箱那条原话用它——`.ink-notes-md` 默认 14px + `--dim`
+   是任务卡上「补充说明」该有的分量，而随手记那条是收件箱这一栏的主角，压暗
+   会让「待拆解」那几条看起来像已经处理过的。
+   **顶格一个类，不写成 `.ink-note-text .ink-notes-md`**：祖先打头的选择器会
+   从 theme.css.test.ts 那条前缀扫描里整条隐形，那条守卫存在的理由就是它
+   （实测：写成祖先形式当场两条红，一条是计数对不上，一条是 overflow-wrap
+   那个断言匹配到了这条新规则）。 */
+.ink-notes-md-inherit {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.ink-notes-md img {
+  max-width: 100%;
+}
+
+/* 行内模式（检查事项那一行）：整块退成一段文字，不占自己的行、不带段落间距。
+   段落那层壳在 TSX 那侧就换成了 Fragment，这里管剩下的盒子——`.ink-notes-md`
+   本身是块级的，不改的话勾选框的文字会掉到下一行。
+   **排在 .ink-notes-md 后面**：同特异度靠源码顺序决胜，写在前面等于这条规则
+   不存在（跟 .ink-notes-md-inherit 是同一条，theme.css.test.ts 盯着那一条）。 */
+.ink-notes-md-inline {
+  display: inline;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* 里面万一真出现了块级元素（有人在检查事项里写了列表），也别把行撑开。 */
+.ink-notes-md-inline > * { display: inline; margin: 0; }
+
+/* **单个换行就是换行**（组件那边写了为什么）。markdown 把软换行当空格，那是
+   写 markdown 的人的约定；而这个应用里这些文字多半是**手打的、没整理过的**
+   ——随手记那个框、备注那个 textarea，敲三行进去看到被空格拼成的一长行。
+   只给段落加，不给代码块/表格那些（它们自己的白空规则是对的，覆掉反而会把
+   `pre` 里的换行再数一遍）。 */
+.ink-notes-md p { white-space: pre-wrap; }
+
+.ink-notes-md > :first-child { margin-top: 0; }
+.ink-notes-md > :last-child { margin-bottom: 0; }
+
+/* 标题：**六级压成两档**（h1/h2 大半号，h3 及以下就是加粗的正文）。备注是
+   任务的补充说明，不是一篇文章——真按 h1…h6 铺六级字号，一条备注里能出现
+   六种大小，而这一整块本来就该比标题轻。`font: inherit` 之后只调字号，
+   字体族/行高都跟着正文。 */
+.ink-notes-md h1, .ink-notes-md h2, .ink-notes-md h3,
+.ink-notes-md h4, .ink-notes-md h5, .ink-notes-md h6 {
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink-you);
+  margin: 10px 0 4px;
+}
+
+.ink-notes-md h1 { font-size: 16px; }
+.ink-notes-md h2 { font-size: 15px; }
+
+.ink-notes-md p, .ink-notes-md ul, .ink-notes-md ol,
+.ink-notes-md pre, .ink-notes-md blockquote {
+  margin: 0 0 8px;
+}
+
+.ink-notes-md ul, .ink-notes-md ol {
+  padding-left: 20px;
+}
+
+.ink-notes-md li {
+  margin: 2px 0;
+}
+
+.ink-notes-md pre {
+  background: var(--paper);
+  padding: 8px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+}
+
+/* 行内代码：等宽 + 一点底色。**跟代码块分开写**——`pre code` 要把这一套
+   还原掉，不然代码块里每一行都会套一层小底色和内边距。 */
+.ink-notes-md code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  padding: 0 3px;
+}
+
+.ink-notes-md pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 1em;
+}
+
+/* 引用：左边一条竖线。原来一个样式都没有，「> 老板原话」渲染出来跟普通
+   段落一模一样——解析了，但读不出它是引用，跟没解析没区别。 */
+.ink-notes-md blockquote {
+  border-left: 2px solid var(--rule);
+  padding-left: 10px;
+  margin-left: 0;
+  color: var(--dim);
+}
+
+/* 表格：原来一条规则都没有，渲染出来是几个字挨着几个字（实测截图里
+   「项 口径 / 收入 财务」读不出是张表）。1px 界行、直角，跟这个界面别处
+   的表格同一套。 */
+.ink-notes-md table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ink-notes-md th, .ink-notes-md td {
+  border: 1px solid var(--rule);
+  padding: 3px 8px;
+  text-align: left;
+}
+
+.ink-notes-md th {
+  font-weight: 600;
+  background: var(--paper);
+  color: var(--ink-you);
+}
+
+/* 表格可能比卡片宽。**外面套一层自己滚的容器**（`Markdown.tsx` 里 `table`
+   那个组件覆写渲染出来的），不是让整张卡横向滚——整页横向滚是这个仓库
+   量测夹具一直在盯的缺陷。 */
+.ink-notes-md-table {
+  overflow-x: auto;
+  margin: 0 0 8px;
+}
+
+/* 分隔线跟别处的界行同一条。 */
+.ink-notes-md hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 10px 0;
+}
+
+/* GFM 任务列表：**去掉圆点**。勾选框本身就是这一项的记号，再加一个圆点是
+   「· ☑ 把图表换成财务口径」——两个记号说同一件事（实测截图里就是这样）。 */
+.ink-notes-md .contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.ink-notes-md .task-list-item {
+  list-style: none;
+}
+
+/* 那个勾选框是**文本，不是 `subtasks` 那个数据模型**（Markdown.tsx 里强制
+   `disabled`）。给它一个明确的「不可点」光标，别让人对着它点第二次。 */
+.ink-notes-md .task-list-item input {
+  margin-right: 6px;
+  cursor: default;
+}
+
+/* 备注里的行内链接：**把可点的那块撑到 24px**。`<a>` 的盒子只有 19px 高
+   （13px 字 + 行高），而这一套设计里点击目标的下限是 24px（.ink-trow-check
+   那条注释）。
+   **这条原来写着「实测 80 屏扫下来，这是全站唯一一类真的过小的点击目标」——
+   那句话只在默认那一屏成立。** 后来把「点开才存在」的层也扫了一遍（批量选中、
+   推荐面板展开），又冒出两类：`.ink-trow-select` 16×16、`.ink-suggest-name`
+   纵向 19px，两处都已经撑到 24。
+   `padding-block` 撑盒子、等量的负 `margin-block` 抵掉它对行盒的影响：行内
+   元素的上下内边距不参与行高计算，所以这一对改的**只有可点区域**，段落一个
+   像素都不动（改完重量过：19px → 25px，版面无变化）。 */
+.ink-notes-md a {
+  padding-block: 3px;
+  margin-block: -3px;
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* 11px 是这一套里正文以外所有字号的下限——这两处（「已过期」和状态角标的
+   「待办/进行中/已完成/搁置」）渲染的都是汉字，不是拉丁字母或数字。10px 的
+   汉字在普通密度的屏上笔画会糊成一团，量测夹具在六个宽度下都数出这两类节点，
+   见 2026-08-12-ux-audit.md「小于 11px 的文本节点」。 */
+.ink-overdue-mark {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--overdue);
+}
+
+/* 状态角标：待办/进行中/已完成。填色、不描边——描边是按钮（开始/搁置/编辑……）
+   的视觉语言，这是一张卡上第一个控件，状态标签之前用跟按钮一样的 1px 描边，
+   长得太像「可以点」的第七个按钮（见 2026-08-12-ux-audit.md「一张卡上七个
+   控件」）。换成纸色（--paper，比卡片自己的 --sheet 底色深一点）的实心块，
+   一眼就是「标签」不是「按钮」，不新占群青的配额——安静的中性色，
+   跟按钮的边框色系是两条不同的视觉语言。 */
+.ink-status-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  background: var(--paper);
+  color: var(--dim);
+  padding: 2px 8px;
+}
+
+/* status 不是 todo/doing/done/later 之一时（手改文件、AI 手滑）：过期橙标出来，
+   不装作是一张正常的待办卡。这一种例外要看得出「有问题」，光换填色的深浅不够
+   显眼，补一条过期橙的描边——跟正常状态角标（填色不描边）刻意长得不一样。 */
+.ink-status-pill-bad {
+  background: var(--sheet);
+  border: 1px solid var(--overdue);
+  color: var(--overdue);
+}
+
+/* 分组标题。TaskGrid 用，六个视图共用一套。字号刻意压在正文和卡片标题之间——
+   它是「这一组是什么」的路牌，不是内容，抢过卡片就本末倒置了。 */
+.ink-grid-section {
+  margin-bottom: 22px;
+}
+.ink-grid-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-you);
+}
+.ink-grid-count {
+  font-size: 11px;
+  font-weight: 400;
+  /* 计数是次要信息，跟 .ink-nav-count / .ink-source-meta 同一个套路用 --dim——
+     不是群青（那是配额制的，只标 AI 产出）。brief 原稿写的是
+     color-mix(in srgb, var(--ink-you) 45%, transparent)：这个仓库现在确实
+     用上了 color-mix 了（.ink-nav-add/.ink-nav-addinput
+     的边框和文字色、.ink-review-kind/.ink-review-dismiss 的文字色，一共六处），
+     但那些都是各自元素单独取的一档透明度，不是「次要文字」这个角色在这份
+     样式表里的通用表达——.ink-nav-count/.ink-source-meta 这类到处出现的
+     次要文字，用的一直是 --dim。这里延续那个更常见的写法，不为这一处单独
+     算一份透明度。 */
+  color: var(--dim);
+}
+
+/* 组头上那颗按钮：「接下来」的「已过期」，和「按来源」每组的「选中这 N 条」
+   （.ink-group-select，并列在同一条规则里——两者长得一样、干的也是同一件事：
+   组头上一颗作用于整组的文字按钮）。行内文字按钮，跟
+   .ink-today-done-undo / .ink-trash-btn 同一个处理：字小，靠 min-height 把
+   可点区域撑到全站 24px 下限。**不上群青**——它是人的动作，群青是配给制的，
+   只标 AI 产出（见文件顶部）。组头是 align-items: baseline 的 flex，
+   min-height 不会把这一行撑歪。 */
+.ink-grid-action,
+.ink-group-select {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dim);
+  text-decoration: underline;
+  min-height: 24px;
+}
+
+.ink-grid-action:hover,
+.ink-group-select:hover { color: var(--ink-you); }
+
+/* 并排的格子：看板（4 列）、四象限（2×2）共用的外层容器，TaskGrid 的
+   layout='cells' 打开时在 .ink-grid-section 外面套这一层。间距沿用
+   .ink-grid-section 原来纵向堆叠时组与组之间的 22px——横过来排还是同一档
+   节奏，不新起一个间距值。格子里面（.ink-grid-section / .ink-row-list）
+   一个字不动，这里只决定格子怎么排。 */
+.ink-cells {
+  display: flex;
+  gap: 22px;
+  /* 四列等高（原来是 flex-start，每列各按自己内容收）。看板的「列」是一根
+     从上到下的槽，四根一样长才读得出来是四个并列的去处；长短不一的四块看着
+     像四张大小不同的卡片，而且「待办」堆了七条、旁边三根只有 140px 的地板
+     时，那三根看起来像是「装不下」而不是「空着」。 */
+  align-items: stretch;
+  /* 窄屏横向滚动，不换行——四列换行之后就不是看板了。 */
+  overflow-x: auto;
+}
+/* task-3-brief 要点①「四列要能同屏看见」：最小宽度以前沿用 .ink-card-grid
+   的 340px（那是给两列卡片网格挤按钮行留的下限），四列 × 340px + 三条 22px
+   的缝，随便一个常见宽度都摆不下，只能看见三列、第四列（「搁置」）被挤出
+   视口，得横向滚动才看得到——看板/四象限现在固定行档（App.tsx 三处
+   `density="row"`），格子里装的是约 32px 高的 `.ink-trow`，不再需要 340px
+   这个「按钮那一行」的下限，收到 200px：四列 200×4 + 66px 的缝 = 866px，
+   1280px 视口减去侧栏（280px）和左右留白之后的看板区域装得下，不用滚动就
+   四列同屏（当时是拿 docs/superpowers/shots/after/kanban.png 那张截图量的，
+   那棵截图树后来整个删掉了——这个数字现在只有这段算术作证，重新量得自己截）。
+   行档里偶尔
+   打开一张编辑中的卡（落进 TaskCard 分支）会比 200px 宽，那是 flex-grow
+   会把列撑到均分剩余空间之后的实际宽度（远大于这个下限），不会真的挤到
+   200px 那么窄。 */
+.ink-cells > .ink-grid-section {
+  flex: 1 0 200px;
+  /* flex 子项的隐式 min-width:auto（不是 0）会用内容的 min-content 宽度当
+     地板，`flex-shrink:0` 管不住这条——列里一行的到期 chip/标签/子项数这些
+     `white-space: nowrap` 的元数据撑出的宽度会顶开 200px 这个 basis，四列
+     摆不下、退回横向滚动，跟这条规则本来要解决的问题一样，实测踩过一次
+     （见 task-3-report.md）。归零之后交给 .ink-trow-title 自己的
+     `overflow: hidden` + `.ink-trow-open` 的 `min-width: 0`（TaskRow.tsx 既有
+     样式）兜底——标题会先让路（省成省略号），到期 chip/标签这些不换行的
+     元数据不会被截断或溢出到列外面，实测（1280×900，17 条夹具）确认过。 */
+  min-width: 0;
+  /* .ink-grid-section 自己的 margin-bottom: 22px 是给竖着摞的布局定的——
+     这里已经用 .ink-cells 的 gap: 22px 控间距，两个 22px 会叠加。这条选择器
+     不管 .ink-cells 是不是套在 .ink-cells-2x2 里面都能匹配（display: contents
+     只摘盒模型，不改 DOM 树，`>` 组合器认的是真实父子关系），看板（.ink-cells
+     单独出现）和四象限（.ink-cells 嵌在 .ink-cells-2x2 里）两边一起归零。 */
+  margin-bottom: 0;
+  /* 容器感（task-3-brief 要点①「列要有容器感：淡背景或边框」）：以前一列
+     只是一个标题 + 松散排开的卡片，跟旁边那列之间只靠 22px 的空隙分开，
+     没有边界。--sheet 跟卡片/编辑态 TaskCard 同色是故意的——行档（.ink-trow）
+     自己没有背景色，只画一条底边线，这层背景补的是「整根列是一张纸」；
+     TaskCard 落在同色的列背景上，靠它自己的描边/投影分层，不会因为撞色而
+     看不出边界。 */
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  box-sizing: border-box;
+  padding: 10px 12px 12px;
+  /* 空格子的地板。实测（1280/1920 两个宽度）没有这条时，一个 0 条任务的格子
+     只剩标题那一行、整根列塌成 20px 高：看板上「进行中/已完成/搁置」三列全是
+     这个样子，而它们正是拖拽最常见的目的地——一条 20px 的缝几乎瞄不准，
+     「列」这个隐喻也没了。四象限更严重：上面两格塌掉之后 2×2 的坐标系不成立，
+     只剩下面一行两个格子。140px ≈ 标题 + 三行 .ink-trow（32px）的高度，
+     是「一眼看出这是一根空列、也够得着放进去」的下限，不是视觉留白。 */
+  min-height: 140px;
+}
+
+/* 拖着卡片经过某个格子时，那个格子亮一圈——不用群青：拖放是人的动作，不是
+   AI 产出（见文件顶部「群青是配额制」）。用 --rule，已有的分隔线灰，不新起
+   一个颜色 token。outline 不占布局空间，不会像 border 那样把格子撑大一圈，
+   密度不受影响。 */
+.ink-grid-section-over {
+  outline: 1.5px dashed var(--rule);
+  outline-offset: 6px;
+}
+
+/* 四象限：2×2 坐标系，不是可以横向滚动的一队列——四个格子得同时全部看见，
+   横向滚动会把另外两格藏到视口外面，坐标系就散了。 */
+.ink-cells-2x2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+  /* 两行等高。默认 auto 时每行各按自己内容算高度，实测「重要且紧急 0」和
+     「重要不紧急 0」那一行只有二十来像素、下面一行两百多——四个格子大小不一，
+     读出来的是「上面那两象限比较小」，而象限之间本来不该有大小差别。
+     1fr 在没有固定高度的网格里解析成「跟最高那一行一样高」，正是要的。 */
+  grid-auto-rows: 1fr;
+}
+/* TaskGrid 自己产出的是 .ink-cells（flex 一行，看板在用，见上面那条规则）——
+   四象限套在 .ink-cells-2x2 外面而不是改 TaskGrid 本身（TaskGrid.tsx 不在
+   这一批改动范围内），所以内层这个 .ink-cells 需要对布局「隐身」：
+   display: contents 把它从盒模型里摘掉，它的四个 .ink-grid-section 直接变成
+   .ink-cells-2x2 的网格项，2×2 才成立——不摘掉的话外层网格只看得见一个孩子
+   （.ink-cells 本身），四个格子还是挤在它内部按 flex 横排。 */
+/* **窄屏拆成单列。** 2×2 在 390px 下每格只有 ~170px，一条任务行 142px：
+   手柄 24 + 勾选圈 24 就吃掉一半，剩下 78px 要装标题和全部元数据——实测
+   标题宽度是 0。四个格子各自有标题（「重要且紧急」……），竖着排信息一条
+   不少，只是不再靠上下左右的位置表达那两条轴——所以那句提示也跟着从
+   「上下两行 / 左右两列」改成按名字说，见 App.tsx 那处。
+   断点用 767px，跟 lib/narrow.ts 的 NARROW_QUERY、以及详情面板那条
+   （theme.css 上面 .ink-detail-col）同一个数，不另挑一个。 */
+@media (max-width: 767px) {
+  .ink-cells-2x2 {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+  }
+}
+
+.ink-cells-2x2 > .ink-cells {
+  display: contents;
+}
+
+/* task-4-brief 修复轮 1 · B：四象限上方那句拖拽说明（拖拽只能改「重要
+   程度」，紧急与否是只读坐标）以前是常驻的一整行（.ink-quadrant-hint），
+   跟日历那句「拖动任务到别的日期……」同一个待遇，挪进了 App.tsx 里
+   .ink-cells-2x2 的原生 `title`（悬停才弹出），这条规则不再被引用，删掉。 */
+
+/* ── 回顾：AI 跨任务观察 ──
+   这一批唯一不铺卡片的视图，形状跟卡片网格完全不同，单独一段。 */
+/* **整份列表收在 --measure 里。** 这一屏全是 AI 写的整句话，是这个应用里
+   最像「正文」的东西，却是唯一一处没有行宽上限的——1440 下一行跑满 1300px，
+   而「知道了」被 margin-left: auto 顶到一千三百像素外，跟它旁边那句话看着
+   毫无关系。正文那个 token 正是为这种连续阅读定的。 */
+/* ── 这一周该过一遍的（回顾那一屏第一段）─────────────────────────────
+   GTD 每周回顾那份清单。判据全在 lib/weeklyReview.ts，一条都不在这儿重新
+   定义。跟「卡住的项目」共用同一个小标题样式（.ink-review-stalled-h）——
+   它俩是同一类东西：从任务本身现算的结构性事实，不是 AI 写的观察。
+   **一个群青都没有**，理由同上。 */
+.ink-review-todo {
+  max-width: var(--measure);
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.ink-review-todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* 不能跳的那一行（「卡住的项目」那条）：跟能跳的那些对齐，但不长成按钮
+   ——**不给一个点了没反应的入口**。字号跟 .ink-review-link 一样。 */
+.ink-review-todo-flat {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* ── 卡住的项目（回顾那一屏最上面那一段）──────────────────────────────
+   GTD 每周回顾要查的那一条：一个还挂着的项目，底下一个能动的下一步都没有。
+   判据在 lib/hierarchy.ts 的 stalledProjects。
+
+   **一个群青都没有**——群青是配给给 AI 产出的内容的（theme.css 顶部），而这
+   一段是从任务本身现算出来的结构性事实，不是谁写的观察。它排在 AI 那几条
+   观察前面：结构性的问题先说，AI 的看法后说。 */
+.ink-review-stalled {
+  max-width: var(--measure);
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.ink-review-stalled-h {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-you);
+}
+
+/* 「为什么它算卡住」那句。次要文字色，跟 .ink-review-kind 那一档同分量，
+   但不借群青。 */
+.ink-review-stalled-why {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.ink-review-stalled-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* 一行 = 项目标题 + 「看过了」。标题在左、按钮被 .ink-review-dismiss 自带的
+   `margin-left: auto` 推到右边——复用那个类不是图省事：它在 AI 观察那条里
+   扮演的正是同一个角色（一行末尾那颗安静的次要动作），为这一处再挑一遍字号
+   和透明度只会多一份会跟它漂移的值。24px 点击下限那两条也一并继承了。 */
+.ink-review-stalled-list > li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ink-review-list { list-style: none; margin: 0; padding: 0; max-width: var(--measure); }
+.ink-review-item {
+  border-left: 2px solid var(--ink-ai);
+  padding: 8px 0 8px 12px;
+  margin-bottom: 14px;
+}
+.ink-review-kind {
+  display: block;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--ink-you) 45%, transparent);
+  margin-bottom: 3px;
+}
+/* 正文是群青——AI 产出的新信息，跟 aiComment 同一类。整个应用里群青是配额制的
+   （只标 AI 产出/推断的内容），这是这一批唯一该上群青的地方。 */
+.ink-review-text { margin: 0 0 6px; color: var(--ink-ai); font-size: 13px; line-height: 1.6; }
+.ink-review-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ink-review-link,
+.ink-review-dismiss {
+  border: 0; background: none; cursor: pointer; padding: 0;
+  font: inherit; font-size: 12px; color: var(--ink-you);
+  /* font:inherit 之后行高继承自父级（没有专门设置，UA 默认约 1.15 倍字号），
+     12px 字号算下来够不到 24px 这条全站点击目标下限——跟 .ink-nav-tag/
+     .ink-move-btn 是同一条教训，不赌那几像素，显式兜底。
+     min-width 同理：.ink-review-dismiss 文字固定「知道了」，宽度天然够；
+     .ink-review-link 显示的是任务标题，是任意用户文本——一两个字的短标题
+     （「跑」「PR」）实际宽度不到 24px，而 padding: 0 没有任何横向余量兜底，
+     是真会出现的窄按钮，跟 .ink-nav-add 是同一条先例（那边 min-height/
+     min-width 两条一起给）。 */
+  min-height: 24px;
+  min-width: 24px;
+  display: inline-flex;
+  align-items: center;
+}
+.ink-review-link { text-decoration: underline; text-underline-offset: 2px; }
+.ink-review-dismiss { margin-left: auto; color: color-mix(in srgb, var(--ink-you) 55%, transparent); }
+.ink-review-dismiss:hover { color: var(--ink-you); }
+
+/* ── 设置弹层（SettingsModal） ──
+   左边一列分区、右边正文，照滴答清单那张设置弹层的形状。**从抽屉换成弹层**：
+   抽屉是「从边上滑出来的一条」，420px 宽，十几项设置在里面只能一路往下滚；
+   设置是一件要坐下来做的事，摊在屏幕正中间、分好区，比一条窄边栏合适。 */
+.ink-set {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  /* 高度钉住：分区多的那几页（任务默认值有五项）和只有一句话的那几页
+     （关于）之间，弹层不该整个跳一下高度。 */
+  min-height: 420px;
+  max-height: 70vh;
+}
+
+.ink-set-nav {
+  flex: 0 0 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-right: 12px;
+  border-right: 1px solid var(--rule);
+  overflow-y: auto;
+}
+
+/* 一个分区。整行可点，长得像导航项不像按钮——右边正文才是要读的东西。 */
+.ink-set-navitem {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--dim);
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 3px;
+  min-height: 24px;
+  white-space: nowrap;
+}
+
+.ink-set-navitem:hover { color: var(--ink-you); background: rgba(0, 0, 0, 0.04); }
+
+/* 选中态：淡底 + 墨色的字 + 左边一条竖线，跟侧栏当前项（.ink-nav-item-current）
+   同一套记号，不新起一种。**不上群青**——分区是人自己点的，群青是配给制。 */
+.ink-set-navitem-active {
+  color: var(--ink-you);
+  background: color-mix(in srgb, var(--ink-you) 7%, transparent);
+  box-shadow: inset 2px 0 0 var(--ink-you);
+}
+
+/* 正文那一栏。**自己是一个 flex 列**：滚的是中间那块内容，「保存」钉在底下
+   不跟着滚——「任务默认值」那一页有五项，按钮滚出视野之外的话，改完得先往下
+   找一遍才能存。 */
+.ink-set-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding-left: 20px;
+}
+
+.ink-set-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 「保存」那一条。上面一道线跟正文分开——它不属于最后那一项设置。 */
+.ink-set-foot {
+  flex: 0 0 auto;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.ink-set-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-you);
+}
+
+/* 分区开头那句说明。跟 antd Form.Item 的 help 同一档分量。 */
+.ink-set-lead {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--dim);
+}
+
+/* 窄屏：分区栏从左边一列摊成顶上一条横向滚动的带子。
+   `flex: 0 0 132px` 是按桌面写的，手机上它把正文挤没了——实测 320 宽时弹层
+   256px，**分区栏 132px 比正文栏（124px）还宽**，那句分区说明只剩 104px，
+   约九个字一行、码成五行；390 宽时正文栏 194px、说明 174px。768 及以上没事
+   （正文栏 556px），所以断点用这份文件里已经在用的 767。
+   摊成横条这一档在这个界面里有先例（模块栏窄屏就是这么排的），而且
+   `.ink-set-navitem` 本来就写着 `white-space: nowrap`，排成一条正合适。
+   选中记号跟着从左边一条竖线换成底下一条横线——横着排的时候竖线立在字左边
+   读不出「选中的是这一项」。
+   `min-height` 归零是顺带修掉的一处自相矛盾：钉死的 420px 在 568 高的手机上
+   比 `max-height: 70vh`（398px）还大，两条约束互相打架。 */
+@media (max-width: 767px) {
+  .ink-set {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .ink-set-nav {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 4px;
+    padding: 0 0 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
+    overflow-x: auto;
+    /* 藏掉滚动条 + 右缘渐隐，跟模块栏窄屏那条一字不差（`.ink-modrail`）。
+       **不藏滚动条 + 不渐隐 = 把上一轮刚修掉的那个缺陷原样再造一遍**：
+       实测 390 上这条带子放不下（scrollWidth > clientWidth），最右边那一项
+       被切掉一半，读起来像画坏了，而不是「后面还有」。 */
+    scrollbar-width: none;
+    mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  }
+
+  .ink-set-navitem-active {
+    box-shadow: inset 0 -2px 0 var(--ink-you);
+  }
+
+  .ink-set-pane {
+    padding-left: 0;
+    padding-top: 12px;
+  }
+}
+
+/* ── 「安排任务」栏（SchedulePanel，日历右边那一条） ──
+   整条都是「还没排上日程的那些」——**一个群青都没有**：这些是他自己写下的
+   任务，AI 一个字都没参与；这一栏的存在本身也不是 AI 的产出。 */
+.ink-sched {
+  display: block;
+  border-left: 1px solid var(--rule);
+  padding-left: 14px;
+  /* 占满外面那一栏的高度：那条 border-left 是日历和这一栏之间的分隔线，
+     它该跟日历一样高，不是跟「这一栏恰好写了几行字」一样高。 */
+  flex: 1;
+  min-height: 0;
+}
+
+.ink-sched-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ink-sched-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-you);
+}
+
+/* 「收起」。行内文字按钮那一套，min-height 兜住 24px 下限——跟
+   .ink-review-dismiss/.ink-trash-btn 同一档。 */
+.ink-sched-close {
+  border: 0; background: none; cursor: pointer; padding: 0;
+  font: inherit; font-size: 12px;
+  color: color-mix(in srgb, var(--ink-you) 55%, transparent);
+  min-height: 24px;
+}
+
+.ink-sched-close:hover { color: var(--ink-you); }
+
+/* 三个页签（清单/标签/优先级）。选中态跟 .ink-density-btn 同一条视觉语言
+   （墨色填底 + 纸色的字），不借群青——这是人这一侧的偏好。 */
+.ink-sched-tabs {
+  display: flex;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.ink-sched-tab {
+  flex: 1 1 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  padding: 3px 6px;
+  min-height: 24px;
+  white-space: nowrap;
+}
+
+.ink-sched-tab + .ink-sched-tab { border-left: 1px solid var(--rule); }
+
+.ink-sched-tab-active { background: var(--ink-you); color: var(--sheet); }
+
+.ink-sched-sort { display: block; margin-bottom: 10px; }
+
+.ink-sched-select { width: 100%; font: inherit; font-size: 12px; min-height: 24px; }
+
+.ink-sched-groups { display: flex; flex-direction: column; gap: 10px; }
+
+/* 组标题：三角 + 名字 + 计数。整行是按钮（点哪儿都能收起来），但长得像一行
+   小标题，不像控件——这一栏里真正要点的是任务本身。 */
+.ink-sched-grouphead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  min-height: 24px;
+  text-align: left;
+}
+
+.ink-sched-count { margin-left: auto; font-family: var(--font-mono); font-size: 11px; }
+
+.ink-sched-list { list-style: none; margin: 0; padding: 0; }
+
+/* 一条待安排的任务。**看得出是能拿起来的**：浅底 + 一道左竖线 + grab 光标，
+   跟纸面上那些静止的行分开——这一栏里每一行的用途就是被拖走。 */
+.ink-sched-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  margin-bottom: 3px;
+  border-radius: 3px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  cursor: grab;
+}
+
+.ink-sched-item:active { cursor: grabbing; }
+
+/* 清单色只上记号不上字，跟 .ink-list-dot 全站同一条规矩。 */
+.ink-sched-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* 名字吃掉剩下的宽度、超长省略号——标题不受控，换行会让每行高度不一。
+   同一个类既给 <span> 也给 <button>（给了 onOpen 才是按钮），跟
+   .ink-fstat-rank-name 同一个处理。 */
+.ink-sched-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-you);
+  text-align: left;
+  min-height: 24px;
+}
+
+.ink-sched-meta {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* ↑/↓ 手动挪位置。**不是拖着排**：行本身的拖拽手势已经被「拖到日历上」
+   占掉了，理由整段在 SchedulePanel.tsx 顶部。 */
+.ink-sched-moves { display: flex; flex: 0 0 auto; }
+
+.ink-sched-move {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0 2px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  min-width: 24px;
+  min-height: 24px;
+}
+
+.ink-sched-move:hover:not(:disabled) { color: var(--ink-you); }
+
+.ink-sched-move:disabled { opacity: 0.3; cursor: default; }
+
+/* 四象限那句「怎么读这一屏」。跟 .ink-trash-note 同一个口吻和形状（安静的次要
+   文字、收在 --measure 里），同样不共用 .ink-empty-note 那个类名——那个专指
+   「这里空空如也」，而这句话不管有没有任务都要在。 */
+.ink-quadrant-note {
+  max-width: var(--measure);
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+/* 两套象限规则的切换（仿滴答清单的「规则组合1 / 规则组合2」）。摆在说明那行
+   上面，整体跟日历那排显示开关是同一个角色、同一套尺寸——那边是 .ink-cal-prefs，
+   这边不复用它的类名：两处将来会各自跟着自己那一屏走，共用一个类名等于把
+   「日历改一下间距」变成「四象限也跟着变」。 */
+.ink-quadrant-rule {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  margin: 0 0 6px; font-size: 12px; color: var(--dim);
+}
+/* min-height 24px：<label> 整块都点得着。12px 字号的行高只有 19px，
+   跟 .ink-cal-pref 一字不差的理由。 */
+.ink-quadrant-rule-opt {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 24px; cursor: pointer;
+}
+
+/* 「快到期」——`due` 在三天内、但还没过期（仿 OmniFocus 的 Due Soon，它那边
+   是介于灰和红之间的一个黄圈）。
+
+   **不新开一个色相**：用 --overdue 兑淡，说的是「同一个警报，声音小一点」——
+   快到期本来就是过期的前一状态，给它一抹独立的黄等于在这套双色墨水里凭空
+   多一个词。整个应用的配色是配给制的（群青只标 AI 产出，见文件顶部）。
+
+   只换字色、不加边框和底色：过期那一档有边框（.ink-trow-due-overdue），
+   两档都上边框的话一整屏扫过去会分不出轻重，而这两句话的轻重正是重点。 */
+.ink-trow-due-soon { color: color-mix(in srgb, var(--overdue) 62%, var(--dim)); }
+
+/* ── 垃圾箱 ── */
+/* 「还原是半程 undo」的说明。跟 .ink-empty-note 同一个口吻（安静的次要文字），
+   但不共用那个类名——.ink-empty-note 专指「这里空空如也」，这句话不管垃圾箱
+   空不空都要在，混用会让以后想单独改其中一种失去挂钩点。 */
+/* 那句「还原只找回任务本身……」是一段正文，收在 --measure 里。不收的话
+   1920 下它一行跑满 1520px。 */
+.ink-trash-note {
+  max-width: var(--measure);
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--dim);
+}
+/* 收在 --row-measure 里，跟任务行一个宽度。不收的话标题在最左、「还原 /
+   彻底删除」被 .ink-trash-actions 顶到最右，1440 下两头差着九百多像素——
+   要还原哪一条，眼睛得横着扫一整行。 */
+.ink-trash-list { list-style: none; margin: 0; padding: 0; max-width: var(--row-measure); }
+.ink-trash-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink-you) 10%, transparent);
+}
+.ink-trash-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* 删掉的东西不该看着像还活着：标题用淡一档的石墨黑，不划删除线——
+   划线在这个界面里是「已完成」的记号，借过来会串味。 */
+.ink-trash-title {
+  font-size: 13px;
+  color: color-mix(in srgb, var(--ink-you) 70%, transparent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ink-trash-when { font-size: 11px; color: var(--dim); }
+.ink-trash-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.ink-trash-btn {
+  border: 0; background: none; cursor: pointer; padding: 0 2px;
+  font: inherit; font-size: 12px; color: var(--ink-you);
+  min-height: 24px; min-width: 24px;
+}
+.ink-trash-purge { color: var(--overdue); }
+
+/* ── 折叠区（TaskFields：重复/优先级/清单/标签） ── */
+/* 偶尔用一次的表单摊开 12 个控件读起来吵（measure-ui.mjs 量出来的数字，见
+   2026-08-17-debt-sweep #6）。默认收起，展开状态不记忆——见 TaskFields.tsx
+   里 moreOpen 那段注释。 */
+.ink-more-fields { display: flex; flex-direction: column; gap: 6px; }
+/* 「今天完成的 N 条」和编辑表单那条折叠行的 `<summary>`。**撑到 24px**：
+   一个没有内边距的 12px 文字行只有 19px 高，够不到这套设计的点击目标下限
+   （`.ink-trow-check` 那条注释）。它不是「点开才存在」的东西——「今天」一进去
+   就在屏幕上，上一轮那句「剩下的都在点开才存在的层里」把它漏了。 */
+.ink-more-summary {
+  cursor: pointer; font-size: 12px; color: var(--dim);
+  list-style: none; user-select: none;
+  min-height: 24px; display: flex; align-items: center;
+}
+.ink-more-summary::-webkit-details-marker { display: none; }
+.ink-more-summary::before { content: '▸ '; }
+details[open] > .ink-more-summary::before { content: '▾ '; }
+
+/* 「在这天新建」。摆在当天列表下面、自己占一行——它作用在「选中的那一天」
+   上，混在列表里的某一行旁边会看不出作用范围。外观跟 .ink-trash-btn 那类
+   行内文字按钮一致，靠 min-height 撑到全站 24px 点击目标下限。 */
+.ink-cal-compose {
+  display: block;
+  margin: 6px 0 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--ink-you) 55%, transparent);
+  min-height: 24px;
+}
+
+.ink-cal-compose:hover { color: var(--ink-you); }
+
+/* 附件里的图片缩略图。固定高度、按比例缩——一条任务上几张截图的原始尺寸
+   千差万别，不定高的话列表会被一张长图撑得没法看。`object-fit: cover` 只裁
+   不拉伸：预览要的是「认出这是哪张」，变形的缩略图连这个都做不到。 */
+.ink-attach-thumb {
+  display: inline-flex;
+  flex: none;
+}
+
+.ink-attach-thumb img {
+  height: 40px;
+  width: 56px;
+  object-fit: cover;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  display: block;
+}
+
+/* 「今天完成的」那一节。**复用 .ink-more-summary 的三条三角形规则**
+   （`details[open] > .ink-more-summary::before` 是按 summary 的类名选的，
+   不认它在哪个 details 里），所以这里只定这一节自己的间距和那份列表。 */
+.ink-today-done {
+  margin-top: 16px;
+  border-top: 1px solid var(--rule);
+  padding-top: 8px;
+}
+
+.ink-today-done-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ink-today-done-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 13px;
+}
+
+/* 做完的：划掉 + 轻一档。这是「已经不用管了」最直白的表达，跟卡片上
+   已完成标题的处理一致。 */
+.ink-today-done-title {
+  flex: 1;
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* 「重开」。跟 .ink-trash-btn 一类的行内文字按钮同一个处理：字很小，
+   靠 min-height 把可点区域撑到全站 24px 下限。 */
+.ink-today-done-undo {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--ink-you) 55%, transparent);
+  min-height: 24px;
+}
+
+.ink-today-done-undo:hover { color: var(--ink-you); }
+
+/* ── 日历本体 + 右边那条「安排任务」并排（CalendarView） ──
+   **靠 flex-wrap 自适应，不写 @media。** 一是这份样式表里 `.ink-cal-*` 有一条
+   「全文件出现次数必须等于顶格前缀扫描抓到的次数」的交叉核对（见
+   theme.css.test.ts），缩进在 `@media` 里的规则会从那个扫描里隐形；二是这里
+   要判断的本来就不是「屏幕多宽」而是「这两栏还并排得下吗」——日历自己那一栏
+   在有详情面板的时候也会变窄，断点答不出这个问题，flex-basis 能。 */
+/* **`align-items: stretch`（默认值），不是 `flex-start`。** 原来写的是
+   flex-start：右边那条「安排任务」栏只有内容那么高——实测 233px，而容器是
+   876px，剩下 643px 是空纸。空纸不接拖拽，于是「把日历上的任务拖回这一栏」
+   实际能落的地方只有顶上一小块，看起来像功能坏了。
+   一栏的**可落区域**应该是它在屏幕上占的那一整条，不是它恰好写了几行字。
+   换行之后（窄屏，两条各占一行）`align-items` 按行算，各自撑自己那一行的
+   高度，跟原来一样。 */
+/* `container-type` 是给这个文件末尾那个 `@container` 用的查询容器。**问的是这个
+   壳自己有多宽，不是屏幕有多宽**——上面那段已经说过理由（日历这一栏在详情面板
+   展开时也会变窄），`@media` 答不出「这两栏还并排得下吗」，容器查询答得出，而且
+   问的正是 `flex-wrap` 此刻正在判断的那个数。
+   **`inline-size` 不是 `size`**：后者要求块向尺寸也被 contain，而这个壳的高度
+   本来就来自内容（换行之后是两行叠起来的高度），contain 掉会当场塌成 0。 */
+.ink-cal-shell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  container-type: inline-size;
+}
+
+/* 日历本体吃掉剩下的宽度。min-width: 0 是老规矩：不加的话 flex 子项的自动
+   最小宽度是内容的 min-content，FullCalendar 那张七列表格会把它顶开、把
+   右边那栏挤走。 */
+.ink-cal-main { flex: 1 1 520px; min-width: 0; }
+
+/* 「安排任务」那一栏。280 跟清单侧栏同宽——屏幕上同时最多只会有一条这么宽的
+   竖栏，两处不一样宽会看出来。摆不下时（flex-basis 260 兑不了）整条换到
+   日历下面，那是窄屏上唯一说得通的摆法。 */
+/* 自己是 flex 列：拖拽时那句提示在上、面板占掉剩下的全部高度（`.ink-sched`
+   的 `flex: 1`）。不这么写的话面板只有内容那么高，它左边那条 `border-left`
+   分隔线就是一截 233px 的短线杵在 876px 高的日历旁边——空位问题的可见那半。 */
+.ink-cal-sched {
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 280px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 日历的显示设置那一排（CalendarView） ── */
+.ink-cal-prefs {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  margin: 6px 0 10px; font-size: 12px; color: var(--dim);
+}
+/* 五个勾选项。min-height 24px：<label> 整块都点得着，但它本来只有 19px 高
+   （12px 字号的行高），五个并排全在 24px 下限以下。 */
+.ink-cal-pref { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; cursor: pointer; }
+
+/* 推演出来的未来重复周期。**必须看得出跟真任务不一样**——它们还没发生，
+   点不动也勾不掉；不做区分的话人会去点一个点不动的影子，然后以为界面卡了。
+   虚线边框 + 半透明 + 默认光标（不是 pointer），三样一起说同一句话。
+
+   **两条写法上的讲究，都是被 theme.css.test.ts 的四件套逼出来的**：
+   ① 选择器顶格从 `.fc-` 开始，不写成 `.fc .fc-event…`——那样整条规则从
+      `
+\.fc-` 那个前缀扫描里隐形，条数断言照样全绿，群青也能塞进去。
+      这正是那条「祖先选择器打头的规则会整条隐形」的守卫要拦的形状。
+   ② 类名叫 `ink-ghost-event` 不叫 `ink-cal-ghost`——后者会让这条规则同时
+      落进 `.fc-*` 和 `.ink-cal-*` 两个前缀族，而两族各有一条「全文件出现
+      次数必须等于本族扫到的块里的次数」的交叉核对，一条规则不可能同时满足
+      两边。一个类名只进一个族。 */
+.fc-event.ink-ghost-event {
+  opacity: 0.55;
+  border-style: dashed;
+  cursor: default;
+}
+
+/* 倒数纪念日在日历上的样子（仿滴答清单的「显示倒数纪念日」）。跟影子一样
+   拖不动（`editable: false`），所以同样给默认光标；但**不半透明也不虚线**
+   ——影子是「还没发生的一次推演」，纪念日是一件确定会到的事，两者不该长得
+   一样。用一条左侧竖杠把它跟任务区分开：分类色只上填充不上字，这条也照
+   （规格「第三条通道」）。类名顶格从 `.fc-` 开始、只进 `.fc-*` 一个前缀族，
+   理由见上面那条。 */
+.fc-event.ink-cd-event {
+  cursor: default;
+  border-left: 3px solid color-mix(in srgb, var(--ink-you) 45%, transparent);
+}
+
+/* 专注记录（仿滴答清单的「显示专注记录」）。
+   类名叫 `ink-pomo-event` 不叫 `ink-focus-event`——后者会让这条规则同时落进
+   `.fc-*` 和 `.ink-focus-*`（FocusTimer 那族）两个前缀族，而两族各有一条
+   「全文件出现次数必须等于本族扫到的次数」的交叉核对，一条规则不可能同时
+   满足两边。**这是第三次踩同一个坑**（前两次是 `ink-cal-ghost`、
+   `ink-focus-*` 的统计页），规矩就一条：一个类名只进一个族。
+   **这个日历上唯一有时长的东西**
+   ——在周/日视图里是一个有高度的块。画得比任务轻：它是「已经发生过的事」，
+   不是「要做的事」，不该跟真正的日程抢注意力。同样拖不动。 */
+.fc-event.ink-pomo-event {
+  cursor: default;
+  opacity: 0.75;
+  background: color-mix(in srgb, var(--ink-you) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ink-you) 25%, transparent);
+}
+
+/* 习惯打卡（仿滴答清单的「显示打卡」）。恒全天、一条细左边框——它是一个
+   「那天做到了」的记号，不是一件安排。 */
+.fc-event.ink-checkin-event {
+  cursor: default;
+  opacity: 0.75;
+  border-left: 3px dotted color-mix(in srgb, var(--ink-you) 45%, transparent);
+}
+
+/* ── 搜索结果里「跳转到」那一排（SearchJumps） ── */
+/* 一排可点的胶囊，不是两个标签页——理由见 lib/search.ts 里 searchLists 的
+   注释。分量比任务卡轻：它们是「换个去处」，不是「这儿有几件事要做」。 */
+.ink-search-jumps {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-bottom: 10px; font-size: 12px;
+}
+.ink-search-jumps-label { color: var(--dim); }
+.ink-search-jump {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: 24px; padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 12px; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--ink-you);
+}
+.ink-search-jump:hover { border-color: color-mix(in srgb, var(--ink-you) 45%, transparent); }
+
+/* ── 智能识别的提示条（TaskComposer） ── */
+/* 「明天下午两点交周报 #工作」里认出来的那几样，连同标题会变成什么，摆在
+   「添加」上面。**不用群青**：这是本机一条正则算出来的，不是 AI 产出，
+   群青在这个界面里是配给制（见 theme.ts 顶部 boardLocalTheme 的注释）。
+   石墨灰的一行小字 + 一颗文字按钮，分量跟它的确定性对得上。 */
+/* ── 列表顶上那一行「添加任务」（QuickAdd，仿滴答清单）──────────────────
+   滴答那一行是一个浅灰圆角盒子，浮在纸上。这里不能那么做：这一屏的立意是
+   一张稿纸，浮起来的盒子在纸上是一块贴纸。**画成稿纸最上面那一栏空行**——
+   只有一条下界线（跟任务行之间的分隔线是同一条 --rule），没有底色、没有框。
+   于是它跟下面第一条任务行对齐成一列，看上去就是「这一列的第一行还空着」。
+
+   宽度跟任务行**同一个量测**（`--row-measure`，不是正文那个 `--measure`）：
+   这一行是「这一列的第一行还空着」，右边界跟下面每一行对不齐的话，它看上去
+   就不属于这一列了。用错 token 真发生过一次——行档从 `--measure` 换到
+   `--row-measure` 之后这里没跟上，1440 下这一行的 ⌄ 停在 884，下面的行却
+   一直铺到 1210。 */
+.ink-quickadd-wrap {
+  max-width: var(--row-measure);
+  margin: 0 0 2px;
+}
+
+/* **上一段那条教训只修了行档那一半。** `--row-measure` 是「一列任务行」的宽度，
+   行档下面的 `.ink-row-list` 封在同一个 token 上，两条右边界严丝合缝；而卡档下面
+   的 `.ink-card-grid` 铺满整列、不封顶，于是同一条注释描述的毛病换个密度又犯：
+   实测 1280 下这一行停在 1192、卡片铺到 1238（差 46px），1920 下停在 1192、
+   卡片铺到 1878——**差 686px，这一行不到下面那片东西的一半宽**。
+   「按来源」的瀑布流同理，而且它根本没有密度开关，永远是宽的那一档。
+   判据在 JSX 那侧（`QuickAdd` 的 `wide`）：这一列是卡片还是行，只有 React
+   那边知道——CSS 这侧够得着的 `:has(.ink-card-grid)` 会被 keepMounted 的
+   隐藏视图骗过去（行档时别的视图面板照样挂着一份卡片网格）。 */
+.ink-quickadd-wrap-wide {
+  max-width: none;
+}
+
+.ink-quickadd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* 加号占的位置跟任务行左边那个勾选圈一模一样宽，标题才落在同一条竖线上：
+   .ink-trow 是 padding 4px + .ink-trow-check 24px + gap 8px = 36px，这里
+   照抄这三个数。差几像素就会看出来这一行不属于下面那一列。
+   （「今天」那种能拖排序的行左边另留 28px 给抓手，对不齐——那是那个视图
+   自己的偏移，不为它把这一行也推过去。） */
+.ink-quickadd-plus {
+  width: 24px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 15px;
+  line-height: 1;
+  user-select: none;
+}
+
+/* 「今天」那种能拖着排序的行，左边常驻 28px 给抓手（.ink-trow-draggable）
+   ——这一行跟着让一样多，「+」才跟下面每个勾选圈落在同一条竖线上。 */
+.ink-quickadd-indent { padding-left: 28px; }
+
+/* min-height 28px：这条输入框是整个应用最常按的那个控件，而它本来只有 22px
+   高（14px 字号 + 0 内边距），在 24px 点击目标下限以下——两端那两颗记号
+   （加号、⌄）都显式兜了 24px，中间这条真正要点的反而没有。 */
+.ink-quickadd-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink-you);
+}
+
+.ink-quickadd-input::placeholder { color: var(--dim); }
+
+/* 加任务行右端那颗「新任务表单」。**跟加号一样宽、一样淡**：这一行的主角
+   是中间那条输入框，两端各一个安静的记号，谁也不抢。 */
+.ink-quickadd-more {
+  flex: 0 0 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ink-quickadd-more:hover { color: var(--ink-you); background: rgba(0, 0, 0, 0.05); }
+
+
+/* 焦点：**加深下界线，不画一圈光晕。** 一圈 outline 又把它变回一个盒子；
+   一条变黑变粗的下界线是纸上「正在写这一行」的样子。仍然是看得见的焦点
+   提示（对比度从 --rule 跳到 --ink-you，不是只靠颜色微调）。 */
+.ink-quickadd-input:focus { outline: none; }
+.ink-quickadd:focus-within { border-bottom-color: var(--ink-you); }
+
+.ink-quickadd-wrap .ink-smart-hint { padding: 4px 0 2px 36px; }
+
+.ink-smart-hint {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--dim); line-height: 1.5;
+}
+
+/* ── 优先级 ── */
+/* 规格：高优先级是**一面小旗的填充色**，不是把标题染红。所以这里上色的是
+   旗这个字形本身（它就是一块填充），标题、按钮文字一律石墨黑。 */
+.ink-pri-flag { margin-right: 5px; font-size: 12px; line-height: 1; }
+.ink-pri-flag.ink-pri-3 { color: var(--pri-3); }
+.ink-pri-flag.ink-pri-2 { color: var(--pri-2); }
+.ink-pri-flag.ink-pri-1 { color: var(--pri-1); }
+
+.ink-pri-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-height: 24px; min-width: 24px; padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px; background: none; cursor: pointer;
+  font: inherit; font-size: 12px;
+  /* 按钮上的字是石墨黑，只有旗的字形带颜色 */
+  color: var(--ink-you);
+}
+.ink-pri-btn[aria-pressed='true'] { border-color: color-mix(in srgb, var(--ink-you) 45%, transparent); }
+.ink-pri-btn.ink-pri-3 .ink-pri-flag-glyph { color: var(--pri-3); }
+.ink-pri-btn.ink-pri-2 .ink-pri-flag-glyph { color: var(--pri-2); }
+.ink-pri-btn.ink-pri-1 .ink-pri-flag-glyph { color: var(--pri-1); }
+
+/* ── 标签 ── */
+/* 规格「第三条通道」：标签是**浅底小胶囊**，底色是分类通道；
+   名字本身是石墨黑，永远不上分类色。 */
+.ink-tag-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.ink-tag-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 1px 6px; border-radius: 9px; font-size: 11px;
+  background-color: color-mix(in srgb, var(--ink-you) 8%, transparent);
+  color: var(--ink-you);
+}
+.ink-tag-x {
+  border: 0; background: none; cursor: pointer; padding: 0;
+  font: inherit; font-size: 11px; line-height: 1;
+  min-height: 24px; min-width: 24px;
+  color: var(--dim);
+}
+.ink-tag-x:hover { color: var(--ink-you); }
+.ink-tag-input {
+  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  background: none; font: inherit; font-size: 11px; padding: 1px 2px;
+  min-height: 24px; width: 6em; color: var(--ink-you);
+}
+.ink-tag-input:focus { outline: none; border-bottom-color: var(--ink-you); }
+
+/* ── 重复规则 ── */
+/* 重复不是 AI 产出，是人自己设的一条规则——这一整段一处群青都不该出现，
+   跟标签/清单同一条通道规矩：分类色/状态色各走各的记号，字色一律石墨黑。 */
+.ink-repeat-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* 重复规则的人话预览。**占满一行**（`.ink-repeat-row` 是 wrap 的 flex，
+   `width: 100%` 把它挤到单独一行）——它是对上面那一排控件的总结，
+   挤在控件中间会让人以为它也是个控件。它不是 AI 产出，不上群青。 */
+.ink-repeat-preview {
+  width: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--dim);
+}
+.ink-repeat-select {
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px; background: none; font: inherit; font-size: 12px;
+  min-height: 24px; padding: 2px 6px; color: var(--ink-you);
+}
+.ink-repeat-interval {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--ink-you);
+}
+.ink-repeat-interval input {
+  width: 4.5em;
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px; background: none; font: inherit; font-size: 12px;
+  min-height: 24px; padding: 2px 6px; color: var(--ink-you);
+}
+.ink-repeat-days { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+/* 七颗星期几按钮是 <button>，量测夹具（tools/measure-ui.mjs）只对 <input>
+   爬祖先找点击区域，<button> 得自己够 24px——min-height/min-width 都不能省。 */
+/* 星期几的快捷预设（工作日 / 周末）。跟七颗星期几按钮同一套边框，但**不带
+   aria-pressed 的选中态**——它们是「一次填五个值」的动作，不是一个状态：
+   点完之后真正被选中的是右边那几颗星期几，预设本身没有「当前选中」可言。 */
+.ink-repeat-preset {
+  min-height: 24px; padding: 0 8px; margin-right: 4px;
+  border: 1px dashed color-mix(in srgb, var(--ink-you) 25%, transparent);
+  border-radius: 4px; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--dim);
+}
+.ink-repeat-preset:hover { color: var(--ink-you); }
+
+.ink-repeat-day {
+  min-height: 24px; min-width: 24px; padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--ink-you);
+}
+.ink-repeat-day[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--ink-you) 45%, transparent);
+  background: color-mix(in srgb, var(--ink-you) 8%, transparent);
+}
+/* 卡片上的「↻ 每周一」和「@电脑前」两个记号：跟 .ink-task-times 同一档视觉分量
+   （等宽、11px、--dim）——都是关于「这件事怎么干」的次要注记，不是正文，
+   也不是 AI 的话（所以一个群青都不上）。并列在同一条规则里，不各写一份：
+   两者常常就摆在同一行上，字号或颜色飘一格都看得出来。 */
+.ink-repeat-mark,
+.ink-context-mark {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 「还有几个提醒没显示」那个 +N。轻一档——它是一句补充，不是内容本身。
+   跟 .ink-waiting-mark 同一档处理，也同样不上群青。 */
+.ink-meta-more {
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 「在等谁」那条注记。跟 .ink-repeat-mark 同一档轻处理——它是一条状态注记，
+   不是任务本身。**不上群青**：这是人自己填的（或者 AI 从原文里摘出来的事实，
+   不是它的判断），群青是配给制、只标 AI 推断出来的东西。 */
+/* 「12 天没动静」那半句：比「在等 张老师」再轻一档——名字是主语，多久是
+   补充。**不借群青**：这是从任务自己的 updatedAt 算出来的事实，不是 AI 写的。 */
+/* 卡片标题那一行：勾选圈 + 旗 + 标题横排。圈是 flex 里不缩的那一项，
+   标题吃掉剩下的宽度并自己截断——跟行档 .ink-trow 那一行同一个分工。
+   `align-items: flex-start`：标题可能折成两三行（卡片比行档窄得多），
+   圈要跟第一行对齐，不是垂直居中到整段文字的中间。 */
+.ink-card-titlerow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 圈跟第一行文字对齐：24px 的圈比 14px 的字高，往下压一点点才在视觉上齐平。
+   **挂在圈自己身上（`.ink-card-check`），不写成 `.ink-card-titlerow
+   .ink-trow-check`**：祖先打头的选择器会从 theme.css.test.ts 那条 `.ink-trow-`
+   前缀扫描里整条隐形，那条守卫存在的理由就是它——实测确认过，写成祖先选择器
+   的那一版当场把它数红了（30 vs 29）。跟 `.ink-cal-chiptime-narrow`、
+   `.ink-notes-md-inherit` 是同一条规矩。 */
+.ink-card-check { margin-top: 1px; }
+
+/* 「明天 09:00 开始」——还没到开始时间的那条记号。跟「已过期」是反方向的
+   一对（一个说「早该做了」，一个说「还轮不到」），所以**不用过期橙**，用
+   安静的次要字色：它不是警报，是一句「现在别管它」。
+   不借群青：从任务自己的 startAt 算出来的事实，不是 AI 写的。 */
+.ink-notstarted-mark { color: var(--dim); }
+
+.ink-waiting-quiet { color: var(--dim); }
+
+/* 「搁了 92 天」——挂在状态角标里，比状态本身再轻一档。跟 .ink-waiting-quiet
+   是同一类东西（这个状态待了多久），所以长一个样、同一个颜色。不借群青：
+   从任务自己的 updatedAt 算出来的事实，不是 AI 写的。 */
+.ink-parked-quiet { color: var(--dim); }
+
+.ink-waiting-mark {
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* ── 日历 ──
+   月格/周格是新容器，不复用 .ink-cells 一族——那一族是可横滚的弹性列（看板/
+   四象限的布局约束），日历是固定 7 列等宽网格，混用会让两边的改动互相波及
+   （Task 3 brief）。今天/outside/选中态三种状态各自一个类，全是人这一侧的
+   东西（哪天是今天、哪天不属于本月、点开了哪天），一处群青都不该有——群青
+   是配额制的，只标 AI 产出，跟文件顶部「群青是配额制」同一条规矩。 */
+/* 顶上那一行：**左边大标题，右边一串控件**（照滴答清单排）。原来是七颗
+   一样重的按钮挤在一起、标题混在中间，那一行读不出主次。 */
+.ink-cal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* 六颗控件（上一页/下一页/今天/月/周/日）+ 一个 min-width: 6em 的标题，390px
+     的手机上一行摆不下：不许换行的话 flex 会把按钮压到 min-content 以下，中文
+     按钮名当场竖着劈成两三行。允许换行之后是整颗按钮整体换到下一行，读起来还是
+     一颗一颗的按钮。「今天」那颗是把这一行从「刚好够」推过界的那一颗。 */
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.ink-cal-nav button {
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-you);
+  min-height: 24px;
+  padding: 0 8px;
+}
+/* 「月/周/日」三颗切换按钮的按下态——跟 .ink-repeat-day[aria-pressed='true']
+   同一档视觉（边框加深 + 淡底），不新起一套记号。 */
+.ink-cal-nav button[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--ink-you) 45%, transparent);
+  background: color-mix(in srgb, var(--ink-you) 8%, transparent);
+}
+/* 右边那一串。自己一个 flex，免得被外层的 space-between 拆散。 */
+.ink-cal-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 「日/周/月/年/日程」那个下拉。档数从三档长到五档之后一排按钮比标题还长，
+   滴答那边也是一个下拉。原生 select 不套 antd——它的选中色直接读
+   colorPrimary（群青），而群青是配给制。 */
+.ink-cal-mode { display: inline-flex; }
+
+.ink-cal-modesel {
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-you);
+  min-height: 24px;
+  padding: 0 6px;
+}
+
+/* 翻页那三颗连成一段（滴答那边是一个分段控件）：它们是同一件事的三个方向，
+   分开摆会让「今天」看着像另一个功能。中间那颗左右各一条分隔线，不是三个
+   独立的框。 */
+.ink-cal-pager {
+  display: inline-flex;
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ink-cal-pager button + button { border-left: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent); }
+
+/* 「‹」「›」两颗只有一个字形宽，`.ink-cal-nav button` 那条 `padding: 0 8px`
+   算下来是 22px，差 24px 下限两像素——这是这个仓库第 N 次为 24px 单独兜底。
+   这一组三颗共用外框，所以只兜宽度、不动边框。 */
+.ink-cal-pager button { min-width: 24px; }
+
+/* 大标题。**这一行的主角**——照滴答清单，它比旁边那串控件重一档（18px
+   加粗，控件是 13px）。`<h2>` 不是 `<span>`：它就是这一屏在说的那件事（视图名是 `<h1>`，这一层挂在它下面）。 */
+.ink-cal-heading {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink-you);
+  min-width: 6em;
+}
+
+/* 月格里日期那一行右边的「35周」。**只在每行第一格出现**（组件层判的），
+   淡、小、不抢日号。 */
+.ink-cal-wk {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  /* 「31周」不许自己断成两行——它是一个词。日号那一行开了 `flex-wrap: wrap`
+     （农历那半行靠它换下来），实测周数会跟着断成「31 / 周」。格子再窄也宁可
+     整颗被挤掉，不要数字和量词分家。 */
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ink-cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+.ink-cal-weekday {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  text-align: center;
+  padding: 4px 0;
+}
+
+/* task-7：`.ink-cal-day`（月格容器，固定最小高度 + overflow: hidden 防止
+   一天塞十条任务撑高格子）/`.ink-cal-day-today`/`.ink-cal-day-outside`
+   随手写月格三条一起退役——Task 5 换成 FullCalendar 之后，「今天」的底色
+   已经由 --fc-today-bg-color 变量映射接管，「非本月」由 FullCalendar 自带
+   的 .fc-day-other 顶替，grep 过 web/src 全部 .tsx/.ts 确认这三个类零渲染。
+   `.ink-cal-day-selected` 还在用（CalendarFull.tsx 的 dayCellClassNames/
+   dayHeaderClassNames），独苗留着——前缀 `.ink-cal-day` 本身没了，不用再
+   担心「前缀兄弟选择器」被彼此吃掉那个坑。 */
+.ink-cal-day-selected {
+  outline: 1.5px solid var(--rule);
+  outline-offset: -1.5px;
+}
+
+.ink-cal-daynum {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* 今天：日号套一个**实心圆**（照滴答清单）。FullCalendar 自己给整格挂了
+   `.fc-day-today` 的淡底，那个淡底在一屏 42 格里其实不显眼——尤其是当天还
+   被选中、两层浅底叠在一起的时候。一个实心圆是这一屏上唯一的那种记号，
+   扫一眼就找得到。
+   **不上群青**：今天是哪天跟 AI 无关，群青是配给制。
+   **类名挂在这一颗自己身上，不写成 `.fc-day-today .ink-cal-daynum`**：祖先
+   打头的选择器会从 `.ink-cal-*` 那条前缀扫描里整条隐形（那条守卫存在的理由
+   就是它），组件层据 `now` 判今天、直接给类，见 CalendarFull.tsx。 */
+.ink-cal-daynum-today {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--ink-you);
+  color: var(--sheet);
+}
+
+/* task-7：`.ink-cal-tasks`（格子里任务列表的容器）/`.ink-cal-tasktitle`
+   （单条任务标题，截断用）/`.ink-cal-more`（「还有 N 条」）三条随手写月格
+   一起退役——FullCalendar 自己画任务块，截断走 .fc-event-title，「还有
+   N 条」走 .fc-daygrid-more-link，都在下面 FullCalendar 那节，grep 过
+   web/src 全部 .tsx/.ts 确认这三个类零渲染。 */
+
+/* task-4-brief「顶部 chrome 收一收」：日历上方那句拖拽说明以前是常驻的一
+   整行（.ink-cal-hint），挪进 CalendarGrid.tsx 里 .ink-cal-grid 的原生
+   `title`（悬停才弹出）之后这条规则不再被引用，删掉——留着一条没人用的
+   CSS 规则比不留更容易让人以为它还在生效。 */
+
+/* ── 日历：月视图正文换成 FullCalendar（CalendarFull.tsx，task-5）──
+   这是这个 Task 存在的全部意义：第三方组件的样式在它自己的 stylesheet 里，
+   `.ink-*` 那套「前缀扫描 + 条数断言 + 全文件计数交叉核对」的四件套完全看不
+   见它——antd 的 colorPrimary 就是这个盲区，已经漏过四轮。FullCalendar 的
+   类名全是 `.fc-*`，并且暴露一整套 `--fc-*` CSS 变量，做法是把这些变量
+   映射到这个仓库的 token，再照抄 `.ink-*` 各族的四件套（下面 theme.css.test.ts
+   那半）扫描我们自己写的这些 `.fc-*` 规则。
+
+   `--fc-*` 变量的静态扫描守得住「我们自己写的映射对不对」，守不住「FullCalendar
+   自己的样式表里有没有偷偷用了不经过变量的硬编码颜色」——那半靠
+   CalendarFull.test.tsx 的渲染层断言：真的渲染一个 FullCalendar，读
+   getComputedStyle 算出来的颜色，**在 jsdom 能算出计算值的那几个属性上**
+   确认没有一处是群青。这句话不能说满——jsdom 的 cssstyle 对 `border:
+   1px solid var(...)` 这种简写会整条丢弃（不解析、不报错，读出来的
+   computed 值是空字符串），`--fc-border-color`/`--fc-event-border-color`
+   两个变量恰好只通过简写落地，渲染层扫描器天生看不见它们（真浏览器不存在
+   这个限制）。这两个变量因此只能靠下面 theme.css.test.ts 的文本层正向断言
+   守住「映射到了仓库 token」，不是「渲染层也确认过」。
+
+   只映射「这次月视图配置（月格 + 关闭原生表头/工具栏 + 关闭弹层）真的会画
+   出来」的那几个变量，不是抄一份 FullCalendar 全部变量清单——没用到的变量
+   （--fc-button-*、--fc-now-indicator-color、--fc-more-link-text-color……）
+   不会出现在任何一条渲染出的规则里，为它们写值只是噪音，也没有东西可验证
+   （`--fc-more-link-text-color` 只有 `@fullcalendar/timegrid` 用，
+   core/daygrid 全文零引用，月视图下写了也是死映射——真要控制「还有 N 条」
+   的字色，靠下面 `.fc-daygrid-more-link` 自己的 `color`，那是我们自己的
+   规则，扫得到也守得住）。哪几个变量真的会画出来，见 CalendarFull.tsx 的
+   配置（headerToolbar:false 没有按钮、moreLinkClick 接管没有 popover、
+   月视图没有当前时刻线）。 */
+:root {
+  /* 格子边框：FullCalendar 默认 #ddd（跟 --rule #C7CAD0 已经很接近，但要
+     显式钉住，不能靠「default 恰好差不多」）。 */
+  --fc-border-color: var(--rule);
+  /* 贴顶/弹层的底色（这一批配置下几乎不会画出来，映射是防御性的，不是
+     因为观察到它真的渲染了）。 */
+  --fc-page-bg-color: var(--sheet);
+  /* 「今天」那一格的底色——FullCalendar 默认是黄色系高亮
+     （rgba(255,220,40,.15)），换成跟旧实现 .ink-cal-day-today 完全同一条
+     色值（8% 的你的墨），视觉上是同一件事的延续，不是另起一套。 */
+  --fc-today-bg-color: color-mix(in srgb, var(--ink-you) 8%, transparent);
+  /* 任务块：FullCalendar 默认蓝底白字（#3788d8）——这个蓝虽然不是字面的
+     #2E3ED4，但依然是「一块蓝」，会被读成「这是 AI 写的」，跟「群青只标
+     AI」的精神冲突，三个变量都要压：底色换成页面调色板里的浅底，边框用
+     --rule，字色用你的墨。**`--fc-event-border-color` 是这三个里最要命的
+     一个**：FullCalendar 的默认值正是 `#3788d8`，就是要压掉的那块蓝，而它
+     唯一的落点是 `border: 1px solid var(...)` 这种简写——渲染层扫描器看
+     不见简写（见上面这段落顶的说明），这条映射写对写错，渲染层断言都不会
+     变红，只能靠下面 theme.css.test.ts 的文本层正向断言守住。 */
+  --fc-event-bg-color: var(--sheet);
+  --fc-event-border-color: var(--rule);
+  --fc-event-text-color: var(--ink-you);
+  /* task-6：周/日视图当前时刻线（`.fc-timegrid-now-indicator-line`/
+     `-arrow`）唯一吃的颜色变量，FullCalendar 默认是 `red`——不是群青该待的
+     地方（这是时间算出来的状态，不是 AI 产出，跟退役前 CalendarHours.tsx
+     的 `.ink-calh-nowline` 用 `--ink-you` 不用 `--ink-ai` 同一条规矩），也
+     不能留着刺眼的红。
+     ⚠️ **这条一开始被当成"长写法，渲染层扫描器够得到"写进过注释，
+     是错的，接 timeGrid 之后重新查这条才发现**：库内规则是
+     `border-color: var(--fc-now-indicator-color)`——`border-color`
+     本身虽然只管颜色（不像 `border: width style color` 那种三合一），
+     但它依然是一条 CSS **简写**（同时展开成上右下左四个方向），而不是
+     `border-top-color`/`border-right-color`……那种单一方向的长写法。
+     实测过（探针）：jsdom 的 cssstyle 对 `border-color: var(--x)` 不是
+     "整条丢弃"（跟三合一简写不同），而是**悄悄按初始值算**——`getComputedStyle`
+     读出来的 `borderTopColor` 恒是 `rgb(0, 0, 0)`，不管 `--x` 声明成什么颜色，
+     `var()` 引用没有被真的展开，静默算错，比"整条丢弃"更危险（丢弃至少会被
+     `collectColors` 的空值/`transparent` 过滤器跳过，不会污染判定；这种是
+     会产生一个**看起来正常的具体颜色**，只是不是真实映射的那个颜色，靠
+     "算出来的值不是 transparent/空字符串"这道判据的渲染层扫描器天生看不出
+     区别）。跟 `--fc-border-color`/`--fc-event-border-color` 那两条同一类
+     盲区，**唯一的守卫是下面 theme.css.test.ts 的文本层正向断言**，不是
+     渲染层扫描（`CalendarFull.test.tsx` 试过给这条变量做对照组，实测扫描器
+     确实抓不到，那条测试因此没有留下——留着只会是一条"绿得不是因为它测的
+     那件事"的假绿，改成不测比硬凑一条测不出真实结论的测试更诚实）。 */
+  --fc-now-indicator-color: var(--ink-you);
+}
+
+/* .fc-event-title：任务标题截断——FullCalendar 默认只有 overflow:hidden，
+   没有 text-overflow:ellipsis（长标题会硬裁，没有省略号），字号继承
+   --fc-small-font-size（0.85em，换算下来不精确等于全站 11px 下限）。照抄
+   .ink-cal-tasktitle 的三件套，钉死成具体值，不依赖继承链。截断之后还能不能
+   看到全文靠 `title` 属性，那是 CalendarFull.tsx 的 `eventDidMount` 接的，
+   不是 CSS 能管的事。 */
+.fc-event-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+/* .fc-timegrid-event .fc-event-title：周/日视图里事件块的标题。
+   两件事一条规则：
+   ① **字号钉回 11px**。FullCalendar 自己写了 `.fc-timegrid-event-short
+      .fc-event-title`（两个类，0-2-0），顶格一个 `.fc-event-title` 压不过它
+      ——实测量到 10.115px，全站 11px 下限在这一档整个失守。选择器**照抄它那条
+      的形状**（同样 0-2-0），特异度打平、靠我们的样式表在后面赢。
+   ② **不折行**。`.fc-event-main-frame` 是 `flex-direction: row; overflow:
+      hidden`，一列窄的时候标题会折成两三行、被块高裁掉。
+   为什么不是只管 `-short` 那一档（第一版是）：`expandRows` 之后行会拉长，
+   一小时的块不再算「短」，`-short` 那个类就不挂了——390 宽的周视图实测又报
+   出六条「截断 need 52 / got 30」，跟当初 21px 那次是同一个病，只是换了一档。
+   折不下的用省略号，全文在原生 `title` 属性里，跟月视图同一条。 */
+.fc-timegrid-event .fc-event-title {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* .fc-timegrid-axis-cushion：周/日视图左上角那颗「35周」。它是可点的（点它
+   跳到那一周），39×22——高度差 2px 够不到下限。第十三次为 24px 单独兜底。 */
+.fc-timegrid-axis-cushion {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* .fc-daygrid-more-link：接入 moreLinkClick 之后这是一个真正独立的可点
+   元素（点它会选中这一天，不再是嵌在整个格子按钮里的纯展示文字，旧实现
+   的 .ink-cal-more 从来不用担心这个）——这个仓库已经为 24px 点击目标单独
+   兜过七次底，这是第八次。字号钉 11px，同一条全站下限；字色钉
+   `var(--dim)`——旧实现 `.ink-cal-more` 用的就是这个 token，`--fc-more-
+   link-text-color` 这个变量月视图下是死的（见上面 `:root` 那段说明），
+   直接写在我们自己的规则里才是真的生效的那条路。**不写 `display:
+   inline-block`**：`<a>` 默认虽然是行内元素，但 FullCalendar 自己的
+   样式表给这个类挂了 `float: left`（`.fc-direction-ltr .fc-daygrid-
+   more-link{float:left}`）——float 会把 UA 计算出来的 display 强制变成
+   `block`（CSS 2.1 §9.7），我们自己再声明一次 `inline-block` 只是一条
+   永远不会生效的死代码，min-height/min-width 对浮动生成的块级盒子本来就
+   生效，不需要这一行。 */
+.fc-daygrid-more-link {
+  min-height: 24px;
+  min-width: 24px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* .fc-daygrid-day-number：月格右上角那个日期数字，是 FullCalendar 渲染的
+   `<a>`，点它会选中这一天（CalendarFull.tsx 的 dayCellContent 把
+   .ink-cal-daynum 放在它里面）——所以它是点击目标，不是装饰文字。量测夹具
+   在 390/1280/1920 三个宽度下都数到 48 个过小目标，全是它：一位数的日子
+   15×30、两位数 21×30，宽度都够不到 24px 这条下限。这是这个仓库第十次为
+   24px 单独兜底。
+   只补 min-width（高度 30px 本来就够）+ 居中，不动字号字色——那两样是
+   .ink-cal-daynum 的事，这一条只管可点的那块矩形有多大。
+   **不写 `display: inline-block`**，跟 .fc-daygrid-more-link 同一条理由（复审
+   M4）：这个 `<a>` 的父节点是 `.fc-daygrid-day-top`，FullCalendar 自己的样式表
+   给它挂着 `display:flex;flex-direction:row-reverse`（node_modules/@fullcalendar/
+   daygrid/internal.js），flex 项会被强制块化，min-width 本来就吃得到。再声明一次
+   是一条在真实浏览器里永远不会生效的死代码——更糟的是给它配一条断言，等于让
+   「删掉无效声明」这个纯清理动作变红。 */
+/* **日号在左、周数在右**（照滴答清单排）。
+   这一条挂在**日期数字那个 `<a>` 上**，不是它外面的 `.fc-daygrid-day-top`：
+   `dayCellContent` 渲染出来的两个 span（日号、周数）都在这个 `<a>` 里面，
+   外层那个 flex 容器只看得见**一个**孩子，给它 `space-between` 没有任何东西
+   可以分开——实测出来是「27³¹周」这种糊在一起的读法。
+   （顺带记一条：外层那条 FullCalendar 自己写的是 `.fc .fc-daygrid-day-top`，
+   两个类的特异度，顶格一个类名的覆盖压不过它。这里不需要覆盖它。） */
+.fc-daygrid-day-number {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  /* **允许换行**：农历那半行（`.ink-cal-sub`，`flex-basis: 100%`）是这一行的
+     第三个 flex 项，靠换行掉到日号下面自己占一行。不写这一条它会挤在日号
+     右边——实测长这样：「27³¹ 十四」，三样东西横着排在一格 190px 里。 */
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 24px;
+}
+
+/* .fc-event：一条条任务块，可点也可拖（拖到别的日期就是改到期日）。默认高 21px，
+   差 3px 够不到 24px 这条下限——48 个日期数字修掉之前，这 6 条一直被夹具的
+   「只列前 10 个样本」挡在报告外面，不是这轮才出现的。这是第十一次为 24px 单独
+   兜底。
+   **不加 `.fc-daygrid-` 前缀是有意的**：`.fc-event` 是 FullCalendar 给所有视图的
+   事件块共用的类，周/日视图的时间块（`.fc-timegrid-event`）和全天带里那些也是
+   点击目标，同样该够 24px。今天时间块碰不到这条下限（事件只给 `start` 不给 `end`，
+   FullCalendar 按默认 1 小时算，配 `.fc-timegrid-slot` 的 40px 一格 = 40px 高）；
+   哪天真给事件加上时长、或者把 `slotDuration` 调到一小时以下，短事件会被这条
+   min-height 顶出自己那一格——那时候要改的是把下限挪进 `.fc-daygrid-event`，
+   不是把它删掉。
+   月格自己的账：一格约 90px，日期数字占 30px，`dayMaxEvents` 吃的是
+   `MAX_VISIBLE_TASKS`（= 3，见 CalendarFull.tsx 的 maxVisible），所以最多三条
+   24px 的块 = 102px，格子会比原来高十来像素——月视图 `height="auto"`，网格自己
+   长高，不裁切；第四条起才收进「还有 N 条」（.fc-daygrid-more-link）。 */
+.fc-event {
+  min-height: 24px;
+}
+
+/* ── 日历：周/日视图（task-6，FullCalendar 的 timeGridWeek/timeGridDay）──
+   手写的 `CalendarHours` 退役，正文换成 FullCalendar，跟月视图（上面
+   `.fc-event-title`/`.fc-daygrid-more-link` 那组）同一套"库自带 + 我们自己
+   补几条规则"的路数。今天/选中的底色继承月视图那两条 --fc-* 映射，不用
+   重写；这里只补 timeGrid 独有的几个类。 */
+
+/* 周/日视图外层的固定高度滚动容器——`min(60vh, 960px)` 跟退役前
+   `CalendarHours.tsx` 的 `.ink-calh-scroll` 同一个数字（24 行 × 40px 是
+   完整内容高度，用 min() 避免小屏幕上被撑出一段空滚动区）。FullCalendar
+   自己的 `height="100%"` 撑满这一层，24 小时的内容超出时它自己的时间轴
+   主体在这层内部滚动，不是这层外壳自己滚——`overflow: hidden` 只是不让这层
+   外壳本身也长出第二条滚动条。
+
+   **60vh 换成 `calc(100vh - 203px)`**：照滴答清单量了一轮——1440×900 上时间轴
+   到 717px 结束，而外面那个滚动容器（`.ink-board-col`）的底在 876px，中间
+   159px 是空纸。滴答的日历永远铺满窗口。
+   为什么是 calc 不是 vh：顶上那截 chrome（视图标题 + 筛选那行 + 日历导航行）
+   是**固定像素高**，不随窗口缩放，所以「窗口高的百分之几」在任何一个高度上
+   都只能对一次。203px 是量出来的（时间轴顶 177 + 底下那 24 的页边距 + 2px
+   余量），这个式子在 768 / 900 / 1080 上都正好落在容器底。960px 那个上限还是
+   24 行 × 40px 的完整内容高度：窗口再高也不必拉长，全天二十四小时已经画完了。
+   320px 那个下限是给极矮窗口兜底，不然减完是负数。
+   哪天顶上那截 chrome 的高度变了（多一行筛选、导航行换行），这个数字要跟着
+   重量一次——`.ink-cal-monthgrid` 那条同理，它的常数不一样（月视图多一行
+   自己画的星期表头）。
+
+   ⚠️ **这个高度只在「安排任务」栏跟日历并排时成立。** 它自己就吃满一整屏，
+   所以只要这一栏底下还有别的东西，中间那栏必定溢出。换行之后正是这种情形，
+   文件末尾那个 `@container` 补的就是这一档，两条常数在那儿各减一次。 */
+.ink-cal-timegrid {
+  height: max(320px, min(calc(100vh - 203px), 960px));
+  overflow: hidden;
+}
+
+/* 「安排任务」栏在**接收拖拽**时的两档。分两档是因为它们回答两个问题：
+   `-drop`（正在拖一条日历上的任务）= 「这儿可以放东西」，一条虚线边；
+   `-over`（指针此刻就在这一栏上）= 「松手就落这儿」，实线 + 浅底。
+   只有后者的话，没人拖东西的时候鼠标划过也会亮；只有前者的话，拖到一半
+   没有「就是这儿」的回答。 */
+.ink-cal-sched-drop {
+  outline: 1px dashed var(--rule);
+  outline-offset: -1px;
+}
+
+.ink-cal-sched-over {
+  outline: 2px solid var(--ink-you);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--ink-you) 5%, transparent);
+}
+
+/* 拖着的时候才出现的那一句。**不常驻**：这一栏平时回答的是「有哪些还没
+   排期」，一行说明常年占着位置去解释一个此刻没人在做的动作，是把噪音
+   当帮助。 */
+.ink-cal-dropnote {
+  /* 左边跟面板正文对齐：`.ink-sched` 是 1px 边框 + 14px 内边距，这句话在它
+     外面（是这一栏的提示，不是面板的内容），不缩进的话会贴着外框，跟下面
+     每一行字差 15px。 */
+  padding-left: 15px;
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* ── 日历：日号底下那半行（农历 / 节气 / 休班，仿滴答清单）──
+   `.ink-cal-sub` 是那一整行，`display: flex` 让农历和「休/班」并排；
+   `width: 100%` 是必须的——它的父节点 `.fc-daygrid-day-number` 是
+   `justify-content: space-between` 的 flex 行（日号在左、周数在右），这一行
+   作为第三个 flex 项要自己占满一整行，靠 `flex-basis: 100%` 换行下来。 */
+.ink-cal-sub {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-basis: 100%;
+  min-width: 0;
+  font-weight: 400;
+}
+
+/* 农历那几个字：**比日号轻一档**，用 --dim。它是补充信息，不是这一格的主语
+   ——日号才是。上群青是不行的：农历跟 AI 没有任何关系，群青在这个界面里是
+   配给制。 */
+.ink-cal-lunar {
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「休 / 班」：一个小方块。这是这一格里唯一带底色的小记号，因为它回答的是
+   一个**是非问题**（这天要不要上班），扫一眼就该看见，不用读。
+   两个都用石墨黑，靠**填色 / 描边**分开，不靠色相——这个界面只有两种墨，
+   而且色盲友好：「休」是实心（放假是确定的好消息，重），「班」是空心（调休
+   是个提醒，轻）。 */
+.ink-cal-mark {
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 2px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.ink-cal-mark-off {
+  background: var(--ink-you);
+  color: var(--sheet);
+}
+
+.ink-cal-mark-on {
+  border: 1px solid var(--rule);
+  color: var(--dim);
+}
+
+/* 月视图那层壳。以前月视图是 `height="auto"`：六行按内容各自高矮不一、画到
+   哪算哪，1440×900 上到 719px 就停了，底下 180px 空纸——滴答清单的月历铺满
+   窗口、六行等高。
+   常数是 228 不是周/日那条的 203：月视图多一行**我们自己画的**星期表头
+   （`.ink-cal-weekdays`，它在这层壳外面），量出来格子顶在 202px。
+   **不封 960 上限**：月视图没有「画完就够了」这回事，六行等分整片可用高度
+   才是滴答的样子。**不滚**（`overflow: hidden` 而不是 auto）：一格装不下的
+   走 `+N`，那是月视图自己的溢出机制，再叠一层滚动条是两套溢出打架。 */
+.ink-cal-monthgrid {
+  height: max(320px, calc(100vh - 228px));
+  overflow: hidden;
+}
+
+/* ── 「安排任务」栏折到日历下面那一档 ──
+   上面两条高度（`100vh - 203` / `100vh - 228`）都是**「这一栏里只有日历」**才
+   成立的算式：日历自己就吃满一整屏，底下再挂任何东西，`.ink-board-col` 必定
+   溢出。`.ink-cal-shell` 换行之后正是这种情形——「安排任务」整条落到日历下面，
+   而它有 569px 高。
+
+   **这个溢出跟窗口多高无关，所以拉高窗口永远治不好它**：日历是
+   `100vh - 常数`，窗口高一像素它也高一像素，溢出量纹丝不动。实测（同一份数据，
+   只改视口）壳宽 746px 时，视口 800 / 1100 / 1500 三档的溢出量都是 **587px**；
+   壳宽 846px（不换行）三档都是 0。这就是「不管多高，滚栏始终都在」。
+
+   **为什么用 `@container` 而不是 `@media`**：换行的判据是壳宽 < 800（
+   `.ink-cal-main` 的 flex-basis 520 + gap 20 + `.ink-cal-sched` 的 260），而壳宽
+   在屏幕不动的时候也会变（详情面板一展开就窄了）。`@media` 问的是屏幕，答不上；
+   容器查询问的正是 `flex-wrap` 此刻在判断的那个数。799.98 是 800 的下邻。
+
+   **必须摆在上面两条后面。** `@container` 不加特异度，跟顶层那两条
+   `.ink-cal-timegrid`/`.ink-cal-monthgrid` 一样重，谁写在后面谁赢——挪到文件
+   前面去，这一整块就静默失效了（`.ink-main` 那条媒体查询栽过同一个跟头）。
+
+   **常数各减 280**（= 折下去的那一栏 260 + `gap` 20），减完刚好落在容器底：
+   周/日在 1500 高上是 177 + 960 + 20 + 260 = 1417 ≤ 1474；月视图 202 + 992 +
+   20 + 260 = 1474，正好贴底。
+   **下限从 320 降到 200**：320 那个下限是给「只有日历」那档兜极矮窗口的，
+   这一档要跟 260px 的安排栏分同一屏，还按 320 兜的话 800 高的窗口上反而重新
+   溢出（差 28px）——兜底本身把要修的东西又顶了出来。
+   `.ink-cal-sched` 的 `max-height` 跟这里的 280 是同一个数的两半，改一个必须
+   改另一个；`overflow-y: auto` 是因为它被压到 260 之后里面那份
+   `.ink-sched`（`flex: 1; min-height: 0`）会缩，但内容不会自己滚。 */
+@container (max-width: 799.98px) {
+  .ink-cal-timegrid { height: max(200px, min(calc(100vh - 483px), 960px)); }
+
+  .ink-cal-monthgrid { height: max(200px, calc(100vh - 508px)); }
+
+  .ink-cal-sched { max-height: 260px; overflow-y: auto; }
+}
+
+/* 表头日期格（`dayHeaders={true}` 时 FullCalendar 原生画出来的
+   `<th class="fc-col-header-cell">`）——这是这个仓库第一次真的用它（月视图
+   `dayHeaders={false}`，自己画表头）。默认不是可点的样子（内部是个没有
+   href 的 `<a>`），`CalendarFull.tsx` 补了点击 + 键盘（tabIndex + Enter/
+   Space），这里补视觉提示：手型光标 + 24px 点击目标下限——这个仓库第九次
+   为 24px 单独兜底（.ink-nav-tag/.ink-pri-btn/.ink-tag-x/.ink-repeat-day/
+   .ink-cal-nav button/.ink-trow-handle/.ink-calh-more/.fc-daygrid-more-link
+   之后的第九次）。「今天」/「选中」的底色吃的是月视图已经映射过的
+   --fc-today-bg-color / .ink-cal-day-selected，不在这条规则里，不重复。 */
+.fc-col-header-cell {
+  cursor: pointer;
+  min-height: 24px;
+}
+
+/* 小时槽高度——`slotDuration="01:00:00"` 让每一行恰好是一个整小时，这里
+   钉死 40px，跟退役前 `.ink-calh-cell` 的 `height: 40px` 同一个视觉密度
+   （不再需要那边 ROW_HEIGHT 常量 + 这边 CSS 两处手动同步的交叉核对测试：
+   当前时刻线的像素位置现在是 FullCalendar 自己量 DOM 算出来的，不是这个
+   仓库手写的算式，"两份拷贝漂开"这整类风险随手写实现一起退役了）。 */
+.fc-timegrid-slot {
+  height: 40px;
+}
+
+/* 「+N」（同一小时堆的任务超过 eventMaxStack）——跟月视图/全天带共用的
+   `.fc-daygrid-more-link` 是两个不同的类（timeGrid 的时间轴部分自己一份），
+   同一条 24px 点击目标 + 11px 字号 + --dim 字色的规矩，字色直接写在这条
+   规则里（不经 --fc-more-link-text-color 那个变量）——跟 `.fc-daygrid-
+   more-link` 当初的选择（task-5 I2）同一条理由：这是我们自己写的规则，
+   直接赋值扫得到也守得住，不必再多一层变量间接。 */
+.fc-timegrid-more-link {
+  min-height: 24px;
+  min-width: 24px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 当前时刻线：FullCalendar 自带 `nowIndicator`，`.fc-timegrid-now-
+   indicator-line` 是一条 1px 的横线，`.fc-timegrid-now-indicator-arrow`
+   是一个只出现在最左侧时间轴（不在每一列里）的小三角——退役前
+   `CalendarHours.tsx` 那条手写的线遇到过同一个问题（"光一条横线容易被读成
+   删除线，真的压在任务标题中线上看着像划掉了"），当时补的是左端一个圆点；
+   FullCalendar 自带的箭头只在最左侧画一次，今天这一列如果不是最左边（周
+   视图常见），线本身离箭头很远，还是会有同一个问题。这里复用同一个手法：
+   给线自己的左端也加一个圆点，伪元素画，不新增 DOM 节点。 */
+.fc-timegrid-now-indicator-line::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-you);
+}
+
+/* ── 同步冲突横幅 ── */
+/* 常驻不是 toast：冲突不是「刚发生的一件事」，是「现在有一堆文件在那儿等你处理」。
+   报警橙不是群青——群青是 AI 墨水的配额，而这是「你的数据出岔子了」。 */
+.ink-conflict-banner {
+  display: flex; flex-direction: column; gap: 3px;
+  border-left: 3px solid var(--overdue);
+  padding: 8px 10px; margin-bottom: 12px;
+  background-color: color-mix(in srgb, var(--overdue) 6%, transparent);
+  font-size: 12px; line-height: 1.6; color: var(--ink-you);
+}
+
+/* ── 离线记号（task-3-brief）── */
+/* 常驻不是 toast，同一条理由——「设置过服务地址、暂时连不上」不是「刚发生的
+   一件事」，是「现在正处在这个状态」。跟冲突横幅长得像（同样的 flex 竖排 +
+   左竖条），但颜色不一样：这不是「数据出岔子了」，报警橙留给真的出问题的
+   场景。这条记号说的是「答案现在从哪来」，不是 AI 产出的内容，群青（AI 墨水
+   的配额）轮不到它，走 --ink-you 这一侧。 */
+/* 通知权限记号（本地通知那一批）跟它是同一族，逐条一样：常驻、石墨、同样的
+   竖条和留白——所以不复制第二份规则，直接挂进同一条选择器。两条说的是同一
+   类事（这台设备现在缺一样东西：连不上桌面 / 没给通知权限），要改就该一起
+   改；哪天真要分开长相，再拆成两条也只是把这一行拆开。 */
+.ink-offline-banner,
+.ink-notif-banner {
+  display: flex; flex-direction: column; gap: 3px;
+  border-left: 3px solid var(--ink-you);
+  padding: 8px 10px; margin-bottom: 12px;
+  background-color: color-mix(in srgb, var(--ink-you) 6%, transparent);
+  font-size: 12px; line-height: 1.6; color: var(--ink-you);
+}
+
+/* ── 命令面板（Ctrl/Cmd+K）──
+   antd Modal 管容器、焦点陷阱、Esc 关闭，这里只管面板内部排版。行、按键徽章、
+   高亮态都不上群青——命令本身是界面元件，不是 AI 写的话，群青是 AI 产出内容的
+   配额（见文件顶部）。搜索框保留全站默认的 :focus-visible 焦点环（本文件靠前
+   位置那条），那是规格批准的唯一例外，这里不覆盖它。
+   `.ink-cmd-` 这个前缀在这个文件里已经被 SettingsModal 的「回顾命令提示块」
+   （.ink-cmd-hint/title/line/body，本文件靠前位置）占用过一次——两处撞了同一个
+   缩写（都在说「命令」），语义不同但不冲突：群青守卫要求的是「这个前缀下所有
+   规则都不许有群青」，两批命令共用同一条不变量，合并测反而更省。 */
+.ink-cmd-input {
+  width: 100%;
+  border: 1px solid var(--rule);
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink-you);
+  padding: 6px 8px;
+  min-height: 24px;
+}
+
+.ink-cmd-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.ink-cmd-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  min-height: 24px;
+  color: var(--ink-you);
+  cursor: pointer;
+}
+
+.ink-cmd-item-active {
+  background: color-mix(in srgb, var(--ink-you) 8%, transparent);
+}
+
+.ink-cmd-key {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+.ink-cmd-empty {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+/* ── 批量操作条 ──
+   选中至少一张之后出现，见 BatchBar 组件。位置固定在底部，但**不是**铺满
+   宽度的厚横幅——做成居中的窄条 + 阴影，浮在内容上方，不会像页脚横幅那样
+   把最后一排卡片整条盖住。群青一个都不要：这整条都是人这一侧的操作
+   （改状态/改清单/加标签/改优先级/删除/取消选择），跟卡片选中态同一条
+   规矩，用 --rule 描边、--sheet 底色。 */
+/* **居中用 `left:0; right:0; margin:auto`，不用 `left:50% + translateX(-50%)`。**
+   后者看着也是居中的，但它把这条 fixed 元素的可用宽度砍成了「视口宽 - 50%」
+   ——一个 shrink-to-fit 的盒子最宽只能到视口的一半。1440 下这条工具条因此
+   卡在 720px，八个控件放不下，「取消选择」被挤到第二行，而它右边明明还空着
+   三百多像素。 */
+.ink-batch-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  width: fit-content;
+  max-width: calc(100vw - 32px);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.16);
+  z-index: 20;
+}
+
+/* 手机宽度下改成贴着两边的通栏底条。上面那条「做成居中的窄条、别像页脚横幅
+   那样把最后一排卡片整条盖住」在宽屏是对的，390px 下却反过来：六个控件挤进
+   一条约 200px 宽的窄条，flex-wrap 把它折成三行，变成一个浮在**屏幕正中**
+   的方块，把正在看的那几张卡从中间盖掉——比贴底的横条碍事得多，位置也读不出
+   「这是对选中项的操作」。实测截图（390×844，选中 2 条）就是这个样子。
+   贴到左右边距之后横向空间够，控件回到一两行，位置也明确。 */
+@media (max-width: 480px) {
+  .ink-batch-bar {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    transform: none;
+    justify-content: center;
+  }
+}
+
+.ink-batch-count {
+  font-size: 13px;
+  color: var(--ink-you);
+  white-space: nowrap;
+}
+
+/* 跟 .ink-list-select（TaskFields 的清单下拉框）同一套边框写法，批量操作条
+   这里是独立的一份规则（不同的选择器名），不是共用同一条——这条下拉是
+   「批量把选中的都改成这个清单」，跟表单里那条「这一条任务归哪个清单」
+   语义不同，没有共同的「当前值」可显示，混用一条规则以后两边想各自微调
+   都要小心别牵连对方。 */
+.ink-batch-list-select {
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  min-height: 24px;
+  padding: 2px 6px;
+  color: var(--ink-you);
+  /* 同 `.ink-list-select` 那条：选项是清单名，长度不受控。实测 375px 下一个长
+     清单名把它撑到 409px（外面 343px），右缘越出视口 17px。 */
+  max-width: 100%;
+}
+
+.ink-batch-tag-input {
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  min-height: 24px;
+  padding: 2px 6px;
+  color: var(--ink-you);
+  /* 装得下整句占位符。96px 时「加标签，回车确认」在 12px 字号下被截成
+     「加标签，回车确」——实测截图里就是这么显示的，而「回车确认」正是这个
+     框唯一说明「怎么提交」的地方，截掉后半句等于把用法说了一半。
+     不缩短占位符：这个仓库有一条既定规矩是「占位符里别塞两件事」
+     （2026-08-12-ux-audit.md），但那说的是「提示语 + 快捷键说明各说一遍」
+     那种重复；这里只有一句，而且回车是这个框**唯一**的提交方式，没有别的
+     地方讲得了。 */
+  width: 124px;
+}
+
+/* ── 筛选栏 ──
+   七维筛选，见 FilterBar 组件。跟批量操作条是同一类「界面元件」（人在筛，
+   不是 AI 在写），一个群青都不要——antd Select/Checkbox 的选中态另有一条
+   防线（FilterBar 组件自己套的 boardLocalTheme，见组件顶部注释），这里的
+   CSS 只管容器本身的底色/边框/间距，不重复那条防线。密度不动：内边距/
+   字号跟 .ink-batch-* 同一套数字，不是另起一套。
+   task-4-brief 修复轮 1 · A：边框/底色/内边距拆进 `.ink-filter-bar-open`，
+   只在展开时才套上——收起时容器只剩这条纯布局规则（flex 对齐 + 间距），
+   没有边框也没有 --sheet 底色，不会让一颗按钮看着仍然坐在一个面板里。 */
+/* ── 导航显示（SettingsModal 里那一节） ── */
+/* 一行一个去处：名字吃掉剩下的宽度，下拉靠右对齐成一列，扫下来时选择器
+   位置固定。跟 .ink-suggest-item 同一个套路。 */
+.ink-navmode-list { margin: 0 0 8px; padding: 0; list-style: none; }
+.ink-navmode-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 0; font-size: 13px;
+}
+.ink-navmode-label { flex: 1 1 auto; min-width: 0; color: var(--ink-you); }
+/* 宽度写死：原生 `<select>` 按自己最宽那一项撑开，而挂得出数字的那几项多一
+   档「有内容时显示」——于是同一列里两种宽度交替出现，右边缘参差。这一列右对
+   齐本来就是为了「一眼扫下来看哪几个不是『显示』」。 */
+.ink-navmode-select {
+  flex: 0 0 auto;
+  width: 6.5em;
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px; background: none; font: inherit; font-size: 12px;
+  min-height: 24px; padding: 2px 6px; color: var(--ink-you);
+}
+
+/* ── 快捷键一览（ShortcutHelp） ── */
+/* 左列是键、右列是说明。键那一列右对齐并给固定宽度：一列长短不一的 kbd
+   左对齐的话，`?` 和 `Ctrl + K` 的右边缘差出一大截，扫的时候要来回找。 */
+.ink-shortcut-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ink-shortcut-table th {
+  width: 96px; text-align: right; padding: 4px 12px 4px 0;
+  font-weight: 400; vertical-align: baseline; white-space: nowrap;
+}
+.ink-shortcut-table td { padding: 4px 0; color: var(--ink-you); }
+.ink-shortcut-table kbd {
+  font: inherit; font-size: 12px; padding: 1px 5px;
+  border: 1px solid var(--rule); border-radius: 3px; background: var(--sheet);
+}
+.ink-shortcut-note { margin: 12px 0 0; font-size: 12px; color: var(--dim); }
+/* 「编辑表单里」那一段的小标题。上面那句说明的前提是「输入框里不生效」，
+   而下面这三个恰恰只在输入框里生效——得有个看得见的分界。 */
+.ink-shortcut-sub {
+  margin: 16px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+}
+
+/* ── 倒数纪念日（CountdownView） ── */
+.ink-cd-root { max-width: none; }
+.ink-cd-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+.ink-cd-title { max-width: 240px; }
+/* 原生 date 输入，样式跟别处的原生 select 一套（.ink-list-select）。 */
+.ink-cd-date {
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px; background: none; font: inherit; font-size: 12px;
+  min-height: 24px; padding: 2px 6px; color: var(--ink-you);
+}
+/* 「每年」那个勾选。min-height 24px，同 .ink-cal-pref——本来 19px。 */
+.ink-cd-yearly { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; font-size: 12px; color: var(--dim); cursor: pointer; }
+
+/* 宽了就分列：一列至少 300px。窄屏自然退回单列，不用媒体查询。 */
+.ink-cd-list {
+  margin: 0; padding: 0; list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 0 24px;
+}
+.ink-cd-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  padding: 6px 0; border-bottom: 1px solid var(--rule);
+}
+.ink-cd-name { flex: 1 1 auto; min-width: 0; color: var(--ink-you); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 天数是这一行的主角，加粗；三种状态**不上群青**——群青是配给制，只标 AI
+   产出，而这是人自己填的日子。「就是今天」用石墨黑加粗，倒数正常，已经过去
+   的调淡：它不催任何人。 */
+.ink-cd-days { font-weight: 600; color: var(--ink-you); }
+.ink-cd-days-up { font-weight: 400; color: var(--dim); }
+.ink-cd-at { font-size: 12px; color: var(--dim); }
+.ink-cd-bad { font-size: 12px; color: var(--overdue); }
+
+/* ── 年度热力图（Heatmap） ── */
+/* 53 列 × 7 行的方格。横向可能放不下（窄屏），整块自己滚——**不让它撑破
+   页面**：这个仓库的规矩是宽内容在自己的容器里横向滚，body 永远不横向滚。 */
+.ink-heat { overflow-x: auto; padding-bottom: 4px; }
+.ink-heat-grid { display: flex; gap: 3px; }
+.ink-heat-col { display: flex; flex-direction: column; gap: 3px; }
+.ink-heat-months { display: flex; gap: 3px; margin-bottom: 3px; }
+/* 每个月份标签占一列的宽度（10px 格 + 3px 间隙），`overflow: visible` 让
+   「12月」这种两三个字的标签压到右边空列上去，不撑宽整列。字号 11px——
+   全站下限；它写的是汉字（「12月」），而 `width: 10px` 管的是这一列占多宽、
+   不是字有多大，标签本来就溢出到旁边，长一像素不影响任何对齐。 */
+.ink-heat-month {
+  width: 10px; flex: 0 0 10px; overflow: visible; white-space: nowrap;
+  font-size: 11px; line-height: 1; color: var(--dim);
+}
+.ink-heat-cell {
+  width: 10px; height: 10px; flex: 0 0 10px; border-radius: 2px;
+  background: color-mix(in srgb, var(--ink-you) 6%, transparent);
+}
+/* 四档深浅。**不用群青**——群青是配给制，只标 AI 产出；这是人自己干的活。 */
+.ink-heat-cell[data-level='1'] { background: color-mix(in srgb, var(--ink-you) 18%, transparent); }
+.ink-heat-cell[data-level='2'] { background: color-mix(in srgb, var(--ink-you) 34%, transparent); }
+.ink-heat-cell[data-level='3'] { background: color-mix(in srgb, var(--ink-you) 52%, transparent); }
+.ink-heat-cell[data-level='4'] { background: color-mix(in srgb, var(--ink-you) 72%, transparent); }
+/* 窗口之外那几格：完全透明，占位不占眼——它跟「值为 0」不是一回事。 */
+.ink-heat-pad { background: none; }
+/* 「少 ▫▫▫▫ 多」。字号 11px，全站下限——这两个汉字原来是 10px。 */
+.ink-heat-legend {
+  display: flex; align-items: center; gap: 3px; margin-top: 6px;
+  font-size: 11px; color: var(--dim);
+}
+
+/* ── 习惯概览（HabitStats） ── */
+/* 前缀是 `ink-hstat-` 不是 `ink-habit-`：后者是 HabitStreak 那三条规则的族
+   （打卡条 / 待打卡提示 / 行档收窄，theme.css.test.ts 里有一条盯它的三件套）。
+   跟 FocusStats 用 `ink-fstat-` 而不是 `ink-focus-` 是同一条：一个前缀族
+   对应一个组件的一件事，混进去会让那条守卫的条数断言不再说明任何事。 */
+/* 宽了就分列。原来是单列 + 720px 上限：1440 下右边一半是空的，而这一屏的
+   卡片本来就互不相关，横着摆更好扫。`align-content: start`：条目少时不要被
+   拉开撑满整列高度。 */
+.ink-hstat-root {
+  display: grid;
+  /* `min(100%, …)` 不能省——见 .ink-year 那条注释：一个比容器还宽的 minmax
+     会直接把格子撑出去。实测 320px 屏上就是这么溢出的。 */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 16px;
+  align-content: start;
+}
+.ink-hstat-card { padding: 12px 14px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; }
+.ink-hstat-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+/* 名字是个按钮（点了跳回那条任务），但看起来该是个标题——去掉按钮的外观，
+   只留下划线暗示可点。 */
+/* 习惯名字，点得开。min-height 24px：一个 padding 为 0 的行内文字按钮只有
+   字的行高那么高（实测 22px），差 24px 下限两像素——跟 .ink-tag-x/.ink-nav-tag
+   是同一条教训，不赌那几像素。 */
+.ink-hstat-name {
+  border: none; background: none; padding: 0; cursor: pointer; min-height: 24px;
+  font: inherit; font-size: 14px; font-weight: 600; color: var(--ink-you);
+  text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 3px;
+}
+.ink-hstat-today { font-size: 12px; color: var(--dim); }
+/* 今天打过卡：**不用群青**——群青在这个界面里是配给制，只标 AI 产出的东西。
+   打卡是人做的，用石墨黑加粗表示「这件事成立」。 */
+.ink-hstat-today-done { color: var(--ink-you); font-weight: 600; }
+.ink-hstat-nums { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 10px; font-size: 12px; color: var(--dim); }
+.ink-hstat-nums b { color: var(--ink-you); font-weight: 600; }
+
+/* 月度打卡表：一个月三十一个方格，`flex-wrap` 自己折行，不写死一周七列——
+   这张表读的是「这个月密不密」，不是「星期几」，对齐到周反而要补一堆空格。 */
+.ink-hstat-grid { display: flex; flex-wrap: wrap; gap: 3px; }
+.ink-hstat-year { margin-top: 8px; }
+/* 一天一格。字号 11px（全站下限，原来是 10px：一个月三十一格，量测夹具
+   一屏就数出三十几处越线，全在这里）；格子跟着从 22px 长到 23px，两位数
+   的日期才不会顶着边框。 */
+.ink-hstat-cell {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 23px; height: 23px; border-radius: 3px;
+  font-size: 11px; color: var(--dim);
+  border: 1px solid var(--rule);
+}
+.ink-hstat-cell-done {
+  background: color-mix(in srgb, var(--ink-you) 30%, transparent);
+  border-color: transparent; color: var(--ink-you);
+}
+/* 还没到的日子：比「到了但没打」更淡。两者不区分的话，一个还没发生的日子
+   看起来跟漏了一天一模一样。 */
+/* 不算这个习惯的账的日子，压淡。**两种原因共用这一档**：还没到的（future），
+   和那天这个习惯还不存在的（before）。类名不叫 -future 就是因为后者——26 号
+   建的习惯，1–25 号那些格子既不是「漏了」也不是「还没到」。 */
+.ink-hstat-cell-off { opacity: 0.35; }
+
+/* ── 专注统计（FocusStats） ── */
+/* 前缀是 `ink-fstat-` 不是 `ink-focus-`：后者是 FocusTimer 那两条规则的族
+   （`.ink-focus-blocked`，theme.css.test.ts 里有一条专门盯它的四件套），
+   把这十来条布局规则塞进去会让那个 describe 的标题变成一句假话，条数断言
+   也不再说明任何事。一个前缀族对应一个组件的一件事。 */
+/* 松开上限：这一屏的图表和排行本来就想铺开，720px 下 1440 屏右边一半是空的。
+   里面的 `.ink-fstat-cells` 自己会 wrap。 */
+.ink-fstat-root { max-width: none; }
+.ink-fstat-cells { display: flex; flex-wrap: wrap; gap: 20px; }
+.ink-fstat-cell-label { font-size: 12px; color: var(--dim); }
+.ink-fstat-cell-value { font-size: 20px; color: var(--ink-you); line-height: 1.3; }
+.ink-fstat-cell-sub { font-size: 12px; color: var(--dim); }
+.ink-fstat-title { margin: 20px 0 8px; font-size: 13px; font-weight: 600; color: var(--ink-you); }
+
+/* 柱状图用 div 高度画，不引图表库——十四根柱子、一个最大值、一句 height:N%。
+   外层固定高度，柱子从底部长上来（align-items: flex-end）。 */
+.ink-fstat-trend { display: flex; align-items: flex-end; gap: 4px; height: 96px; }
+.ink-fstat-bar-slot {
+  flex: 1 1 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: flex-end; height: 100%; min-width: 0;
+}
+/* min-height 1px：专注了 1 分钟的那天也得有一根看得见的柱子，不然「那天做过
+   一点」和「那天什么都没做」在图上长得一样。 */
+.ink-fstat-bar {
+  width: 100%; min-height: 1px;
+  background: color-mix(in srgb, var(--ink-you) 30%, transparent);
+  border-radius: 2px 2px 0 0;
+}
+/* 柱子底下那个日期。11px 是全站字号下限——原来 10px，一屏十四根柱子就是
+   十四处越线，量测夹具里「小字 42」那个数有三分之一出自这一条。 */
+.ink-fstat-bar-label { font-size: 11px; color: var(--dim); line-height: 1.6; }
+
+.ink-fstat-rank { margin: 0; padding: 0; list-style: none; }
+.ink-fstat-rank-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 4px 0; border-bottom: 1px solid var(--rule); font-size: 13px;
+}
+/* 名字吃掉剩下的宽度、超长省略号——任务标题不受控，换行会让每一行高度不一，
+   扫下来是锯齿状的。
+   **同一个类既给 <span> 也给 <button> 用**：任务那两张表里名字是可点的（跳回
+   那条任务），按类别分的那张里不是（一个标签没有「那条任务」可跳）。所以这里
+   把按钮的外观清掉、只留一条下划线暗示可点——跟习惯页 .ink-hstat-name 同一个
+   处理，不为「同一行字有时能点」再开一个类。不能点的那些是 <span>，下划线
+   属性对它们不生效。 */
+.ink-fstat-rank-name {
+  flex: 1 1 auto; min-width: 0; color: var(--ink-you); text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* min-height 24px：能点的那几个（任务那两张表）本来只有 20px 高，
+     在下限以下，同 .ink-hstat-name。不能点的是 <span>，多这两像素无害。 */
+  border: none; background: none; padding: 0; min-height: 24px; font: inherit;
+  text-decoration-color: var(--rule); text-underline-offset: 3px;
+}
+.ink-fstat-rank-value { color: var(--ink-you); }
+.ink-fstat-rank-sub { font-size: 12px; color: var(--dim); }
+.ink-fstat-more { margin: 8px 0 0; font-size: 12px; color: var(--dim); }
+/* 补记那一排。四个控件横着排，窄屏折行。 */
+.ink-fstat-backfill { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+
+/* ── 推荐任务（SuggestPanel，「今天」上面那一条） ── */
+/* 整块都是次要信息：它回答的是「今天列表之外还有什么」，不是今天要做的事。
+   所以一律 --dim 的小字，没有边框也没有底色——加一块面板会跟下面真正的
+   任务卡抢视觉分量，而它默认还是收起的。 */
+.ink-suggest { margin-bottom: 12px; font-size: 12px; }
+.ink-suggest-group { margin: 8px 0 0; }
+.ink-suggest-title {
+  margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--ink-you);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.ink-suggest-hint { font-weight: 400; color: var(--dim); }
+.ink-suggest-list { margin: 0; padding: 0; list-style: none; }
+.ink-suggest-item {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 3px 0; border-bottom: 1px solid var(--rule);
+}
+/* 标题吃掉剩下的宽度，把「加到今天」推到右边对齐成一列——一条条扫下来时
+   按钮的位置固定，不用每行重新找。 */
+/* 同一个类既给 <span> 也给 <button> 用（接了 onOpen 就是一颗跳回那条任务的
+   按钮），所以把按钮的外观清掉、只留一条下划线暗示可点——跟 .ink-fstat-rank-name
+   和习惯页 .ink-hstat-name 同一个处理，不为「同一行字有时能点」再开一个类。 */
+.ink-suggest-name {
+  flex: 1 1 auto; min-width: 0; color: var(--ink-you); text-align: left;
+  border: none; background: none; padding: 0; font: inherit;
+  text-decoration-color: var(--rule); text-underline-offset: 3px;
+  /* 它接了 onOpen 就是一颗按钮，而按钮高度原来只有一行字（19px）——横向铺满
+     整条（960px）好点得很，纵向差 5px 过不了 24。撑的是 min-height 不是
+     padding：条目是 `align-items: center` 的一行，加内边距会把 `.ink-suggest-item`
+     顶高一截，撑最小高度不会（实测条目仍是 31px）。 */
+  min-height: 24px; display: flex; align-items: center;
+}
+.ink-suggest-when { color: var(--dim); }
+
+/* ── 多级任务的两个记号 + 置顶（TaskCard） ── */
+/* 都是次要信息，一律 --dim 的小字：卡片上的主角是标题，这三个只是旁注。
+   `↳ 属于「X」` 一行可能很长（父任务标题不受控），单行省略号截断，不换行
+   ——换行会让一张只有标题的矮卡突然高出一截，瀑布流那边会跟着抖。 */
+.ink-parent-mark {
+  display: block; font-size: 12px; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ink-kids-mark { font-size: 12px; color: var(--dim); }
+/* 置顶那个字形跟状态角标并排，不占一整行。 */
+.ink-pin-mark { font-size: 12px; line-height: 1; }
+
+/* ── 「或」组（FilterBar 的高级筛选） ── */
+/* 独占一行、整体缩进：它跟上面那一排是并列关系（组与组之间取并集），不缩进
+   的话七个控件跟第一组的七个混成一片，读不出来哪几个是一组。 */
+.ink-filter-or {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  width: 100%; margin-left: 12px; padding-left: 8px;
+  border-left: 1px solid var(--rule);
+}
+.ink-filter-or-label { font-size: 12px; color: var(--dim); }
+/* 「排除」组跟「或」组共用同一排控件，只有那条竖线换成虚线——两者方向相反
+   （一个往结果里加、一个减），扫一眼要能分开，而加一整套配色是为一件小事
+   开一个新的视觉词汇。不上颜色：这一栏是界面元件，群青是配给给 AI 产出的。 */
+.ink-filter-not { border-left-style: dashed; }
+
+/* ── 分组 / 排序那一条（GroupSortBar） ── */
+/* 紧贴在筛选栏下面：两条都是「这一屏怎么摆」的开关，但语义不同——筛选决定
+   「显示哪些」，分组排序决定「怎么摆」。所以不合并成一条：一条七个控件的
+   长栏已经是这个界面上最吵的东西了，再塞三个进去只会更糟。
+   不给边框和底色（筛选栏展开时才有的 .ink-filter-bar-open 那套）：它一直
+   在，一直挂着一块面板会把顶部 chrome 压得太重。 */
+.ink-groupsort-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+/* 跟 .ink-list-select 同一套边框写法。独立一份规则不共用，理由同
+   .ink-batch-list-select 上面那段：语义不同，以后想各自微调不用先拆。 */
+.ink-groupsort-select {
+  border: 1px solid color-mix(in srgb, var(--ink-you) 15%, transparent);
+  border-radius: 4px; background: none; font: inherit; font-size: 12px;
+  min-height: 24px; padding: 2px 6px; color: var(--ink-you);
+}
+
+.ink-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ink-filter-bar-open {
+  padding: 8px 16px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+.ink-filter-select {
+  min-width: 120px;
+}
+
+.ink-filter-text {
+  width: 200px;
+}
+
+/* 筛选条件的人话预览。长了就截断（一份套了「或者」组的查询能写很长），
+   完整的在 `title` 里。它是对控件的总结，不是控件，用 --dim。 */
+.ink-filter-summary {
+  max-width: 28em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--dim);
+}
+.ink-filter-count {
+  font-size: 13px;
+  color: var(--ink-you);
+  white-space: nowrap;
+}
+
+/* 「只看等待中的」：跟 .ink-subtask 同一个问题——antd 的 .ant-checkbox-wrapper
+   label 只有 22px 高，差 2px 够不到 24px 点击目标下限（measure-ui.mjs 量到
+   116×22）。只加 min-height，不动内边距/字号，密度不变。 */
+.ink-filter-waiting.ant-checkbox-wrapper {
+  min-height: 24px;
+}
+
+/* ── 附件 ──
+   拖文件到卡片上（Attachments 组件）。`.ink-attach-box` 是拖放提示 + 列表
+   共同的外层容器——整块都是放置目标，不只是那行提示字，见 Attachments.tsx
+   里 isFileDrag 上面的注释：卡片拖拽（TaskGrid/TodayView/CalendarGrid 统一
+   用 setData('text/plain', …)）经过这里必须什么反应都没有，`.ink-attach-box-over`
+   只在真的拖着系统文件经过时才加上。拖放是人的动作，不是 AI 产出，跟
+   .ink-grid-section-over 同一条规矩——一处群青都不要，用 --rule。 */
+.ink-attach-box {
+  margin-top: 8px;
+}
+
+.ink-attach-box-over {
+  outline: 1.5px dashed var(--rule);
+  outline-offset: 4px;
+}
+
+.ink-attach-zone {
+  display: block;
+  padding: 6px 10px;
+  border: 1px dashed var(--rule);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--dim);
+  cursor: pointer;
+  text-align: center;
+}
+
+.ink-attach-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.ink-attach-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+/* 文件名不撑破卡片——跟 .ink-note-text/.ink-trash-title 同一条教训，但这里
+   用 ellipsis 不用 anywhere：文件名是一整块要认得出的东西，折成两行比截断
+   更难读，跟 .ink-trash-title 是同一个判断。 */
+.ink-attach-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-you);
+}
+
+/* 「打开」「删除」点击目标够 24px——12px 字号本身够不到，跟 .ink-nav-tag/
+   .ink-trash-btn 同一条教训。 */
+.ink-attach-open,
+.ink-attach-delete {
+  flex-shrink: 0;
+  min-height: 24px;
+  min-width: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-you);
+}
+
+.ink-attach-open {
+  text-decoration: underline;
+}
+
+.ink-attach-delete {
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+/* 离线记号（task-3-brief）：替掉「打开」链接的那句提示——附件的下载地址
+   直接指向服务端文件系统，离线时点了是死链接（Task 2 明确不做附件离线）。
+   不可点，所以不套 .ink-attach-open 那套 24px 点击目标 + 下划线，字色走
+   --dim（跟 .ink-attach-zone 的拖放提示同一档次，都是「说明性质」的字）。 */
+.ink-attach-offline {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* ── 任务行（Task 1：更密的那一档，卡片旁边的另一种渲染）──
+   圆圈完成 + 到期 chip + 悬停 ⋯，一行表达同一条任务此前要一整张约 400px 高的
+   卡片才说得完的事。密度开关、接进各视图是后面几个 Task，这里先只管
+   .ink-trow 自己长什么样，还没有任何视图引用 TaskRow.tsx。 */
+.ink-trow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* 左边常驻留 28px 给排序抓手（修复轮 1 · M-1，整分支审查 D2 收窄射程）——
+   抓手只在悬停/聚焦时才挂进 DOM，不留这段空间的话它一出现/一消失就会把
+   勾选圈和标题一起推动/弹回，鼠标划过整列内容抖一下。抓手自己绝对定位进
+   这段留白（见 .ink-trow-handle），不参与 flex 布局，出不出现都不影响
+   后面内容的起始位置。**只在这一行可能有抓手时才留**——`TaskRow.tsx` 只有
+   `drag` 存在时才加这个 class（`drag` 只在 `onDropTo` 或「今天」时才给），
+   全部/接下来/已完成/搜索/清单/标签这六个视图从来没有抓手，以前这 28px
+   在这六个视图里恒空，分组标题顶格、下面每一行的圆圈却缩进 28px、标题缩进
+   约 56px，图上那条错位很明显（整分支审查 D2）。 */
+.ink-trow-draggable {
+  padding-left: 28px;
+}
+
+/* 选中态（批量操作，task-2 修复轮 1）——跟 .ink-task-card-selected 同一条
+   视觉语言（浅底 + 描边，都走 --rule，群青不出现在这里：选中是人自己点出来
+   的状态，不是 AI 产出）。 */
+/* 详情面板现在摊着的那一行（TaskRow.current）。**只有左边一道墨线**，不是
+   一块底色：底色那一档已经归勾选态了（下面 .ink-trow-selected），两种状态
+   可以同时成立（勾了三条、又打开了其中一条看详情），长得像就分不清哪条线索
+   对应右边那一栏。inset 阴影不占布局，不会把这一行的文字推歪一像素。 */
+.ink-trow-current {
+  box-shadow: inset 2px 0 0 var(--ink-you);
+}
+
+.ink-trow-selected {
+  background: color-mix(in srgb, var(--rule) 18%, var(--sheet));
+  box-shadow: inset 0 0 0 1.5px var(--rule);
+}
+
+/* 勾选圈：纯 CSS 画的圆，不用 antd Checkbox——绕开 antd 选中色直接读全局
+   colorPrimary（群青）那个已知盲区，跟 HabitStreak.tsx 同一个选择（见
+   theme.ts 顶部注释）。24×24 是这一套设计里点击目标的下限，圆环边框画在
+   这个方块正中间。 */
+.ink-trow-check {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1.5px solid var(--rule);
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--sheet);
+}
+
+/* 已完成：填色，勾号用页面底色（--sheet）才看得见——跟 .ink-status-pill 那套
+   「填色不描边」是同一条视觉语言，不是巧合。 */
+.ink-trow-check-done {
+  background: var(--ink-you);
+  border-color: var(--ink-you);
+}
+
+/* 批量操作的选中框（task-2 修复轮 1）：原生 checkbox，不用 antd——跟这一整
+   个文件同一个选择（绕开 antd 选中色读全局 colorPrimary 群青的盲区）。只在
+   select.showCheckbox 为真时才挂进 DOM，见 TaskRow.tsx 的注释。 */
+.ink-trow-select {
+  flex: 0 0 auto;
+  /* **24 跟着同一行里既有的那颗走**：`.ink-trow-check`（完成圈）写死 24×24。
+     这颗原来 16×16——同一行两颗勾选控件差 8px，而小的那颗恰恰是批量模式下
+     每一行都要点的。16px 也过不了 WCAG 2.2 的 24×24：它是光杆原生 checkbox，
+     外面没有 label 也没有内边距（往左 4px 做命中测试落到的是整行）。原生
+     checkbox 撑不开命中区——padding 不改控件盒、transform: scale 连命中区一起
+     缩——改宽高是唯一既不动 JSX 又有效的路。实测行高不变（33px）。 */
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* 真正的「行体」：标题 + 到期/优先级/标签/子项数全在这一个 <button> 里，
+   点哪儿都触发 onOpen。用 <button> 不用 div+role+tabIndex+onKeyDown——原生
+   元素自带键盘可达，Tab 能停、Enter/Space 能触发。 */
+.ink-trow-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+/* 紧凑排版（看板专用，task-3-brief 修复轮 1 · C-2）：标题从「跟到期/标签
+   挤在同一行」改成独占一行。**必须显式把 align-items 从 center 改成
+   stretch**——.ink-trow-open 原来的 align-items: center 是给横排（cross
+   axis 是纵向）设的，换成纵排（flex-direction: column）之后 cross axis
+   变成横向，center 会让标题按自己的内容宽度居中收边，标题永远不会宽到
+   需要省略号，`.ink-trow-title` 的 overflow: hidden/text-overflow:
+   ellipsis 就成了摆设——那样窄列里过长的标题不会截断，会把列撑宽，
+   C-2 想解决的问题会换个方式复发。stretch 让标题拿到 .ink-trow-open 的
+   整个可用宽度，省略号才会在真正超宽时才触发。 */
+.ink-trow-open-compact {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+/* **标题给一条下限，元数据可以被挤。** 这一行的主角是任务叫什么，元数据
+   （日期/标签/清单/记号）是配角——而原来的写法把胜负写反了：标题
+   `min-width: 0` 可以一路缩到零，元数据 `flex: 0 0 auto` 一寸不让。实测：
+   四象限在 390px 下每格 ~170px、任务行 142px，`.ink-trow-title` 的实际宽度
+   是 **0**——手机上那一屏的任务一个字的标题都不显示，只剩手柄、勾选圈和
+   一串日期标签。
+   4.5em ≈ 4 个汉字，是「还认得出是哪条」的最低限度；再窄就该换布局，不该
+   靠这条兜底（所以下面还有那条把 2×2 拆成单列的媒体查询）。 */
+.ink-trow-title {
+  /* **只能有这一条 `min-width`。** 这里原来在下面还有一行 `min-width: 0`，
+     同一条规则里声明两次、后者胜出——于是上面那整段讲「4.5em 是还认得出是
+     哪条的最低限度」的注释，和那条盯着它的测试，守的是一条从未生效的声明。
+     实测：一条标签很多的任务在 320px 下标题被挤到 **38px**（4.5em × 13px
+     = 58.5px），三个字都放不下。
+     盯着它的那条测试当时是绿的——它只断言这条规则里「含有 min-width: …em」，
+     不管后面有没有被同名声明盖掉。现在那条测试也一并改成认「最后一条」。
+     **不需要再写 `min-width: 0`**：flex 子项的默认 `min-width: auto` 会拦住
+     收缩，而写成任何一个具体值（包括 4.5em）都同样解除了那个默认——4.5em
+     既解除了它，又留住了下限，一条顶两条。 */
+  min-width: 4.5em;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--ink-you);
+}
+
+/* 已完成：删除线 + 压暗，跟 TaskCard 的 Typography.Text delete 同一个视觉
+   语言，这里手写因为不是 antd Typography。 */
+.ink-trow-title-done {
+  color: var(--dim);
+  text-decoration: line-through;
+}
+
+/* 可以被挤（`0 1 auto` + `min-width: 0`）：地方不够时先牺牲这里，不是牺牲
+   标题。溢出藏起来，挤掉的是末尾那几个记号——比一个没有名字的任务好。 */
+.ink-trow-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  /* 被挤的时候整块往右溢出、被裁掉，**不许里面的字竖着码**：不写这条的话
+     「周报」「对外」这种两字标签会被压成一列一个字（实测截图确认），一行
+     任务行当场变两行高，还更难认。裁掉末尾好过竖排。 */
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* .ink-pri-flag 自带的 margin-right: 5px 是给卡片里 inline 排布用的
+   （TaskCard.tsx，旗紧贴着标题）。这里旗是 .ink-trow-meta 这个 flex 容器
+   的子项，间距已经由 gap: 8px 统一管——那 5px 叠上去会让旗后面出现
+   13px，一行里混进第二种间距，归零。 */
+.ink-trow-meta .ink-pri-flag {
+  margin-right: 0;
+}
+
+/* 待决建议记号（task-2 修复轮 1）：这一整个文件唯一允许出现 --ink-ai 的
+   地方——群青是配给 AI 产出内容的颜色，「这条任务还挂着一条 AI 建议没处理」
+   正是它该标的东西，跟这一行其余全部安静的记号（到期、标签、优先级）不
+   一样，见 TaskRow.tsx Props.hasProposal 的注释。 */
+/* 行档上那条「AI 有建议」。11px 下限——原来 10px，而它跟旁边的
+   `.ink-trow-due`（11px）在同一行上并排，两种小字大小差一点，读起来像是
+   渲染坏了。 */
+.ink-trow-proposal {
+  color: var(--ink-ai);
+  font-size: 11px;
+}
+
+.ink-trow-due {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* 「还没到开始时间」那枚 chip。跟上面到期 chip 同一档分量（同一类事：这件事的
+   时间），区分靠后缀「起」不靠颜色——颜色那一档留给过期。
+
+   **不并列在 `.ink-trow-due` 那条规则里**，虽然声明一模一样：theme.css.test.ts 有一条
+   守卫按 `
+.ink-trow-due {` 逐字锤着它的位置（它护的是 `.ink-trow-due.ink-time-ai`
+   必须排在它后面这个真实回归），加个逗号就把那个锚点弄没了。为一个不相干的
+   理由去改一条守卫，不如多写四行声明。 */
+.ink-trow-start {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* AI 推断的到期要标群青（Task 1 修复轮的裁决：卡片那侧用 .ink-time-ai
+   标了，行档丢了这个信号，同一条任务两种渲染的信息量分了叉）。**光挂
+   .ink-time-ai 这一个 class 不够**——它是 `color: var(--ink-ai)`，特异度
+   0,1,0，跟上面 `.ink-trow-due` 的 `color: var(--dim)`（同样 0,1,0）打平，
+   CSS 特异度相同时源码顺序决定胜负，`.ink-trow-due` 排在后面，它的
+   `--dim` 一直赢——群青从落地那天起就没有真的画出来过，三轮变异/复审都
+   没抓住，因为断言查的是「class 有没有落在对的元素上」，没有一条查
+   「颜色到底谁赢了级联」。这里补一条复合选择器 `.ink-trow-due.ink-time-ai`
+   （特异度 0,2,0），排在 `.ink-trow-due` 之后，靠更高的特异度赢，不依赖
+   源码顺序。**只在特异度不够时才需要这一步**——`.ink-trow-meta .ink-pri-flag`
+   （下面）特异度已经是 0,2,0，天然不受这个陷阱影响，这里不能照抄同一个
+   写法，因为 `.ink-time-ai` 本身只有 0,1,0。
+   过期红（`.ink-trow-due-overdue`，0,1,0）不受这条新规则影响：TaskRow.tsx
+   里这两个 class 是三元互斥的（`overdueStyle ? '…overdue' : aiDueStyle ?
+   '…ai' : ''`），markup 上永远不会同时出现在同一个元素上，没有「谁赢」
+   的问题——如果哪天这两个 class 会共存，「过期红优先」这条得另外用一条
+   `.ink-trow-due-overdue.ink-time-ai` 复合规则保证，不能假设现在这条
+   FIX 自动覆盖那种情况。 */
+.ink-trow-due.ink-time-ai {
+  color: var(--ink-ai);
+}
+
+/* 过期红——跟 .ink-overdue-mark 用同一个 --overdue，不借群青（群青是配给
+   AI 产出内容的颜色，过期是时间算出来的，不是谁写的）。 */
+.ink-trow-due-overdue {
+  color: var(--overdue);
+  font-weight: 600;
+}
+
+/* 铃铛（设计①，整分支审查 C1）：提醒时刻是人自己设的，走 --ink-you——
+   跟到期 chip/标签同一侧墨水，不借群青（群青那一份配额只批给了行上的
+   待决建议记号 .ink-trow-proposal 和到期 chip 的 .ink-time-ai 变体）。
+   11px 字号是全站下限，跟 .ink-trow-due/.ink-trow-subcount 同一条规矩。 */
+/* 行上那三个字形记号：铃铛（有提醒）、沙漏（在等谁）、循环箭头（会重复）。
+   一条规则管三个——同一档字号、同一个颜色处理，各写一份迟早飘。 */
+.ink-trow-remind,
+.ink-trow-waiting,
+.ink-trow-repeat {
+  font-size: 11px;
+  color: var(--ink-you);
+  /* 这里的字形是 emoji（🔔，U+1F514），彩色字形自带颜色，上面那行 `color`
+     对它一个像素都改不动——实测截图里它是整个界面唯一一块饱和黄，「两种墨水」
+     之外的第三种颜色。U+1F514 没有文本表现形式（加 U+FE0E 变体选择符不管用），
+     换字形又要冒中文字体缺字变豆腐块的险，所以直接把颜色抽掉：灰度之后它落回
+     墨色深浅，跟同一行的 ⚑（U+2691，纯文本字形，`color` 本来就吃得到）一个
+     调子。语义不变，aria-label 也还在。⏳（U+23F3）和 🔁（U+1F501）同样是
+     彩色 emoji，同一条处理，所以三个选择器共用这一条规则。 */
+  filter: grayscale(1);
+}
+
+/* 置顶那颗图钉：跟上面三个字形同一档，只是 emoji 抽色那一步单独写——它不在
+   那条分组规则里，因为分组规则的注释写的是「三个记号」，再塞第四个进去，
+   那段解释就跟选择器对不上了。 */
+.ink-trow-pin {
+  font-size: 11px;
+  filter: grayscale(1);
+}
+
+/* 层级两个记号。父亲的标题可能很长，`.ink-trow-parent` 收在 12em 里、超出
+   省略号——它是「这条属于谁」的提示，不是正文；完整标题在 title 里。 */
+.ink-trow-parent {
+  max-width: 12em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.ink-trow-kids {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 标签复用 .ink-tag-chip（浅底小胶囊，名字石墨黑），这里只管一行内的排布。 */
+.ink-trow-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ink-trow-subcount {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 「更多」：悬停/聚焦才挂进 DOM（TaskRow.tsx 里的 hover 状态控制，不是
+   这里用 opacity 藏起来），都没有时不占位——task-5：键盘聚焦补的那条路
+   见 TaskRow.tsx 里 onFocus/onBlur 的注释。 */
+.ink-trow-more {
+  flex: 0 0 auto;
+  min-width: 24px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+/* 排序抓手（task-5）：圆圈左边，只有它自己是拖拽激活节点——不是整行，
+   见 TaskRow.tsx TaskRowProps.drag 的注释。人这一侧的控件，石墨黑/次要色，
+   不借群青。 */
+/* 绝对定位进 .ink-trow 左边常驻的那段 28px 留白（修复轮 1 · M-1）——不参与
+   flex 布局，出不出现都不会让右边的勾选圈/标题挪位置。24×24 点击目标下限
+   跟 .ink-trow-check/.ink-trow-more 看齐（修复轮 1 · M-2，原来只给了
+   min-width）。 */
+.ink-trow-handle {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  cursor: grab;
+  color: var(--dim);
+  font-size: 13px;
+  user-select: none;
+}
+
+/* 常驻挂在 DOM 里（task-3-brief 复审修复轮 1 · I4）：没悬停/没聚焦时用这条
+   规则藏起来（opacity 不占布局位置的变化，跟 .ink-trow-handle 常驻预留的
+   24x24 一起，视觉上等价于以前『不在 DOM 里』的效果），但依然在 Tab 顺序
+   里——键盘正向 Tab 能停在这里，不用像以前那样先意外触发它、再 Shift+Tab
+   折回来。pointer-events: none：没显示的时候鼠标也碰不到它，行为上跟
+   真的不在 DOM 里一致，只是键盘找得到。 */
+.ink-trow-handle-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 上/下移收进的小面板（task-5）：点一次「更多」展开，贴着它悬浮，不占用
+   行内常驻宽度——跟 .ink-trow-more「没占位」同一条要求。按钮本身复用
+   .ink-move-btn（不是 .ink-trow- 前缀，TaskCard.tsx 那两颗上/下移按钮
+   已经在用的同一条点击目标下限规则），这里只管这个小面板自己的定位。 */
+.ink-trow-menu {
+  position: absolute;
+  right: 4px;
+  top: 100%;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+}
+
+/* .ink-move-btn 那条全局规则只给了 min-width（TaskCard.tsx 上面注释写得
+   清楚：那 28px 是给 antd size="small" 按钮补的，高度是 antd 自己 24px
+   带来的，从没管过原生 <button>）。这两颗是原生元素，量测夹具悬停+展开
+   才存在的东西够不到，这里手动补：24px 高度下限 + 去掉 UA 默认的灰色按钮
+   外观（border/background），配色跟 .ink-trow-more 一致（修复轮 1 · I-1）。 */
+.ink-trow-menu .ink-move-btn {
+  min-height: 24px;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+/* ── 勾完之后那条提示里的「撤销」（App 的 patchOne） ──
+   一条规则加一个后代按钮，不是一族前缀：这块内容只在 antd 的 message 里出现
+   一处。按钮跟 .ink-today-done-undo 同一个处理（行内文字按钮，靠 min-height
+   撑到全站 24px 下限），但**这里不压透明度**——那颗「重开」是列表里一排常驻
+   的记号，淡一点才不抢戏；这一颗六秒就没了，是这条提示唯一能点的东西。 */
+.ink-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ink-undo button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--ink-you);
+  text-decoration: underline;
+  min-height: 24px;
+}
+
+/* ── 可折叠的组头（清单/标签视图的「已完成」「已放弃」） ──
+   整个标题是一颗按钮，不是旁边另摆一个小三角：标题本身就是最大、最好点的
+   目标。按钮把 h3 的字号字重继承下来（浏览器给 button 的默认字体不继承），
+   其余一律抹平——它在视觉上必须还是那行标题，不是一颗按钮。 */
+.ink-grid-fold {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  min-height: 24px;
+}
+
+/* 三角单独一个 span：宽度固定，展开/折起时后面的标题不会左右跳。 */
+/* 分组折叠的三角。11px 是全站字号下限，这里原来是 10px——它是个符号不是
+   汉字，但下限有了例外就不是下限，而且它还是「这一组能折叠」这件事唯一的
+   提示。 */
+.ink-grid-caret {
+  display: inline-block;
+  width: 11px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 摆不下的那几条提醒收成的一行（App.tsx 的 dueTasks 截断）。跟它上面那几条
+   Alert 同一档间距，视觉上属于同一摞；不上群青——提醒是任务自己的时间事实，
+   不是 AI 产出。 */
+.ink-due-more {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* 月格里一条任务：左边标题、右边时刻（`eventContent` 渲染的）。 */
+.ink-cal-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 时刻靠右、更淡——它是补充信息，标题才是要读的。等宽字体让一列时刻的
+   数字对齐。 */
+.ink-cal-chiptime {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 窄屏月格里的事件块：只剩时刻（或一个点）。判据和理由在 CalendarFull.tsx 的
+   eventContent 那段注释——月格约 50px 宽，标题被裁掉 98%，屏幕上只剩标题的
+   第一个字，说明不了任何事。
+   时刻这里要顶格居中，不像宽屏那样靠 `margin-left: auto` 推到右边：这一块
+   现在只有它一个可见元素，推到右边会让同一列的时刻参差不齐。 */
+.ink-cal-chip-narrow { justify-content: center; }
+
+/* 挂在时刻自己身上，**不写成 `.ink-cal-chip-narrow .ink-cal-chiptime`**：
+   祖先打头的选择器会从 theme.css.test.ts 那条 `.ink-cal-` 前缀扫描里隐形，
+   那条守卫存在的理由就是它（跟 `.ink-cal-daynum-today`、`.ink-notes-md-inherit`
+   是同一条规矩）。宽屏那份靠 `margin-left: auto` 把时刻推到右端，这里要它
+   居中，得把那条推力归零。 */
+.ink-cal-chiptime-narrow { margin-left: 0; }
+
+/* 没有时刻的（整天的事、纪念日、打卡）画一个点：格子里「这天有事」这件事
+   仍然看得见。颜色跟时刻同一档，不新造一种灰。 */
+.ink-cal-chipdot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ink-you) 45%, transparent);
+}
+
+/* ── 年视图（CalendarYear，仿滴答清单「年」那一档） ──
+   十二个小月历。**格子里不画标题**——一天只有十来像素宽，写不下，也不是这
+   一档要回答的问题：它回答「这一年哪几段忙」，靠深浅说话，跟专注统计那张
+   热力图同一个思路。 */
+.ink-year {
+  display: grid;
+  /* **一行四个**（照滴答清单：4×3 摆满十二个月）。用 auto-fill + 一个
+     `max-width` 而不是写死 `repeat(4, ...)`：窄屏上它会自己退成三个、两个、
+     一个，不用为这一档单开断点。`min(100%, 230px)` 是那条老配方——不加的话
+     一个 230px 的 minmax 在比它还窄的容器里会溢出。
+     1040 = 4 × 230 + 3 × 18（间距）再留一点余量。 */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+  max-width: 1040px;
+  gap: 22px 18px;
+}
+
+.ink-year-name {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-you);
+}
+
+/* 表头和每一行用同一套列宽：最左一列是周数，后面七列是星期几。 */
+.ink-year-head,
+.ink-year-row {
+  display: grid;
+  grid-template-columns: 2.2em repeat(7, 1fr);
+  align-items: center;
+  gap: 1px;
+}
+
+.ink-year-dow {
+  text-align: center;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* 周数那一列。等宽字体 + 更淡——它是参照物，不是内容。 */
+.ink-year-wk {
+  text-align: right;
+  padding-right: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--ink-you) 30%, transparent);
+}
+
+/* 一天一格。整格可点（选中它，下面那份当天列表跟着换），所以是 button；
+   高度兜住可读，宽度让网格分。 */
+.ink-year-day {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.9;
+  color: var(--ink-you);
+  text-align: center;
+  border-radius: 3px;
+  padding: 0;
+  /* 24px 下限：`line-height: 1.9` × 11px 只有 21px 高，量测夹具在三个宽度下
+     各数到 365 个过小点击目标，全是它（一年 365 天，一天一个）。这是这个
+     仓库第十二次为 24px 单独兜底。宽度那半不用管：一个月历 7 列摊在 230px
+     里，每列 30px 本来就够。 */
+  min-height: 24px;
+}
+
+/* 补齐用的空格子：占位不占眼，也不该能点。 */
+.ink-year-day-pad { visibility: hidden; }
+
+/* 忙闲四档。**用石墨黑的透明度，不用群青**——这是他自己排的事有多少，
+   跟 AI 没关系；群青在这个界面里是配给制。跟热力图那套同一条。 */
+.ink-year-day[data-level='1'] { background: color-mix(in srgb, var(--ink-you) 10%, transparent); }
+.ink-year-day[data-level='2'] { background: color-mix(in srgb, var(--ink-you) 20%, transparent); }
+.ink-year-day[data-level='3'] { background: color-mix(in srgb, var(--ink-you) 32%, transparent); }
+.ink-year-day[data-level='4'] { background: color-mix(in srgb, var(--ink-you) 46%, transparent); color: var(--sheet); }
+
+.ink-year-day:hover { outline: 1px solid var(--rule); }
+
+/* 今天：一圈实线，不是填色——填色那一档已经被「忙闲」占了，再用一次就分不出
+   「今天」和「这天很忙」。 */
+.ink-year-day-today { box-shadow: inset 0 0 0 1px var(--ink-you); font-weight: 600; }
+
+.ink-year-day-selected { outline: 2px solid var(--ink-you); }
+
+/* ── 日程视图（CalendarAgenda，仿滴答清单「日程」那一档） ──
+   按天从上往下列。**空的那些天不画**——一份从上往下读的清单里，二十几个
+   「这天没有」中间夹着三条真的安排，是在用留白掩埋内容。 */
+.ink-agenda {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: var(--row-measure);
+}
+
+/* 一天：左边日期那一块，右边那一天的几条。 */
+.ink-agenda-day {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.ink-agenda-day-selected { background: color-mix(in srgb, var(--ink-you) 4%, transparent); }
+
+/* 日期那一块：大号日号 + 底下小小的周几。整块可点 = 选中这一天。 */
+.ink-agenda-date {
+  flex: 0 0 3.2em;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  min-height: 24px;
+  color: var(--ink-you);
+}
+
+.ink-agenda-num { font-size: 20px; line-height: 1.2; }
+
+.ink-agenda-dow { font-size: 11px; color: var(--dim); }
+
+/* 今天：日号加粗——不用群青，也不用填色圆点。这一档一屏只有一两个「今天」，
+   一档字重就够了。 */
+.ink-agenda-date-today .ink-agenda-num { font-weight: 700; }
+
+.ink-agenda-list { flex: 1 1 auto; min-width: 0; list-style: none; margin: 0; padding: 0; }
+
+.ink-agenda-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* 时刻那一列右对齐、等宽：一列长短不一的时刻左对齐的话，「全天」和「9:00」
+   的右边缘差出一截，扫下来要来回找。 */
+.ink-agenda-time {
+  flex: 0 0 3.4em;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.ink-agenda-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-you);
+  text-align: left;
+  min-height: 24px;
+  cursor: pointer;
+}

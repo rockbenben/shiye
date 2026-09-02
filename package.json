@@ -1,0 +1,47 @@
+{
+  "name": "shiye",
+  "version": "0.1.0",
+  "private": true,
+  "description": "办事师爷 · 随手记一句话，AI 拆成任务，到点提醒 · 365 开源计划 #035",
+  "license": "MIT",
+  "author": "rockbenben",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rockbenben/shiye.git"
+  },
+  "homepage": "https://github.com/rockbenben/shiye#readme",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "type": "module",
+  "workspaces": [
+    "server",
+    "web",
+    "desktop"
+  ],
+  "scripts": {
+    "go": "npm install && npm run build && npm start",
+    "dev": "concurrently -n server,web -c cyan,green \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web && npm run build -w server",
+    "start": "node server/dist/index.js",
+    "test": "npm run typecheck && vitest run",
+    "typecheck": "tsc -p web/tsconfig.json --noEmit && tsc -p server/tsconfig.typecheck.json && tsc -p desktop/tsconfig.typecheck.json",
+    "desktop": "npm run build && npm run build -w desktop && electron desktop/dist/main.js",
+    "dist:desktop": "npm run build && npm run build -w desktop && electron-builder --config desktop/electron-builder.yml"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "@testing-library/react": "^16.3.2",
+    "@vitejs/plugin-react": "^6.0.4",
+    "concurrently": "^10.0.5",
+    "jsdom": "^30.0.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capacitor/preferences": "^8.0.1"
+  }
+}

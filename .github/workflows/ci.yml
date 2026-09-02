@@ -1,0 +1,72 @@
+# 干净克隆 + npm ci + 全量测试。**这个 workflow 从来没有真的跑过**——仓库还没有
+# 远程，是本地项目。等公开之后第一次 push 才会验证它，那次红了是预期内的。
+# （同 AGENTS.md 的老道理：一条没跑过的断言不算断言。）
+#
+# ── 为什么只有 windows-latest ──
+#
+# 这套测试从来没有在 Linux 上跑过一次。server 那边好几处测试要绕开
+# 「机器真实的 %APPDATA%\shiye\device.json」，desktop 又有
+# `cpSync(x, x)` 的路径归一化判断（`agentFiles.ts` 里 `resolve()` 那条），
+# 都是平台相关的。加一条 ubuntu 只会得到一个没法在本地复现的红。
+# 要加就等这里绿了之后单独做一次，那时候 ubuntu 报出来的才是真的平台假设。
+#
+# ── 为什么只钉 node 24 ──
+#
+# 桌面端捆的是 Electron 44，它自带 Node 24.19.0（`ELECTRON_RUN_AS_NODE=1` 跑
+# `process.versions.node` 核过）——**这就是这个应用实际运行的版本**，
+# CI 该跑的是它。`engines.node` 已同步改成 `>=24.0.0`（原来是 `>=20.19.0`，
+# 而下限那一档没有任何测试盯着，是一句没人验证的声明）。
+#
+# 顺带记一笔：改之前在 node 20.20.2 上实跑过 1852 条，全绿——所以这次收窄
+# 不是因为 20 跑不过，是因为「声明支持而 CI 不跑」和「不声明」之间，
+# 后者诚实。要重新支持 20，先把它加回矩阵再改 engines，别只改一头。
+#
+# ── ELECTRON_SKIP_BINARY_DOWNLOAD ──
+#
+# `desktop/` 的 electron 是 devDependency，跳过省掉一次上百 MB 的下载，同时少
+# 一个会 flaky 的外部依赖。typecheck 走 `tsconfig.typecheck.json`，不需要二进制。
+#
+# ⚠️ **这里原来写的理由是「没有任何测试 import electron」——那句话现在是假的**：
+# `desktop/src/main.test.ts` 第一屏就 `import { app } from 'electron'`，而且真的
+# `await import('./main.js')` 把主进程跑了一遍。真正成立的理由是另一条：
+# `vi.mock('electron', factory)` 是**模块解析阶段**的替换，`electron/index.js`
+# 那句 `module.exports = getElectronPath()`（不存在就现场 spawn 一次下载）压根
+# 不会被执行——包能被解析到就够了，不需要 dist 里那个二进制。
+#
+# 这条不是推的，是实测的：把 `node_modules/electron/path.txt` 和 `install.js`
+# 一起挪走（让它连偷偷下载都做不到）再跑 `desktop/src/`，**145 条全绿**。
+# 这个 workflow 从没跑过，所以上面那句假话一直没人撞上；哪天有人靠它做判断，
+# 先重跑这个实验。
+#
+# ── 不跑 `dist:desktop` ──
+#
+# electron-builder 出安装包每次几分钟、产物几百 MB。CI 该守的是「还编得过、
+# 测试还全绿」。要出包等有 release 流程时按 tag 单开一个 workflow。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    name: windows · node 24
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      # `npm test` 里面已经含 typecheck（web + server + desktop 三个 tsconfig）
+      - run: npm test
+      - run: npm run build

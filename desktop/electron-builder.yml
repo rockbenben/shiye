@@ -1,0 +1,189 @@
+# npm run dist:desktop 用这份配置打包（见根 package.json 的 dist:desktop 脚本）。
+# 跑法：npm run build（server + web）→ npm run build -w desktop（编译 main.ts）
+# → electron-builder --config desktop/electron-builder.yml，cwd 是仓库根。
+#
+# 下面几处路径能不能对上，直接决定 desktop/src/paths.ts 算出来的 resolvePaths()
+# 在打包后是不是真的成立——三条硬前提（转给这个 Task 的审查意见）：
+#   1) AGENTS.md 和 workflows/ 必须进 extraResources，否则 ensureAgentFiles()
+#      首次启动 cpSync 就是 ENOENT。
+#   2) server/dist、web/dist 也要进 extraResources、不能进 asar：server/src/index.ts 顶上那段
+#      用 join(here,'..','..') 从「自己所在目录」往上两级找 web/dist，把 server/dist
+#      放在 <resourcesPath>/server/dist/ 正好让这个相对关系在打包后继续成立
+#      （<resourcesPath>/server/dist/.. /.. = <resourcesPath>，web/dist 在它下面）。
+#   3) server/dist/index.js 头几行是裸 specifier（'@hono/node-server'、'hono'、
+#      'dotenv'），tsc 不会帮它们打包依赖——这三个包也得各自进 extraResources
+#      （见下面 extraResources 里的注释），否则子进程一 spawn 就是
+#      ERR_MODULE_NOT_FOUND，只在产物挪出仓库之后才会暴露。
+
+appId: com.rockbenben.shiye
+productName: 办事师爷
+copyright: 个人使用
+
+# ⚠️ **`desktop/package.json` 的 `author` 必须写成对象 `{ "name": "…" }`，不能是
+# 字符串。** exe 属性里的 CompanyName 来自 `appInfo.companyName`，而那个 getter 是
+# `author == null ? null : author.name`（`app-builder-lib/out/appInfo.js`）——字符串
+# 形式取 `.name` 得 `undefined`，`winPackager` 那句 `!= null` 判空跳过，于是
+# CompanyName 落回 **Electron 二进制自带的「GitHub, Inc.」**，安装包对外声称发行方
+# 是 GitHub。不报错、不警告（`author` 字段存在，「author is missed」那条不会响），
+# 只能在打出来的 exe 上看属性才发现。
+#
+# 验的时候注意：**改完必须先删掉 `desktop/release/win-unpacked` 再打。** 保留它的话
+# electron-builder 会复用已解压的 Electron，连带跳过写版本号那一步，exe 时间戳纹丝
+# 不动——照着旧二进制量，会得出「改了没用」的错结论（这里真的这样错过一次）。
+
+directories:
+  # desktop/ 是这份配置真正打包的「应用目录」（package.json + 编译出来的 dist/main.js
+  # 都在这儿）；根目录的 package.json 是 npm workspaces 的壳，不是要打包的东西。
+  app: desktop
+  output: desktop/release
+  buildResources: desktop/build
+
+# 相对 directories.app（desktop/）。desktop 自己没有任何运行时依赖——electron
+# 由 Electron 运行时本身提供，不用从 node_modules 里拷任何东西进去。
+files:
+  - dist/**/*
+  - build/icon.png
+  # package.json 里的 "type": "module" 必须原样带进包里：main.ts 编译出来的是
+  # ESM（import/export），没有这份 package.json，Node 会把 dist/main.js 当成
+  # CommonJS 解析，一启动就语法错误。
+  - package.json
+
+asar: true
+
+# **build/icon.png 必须留在 asar 外面。** 它有两个消费者，走的是两套完全不同的
+# 读取路径：
+#   - 托盘图标 / 窗口图标：`new Tray(ICON_PATH)`、`icon: ICON_PATH`，走的是
+#     Electron 的 nativeImage，那一层有 asar 感知的 fs 垫片，路径穿进 asar 也读得到；
+#   - **Windows toast 通知的 `<image src="…">`**（notify.ts 的 buildToastXml，
+#     main.ts 把它拼成 ICON_FILE_URL）：这份 XML 是交给 Windows.UI.Notifications
+#     渲染的，**是操作系统在读这个文件，不经过 Electron 任何一层垫片**。
+# 打进 asar 之后第二种就废了：`…\resources\app.asar\build\icon.png` 是一条穿过
+# 一个「文件」的路径，系统打不开，于是每条提醒的 toast 都变成没有图的纯文字版——
+# 不报错、不落日志，而托盘图标一切正常，所以这条极难被发现（实测确认过：
+# `npx asar list …/app.asar` 里有 `\build\icon.png`，而 `resources/` 下既没有
+# `build/` 也没有 `app.asar.unpacked/`）。
+asarUnpack:
+  - build/icon.png
+
+# desktop/ 没有任何运行时依赖（electron 由运行时本身提供），没有原生模块要
+# 重新编译——跳过这一步纯粹是省时间，不是绕开一个 bug。曾经怀疑过
+# @electron/rebuild 会在这个 npm workspaces monorepo 里跑「installing native
+# dependencies」那一步时把仓库根 package.json 整个替换成 desktop/package.json
+# 的内容；重新测过：把这行改成 npmRebuild: true 跑一遍完整打包，根
+# package.json 打包前后 md5 一致、git diff 为空，读 @electron/rebuild@4.2.0
+# 源码也确认它只往 cache / clang / sysroot / .node 产物写文件，从不碰
+# package.json——上面那个说法不成立，撤回。
+npmRebuild: false
+
+# 全部相对仓库根（electron-builder 管这叫 projectDir，就是跑 npm run dist:desktop
+# 时的 cwd）。to 是相对打包后 resources/ 目录的子路径。
+extraResources:
+  - from: server/dist
+    to: server/dist
+  # server/dist/index.js 是 tsc 直出，裸 specifier（import { serve } from
+  # '@hono/node-server' 这种）要靠 Node 的 node_modules 向上查找解析；
+  # <resources>/server/node_modules 正好在它的查找路径上（从
+  # <resources>/server/dist/ 往上一级）。这三个包各自零传递依赖——
+  # @hono/node-server 对 hono 只是 peerDependency，hono 和 dotenv 本身没有
+  # dependencies 字段，npm workspaces 把三者都提到了仓库根 node_modules——
+  # 所以只用各拷一份自己，不用管它们的依赖树。不这么做的话打包后子进程一
+  # spawn 就是 ERR_MODULE_NOT_FOUND：产物在仓库外时找不到仓库根的 node_modules。
+  - from: node_modules/hono
+    to: server/node_modules/hono
+  - from: node_modules/@hono/node-server
+    to: server/node_modules/@hono/node-server
+  - from: node_modules/dotenv
+    to: server/node_modules/dotenv
+  - from: web/dist
+    to: web/dist
+  - from: AGENTS.md
+    to: AGENTS.md
+  - from: workflows
+    to: workflows
+
+win:
+  target:
+    # **免安装那一份是 zip，不是 portable——这一条是实测撤下来的，别凭直觉换回去。**
+    #
+    # `portable` 打出来是「一个 exe 双击就跑」，听着正是免安装该有的样子，实际
+    # 对这个体积的 Electron 应用完全不成立。它的 NSIS 模板
+    # （node_modules/app-builder-lib/templates/nsis/portable.nsi）那段是无条件的：
+    #
+    #     StrCpy $INSTDIR "$TEMP\${UNPACK_DIR_NAME}"
+    #     RMDir /r $INSTDIR              ; 每次先把整个目录删掉
+    #     File /r "${APP_DIR_64}\*.*"    ; 再把全部文件重解压一遍
+    #     ExecWait "$INSTDIR\${APP_EXECUTABLE_FILENAME} $R0" $0
+    #     RMDir /r $INSTDIR              ; 退出后再删一遍
+    #
+    # **没有「已经解压过就复用」这回事**——`unpackDirName` 只决定那个临时目录
+    # 叫什么名字，不决定复不复用（NsisTarget.js:246 只把它填进 UNPACK_DIR_NAME）。
+    # 于是每一次双击都是：删 375 MB → 重解压 1954 个文件 → 跑 → 再删 375 MB。
+    # 本机实测：点下去到窗口出来 **48 秒**，同一份 win-unpacked 直接跑是 **0.9 秒**。
+    # 更糟的是模板顶上那句 `SetSilent silent`（没配 splashImage 时就是它），这
+    # 48 秒里没有窗口、没有进度条、没有任何反馈——用户看到的就是「点了没反应」，
+    # 然后多点几下，于是几个 stub 一起在解压。
+    #
+    # 配 `splashImage` 能让它不再「没反应」，但每次启动照样 ~50 秒、照样往磁盘
+    # 来回写 750 MB，那是给症状盖张纸。zip 把「解压」这一步从每次启动挪到了
+    # 一次性：解压出来的就是 win-unpacked 那份，之后每次双击都是 0.9 秒那条路。
+    # 免安装的两个诉求（不用装、删掉文件夹就是卸载）一个没丢。
+    - target: zip
+    - target: nsis
+  # icon 不用显式指——buildResources（desktop/build/）下按约定命名的 icon.png
+  # 会被自动找到、自动转成 .ico。
+  #
+  # 不签名：个人使用，没有配置任何证书（CSC_LINK 等），electron-builder 默认
+  # 就会跳过签名这一步，只在日志里提一句，不是错误。
+
+nsis:
+  # 个人用的桌面小工具，装哪儿、要不要建桌面快捷方式让用户自己选，不强制一键装。
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+# ── 协议注册：mac 和 Linux 靠打包时写进元数据 ──
+#
+# Windows 那条是**运行时**注册（main.ts 的 `app.setAsDefaultProtocolClient`），
+# 另外两个平台不吃这一套：mac 认 Info.plist 里的 `CFBundleURLTypes`，Linux 认
+# `.desktop` 文件里的 `MimeType=x-scheme-handler/…`，两份都只能在打包时生成。
+# 没有这一段，通知上「完成」「推迟 10 分钟」两颗按钮在 mac/Linux 上点了不会有
+# 任何反应——系统根本不知道 `todo-desktop://` 该交给谁。
+#
+# **`schemes` 必须跟 `desktop/src/notify.ts` 的 `PROTOCOL` 一字不差**：那个常量
+# 是按钮拼 URI 用的同一个字面量，两边漂开的表现就是「点了没反应」，不报错。
+protocols:
+  - name: 办事师爷协议激活
+    schemes:
+      - todo-desktop
+
+# ── macOS ──
+#
+# **`identity: null` = 不签名**，跟 Windows 那边同一个理由（个人使用，没买证书）。
+# 但后果比 Windows 重得多：SmartScreen 点两下「仍要运行」就过去了，而 macOS 的
+# Gatekeeper 对未签名、未公证的应用直接报「已损坏，无法打开」——**用户看到的
+# 是「损坏」不是「未签名」**，不知道还有的救。绕过要右键「打开」，或者
+# `xattr -d com.apple.quarantine /Applications/办事师爷.app`。README 的 SmartScreen
+# 那段在 mac 上不成立，得单写一句。
+#
+# 图标：`desktop/build/icon.png` 现在是 512×512（`brand/render.mjs` 里改的），
+# electron-builder 从它生成 .icns——**小于 512 直接报错打不出包**，那是只出
+# Windows 的时候一直没暴露的一条。
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.productivity
+  identity: null
+
+# ── Linux ──
+#
+# **只出 AppImage，不出 deb。** deb 要求 `author` 带邮箱（electron-builder 拿它
+# 当 Debian 的 maintainer 字段，缺了直接报错），而这个仓库的 `author` 有意只写
+# 名字不写邮箱。AppImage 没这个要求，而且一个文件下载即用、删掉就是卸载，跟
+# Windows 那边选 zip 而不是安装器是同一个偏好。
+#
+# 托盘图标在 Linux 上不保证有：它走 StatusNotifier/AppIndicator，GNOME 默认不带
+# （要装扩展）。窗口关掉之后可能就真的找不回来了——这条只能在真机上验。
+linux:
+  target:
+    - AppImage
+  category: Utility

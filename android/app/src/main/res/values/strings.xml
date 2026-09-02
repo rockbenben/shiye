@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">办事师爷</string>
+    <string name="title_activity_main">办事师爷</string>
+    <string name="package_name">com.rockbenben.shiye</string>
+    <string name="custom_url_scheme">com.rockbenben.shiye</string>
+</resources>

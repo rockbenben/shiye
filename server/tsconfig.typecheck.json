@@ -1,0 +1,8 @@
+{
+  // 只为类型检查用，不产出。tsconfig.json 那份要 emit，所以 exclude 掉了测试文件——
+  // 副作用是服务端测试任何地方都不做类型检查。这一份把它们检回来。
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["src"],
+  "exclude": []
+}

@@ -75,9 +75,12 @@ jobs:
 
       # `npm test` 里面已经含 typecheck（web + server + desktop 三个 tsconfig）
       #
-      # `--reporter=basic`：默认 reporter 在非 TTY 下**不打逐文件结果**，于是
+      # `--reporter=verbose`：默认 reporter 在非 TTY 下**不打逐文件结果**，于是
       # 「169 个文件里有 1 个没跑完」这种情况在日志里根本查不出是哪一个（试过：
-      # 完整日志里一条 `(N tests)` 都没有）。basic 会逐个文件打，崩的那个文件
-      # 就是清单里缺的那个。纯诊断，不改任何执行行为。
-      - run: npm test -- --reporter=basic
+      # 完整日志里一条 `(N tests)` 都没有）。verbose 逐条打、每行带文件名，崩掉的
+      # 那个文件就是清单里缺的那个。纯诊断，不改任何执行行为。
+      #
+      # **不是 `basic`**：vitest 4 里没有这个 reporter，写上去会在加载 reporter 时
+      # 直接抛（`loadCustomReporterModule`），整个 job 挂在配置错误上——本机验过。
+      - run: npm test -- --reporter=verbose
       - run: npm run build

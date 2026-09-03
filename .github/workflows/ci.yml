@@ -73,15 +73,11 @@ jobs:
       - name: runner 规格
         run: node -e "const os=require('node:os');console.log('node',process.version,'| 核',os.availableParallelism(),'| 内存GB',(os.totalmem()/2**30).toFixed(1),'| 空闲GB',(os.freemem()/2**30).toFixed(1),'| TZ',Intl.DateTimeFormat().resolvedOptions().timeZone)"
 
-      # 单独跑一次那个反复把 worker 干掉的文件。**这一步是实验，不是守卫**：
-      # 全量里它稳定崩在同一处（本机 28 条、CI 只报到第 9 条），而 verbose 是
-      # 测试跑完才打行，崩溃时最后几行可能没冲出 IPC 缓冲——所以「停在第 9 条」
-      # 分不清崩点到底在第 10 条（普通的 Bus 断言）还是第 11 条起的 watchData
-      # （全仓唯一用递归 fs.watch 的地方）。单独跑一遍就能分开：
-      #   这一步绿、全量红 → 是跟别的文件/整体负载的相互作用；
-      #   这一步也红       → 是这个文件自己，跟负载无关，直接盯 fs.watch。
-      - name: 单独跑 events.test.ts（定位实验）
-        run: npx vitest run --project node server/src/events.test.ts --reporter=verbose
+      # （这里一度有一步「单独跑 events.test.ts」。那是定位实验，不是守卫，用完
+      # 撤掉了。它当时是唯一有效的手段：全量输出五千多行，进程 abort 时那行
+      # `src\win\fs-event.c:72` 的 native 断言被淹得看不见，单独跑才显形。
+      # 以后再遇到「零失败用例 + Worker exited unexpectedly」，先把嫌疑文件单拎
+      # 出来跑一遍——比在全量日志里翻快得多。）
 
       # `npm test` 里面已经含 typecheck（web + server + desktop 三个 tsconfig）
       #

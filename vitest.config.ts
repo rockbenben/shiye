@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import { availableParallelism } from 'node:os';
 
 // 两套环境：node 跑服务端和纯函数，dom 跑组件渲染。
 // dom 那一档只测一件事：某个字段的取值必须改变用户看到的东西。
@@ -16,7 +17,18 @@ const TIMEOUT = 15_000;
 // 为什么不是放宽 `TIMEOUT`：那是把「机器忙的时候跑红、闲了跑绿」这种不确定性
 // 藏起来，而这个仓库为「深夜跑红、过一小时跑绿」那类问题栽过。少铺几个 worker
 // 反而更快，也就没有取舍。
-const MAX_WORKERS = 6;
+//
+// **6 是照这台 20 核机器调出来的一个绝对值，换台小机器它就重新变成「铺满」。**
+// 第一次推上 GitHub Actions 就撞了：标准 windows runner 只有 4 核，6 个 fork
+// 出来的 jsdom worker 挤在上面，跑了 430 秒之后一个 worker 直接被干掉——
+// `[vitest-pool]: Worker forks emitted error / Worker exited unexpectedly`，
+// **一条测试都没红**（168/169 个文件通过、5208/5226 条通过），只是有一个文件
+// 没跑完，整个 job 退 1。跟上面那次「铺满就随机红」是同一件事的另一副面孔。
+//
+// 所以改成跟着机器走：`min(6, 核数 - 1)`。这台机器上仍然是 6（跟调出这个数字
+// 时一模一样，上面那些实测数据继续成立），4 核的 runner 上是 3，留一个核给
+// 主进程和系统。下限 2 是防 1 核机器上算出 0。
+const MAX_WORKERS = Math.min(6, Math.max(2, availableParallelism() - 1));
 
 /**
  * **整套测试跑在哪个时区。**

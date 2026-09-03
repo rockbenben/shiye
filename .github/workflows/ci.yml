@@ -67,6 +67,17 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
+      # runner 的规格。`vitest.config.ts` 的 MAX_WORKERS 是按核数算的，出问题时
+      # 要能对着这几个数看——第二、三次 CI 红在「一个 worker 非正常退出」，而
+      # 日志里既没有断言失败也没有 OOM 字样，只能靠这些外部条件推。
+      - name: runner 规格
+        run: node -e "const os=require('node:os');console.log('node',process.version,'| 核',os.availableParallelism(),'| 内存GB',(os.totalmem()/2**30).toFixed(1),'| 空闲GB',(os.freemem()/2**30).toFixed(1),'| TZ',Intl.DateTimeFormat().resolvedOptions().timeZone)"
+
       # `npm test` 里面已经含 typecheck（web + server + desktop 三个 tsconfig）
-      - run: npm test
+      #
+      # `--reporter=basic`：默认 reporter 在非 TTY 下**不打逐文件结果**，于是
+      # 「169 个文件里有 1 个没跑完」这种情况在日志里根本查不出是哪一个（试过：
+      # 完整日志里一条 `(N tests)` 都没有）。basic 会逐个文件打，崩的那个文件
+      # 就是清单里缺的那个。纯诊断，不改任何执行行为。
+      - run: npm test -- --reporter=basic
       - run: npm run build

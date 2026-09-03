@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Bus, watchData } from './events.js';
@@ -128,7 +128,22 @@ describe('watchData', () => {
   let stop: (() => void) | undefined;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'todo-watch-'));
+    // **`realpathSync.native` 不能省。** `os.tmpdir()` 在 Windows 上给的是 8.3
+    // 短路径（本机是 `C:\Users\ADMINI~1\…`，GitHub runner 上同理），而
+    // `ReadDirectoryChangesW` 回报的是长路径——libuv 拿两者做前缀比对，对不上
+    // 就是 `src\win\fs-event.c` 第 72 行那条 `assert(!_wcsnicmp(filename, dir,
+    // dirlen))`，**进程当场 abort**：没有 JS 异常、没有退出码，`watcher.on('error')`
+    // 也接不到（那是 JS 层的事件，不是 native 崩溃）。
+    //
+    // CI 为这条连红五次，每次都是 `[vitest-pool]: Worker exited unexpectedly` +
+    // 168/169 个文件通过 + 零失败用例。本机同样是短路径却不崩，所以这个洞在这台
+    // 机器上永远看不见——这也是为什么单独把这个文件拎到 CI 上跑一遍才定位到：
+    // 那一步的日志里才露出那行 native 断言。
+    //
+    // 解析成长路径之后，`DATA_DIR` 和被监听的路径是同一个字符串，前缀比对必然
+    // 成立。**顺序也重要**：先解析再写进 `DATA_DIR`，不然 store 用短的、watcher
+    // 用长的，`invalidate(join(dir, table))` 的键会跟 entityStore 的对不上。
+    dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'todo-watch-')));
     process.env.DATA_DIR = dir;
     ensureDataFiles();
   });
@@ -141,13 +156,15 @@ describe('watchData', () => {
    * 没了，没有 JS 异常、没有 unhandled rejection**，`watcher.on('error')` 那条
    * 也接不到（它接的是 JS 层的错误事件，不是 native 崩溃）。
    *
-   * 这不是理论：CI 头三次红，红的都不是断言——`[vitest-pool]: Worker exited
-   * unexpectedly`，168/169 个文件通过、零失败用例。对着逐文件用例数一比才找到
-   * 是这个文件：本机 28 条、CI 只跑了 9 条，正好断在 `Bus` 那组结束、`watchData`
-   * 这组开始的地方。开发机 20 核 + 快盘从来撞不上，4 核的 runner 上稳定复现。
+   * ⚠️ **这段原来把 CI 那几次红归到了这里，那是错的，已撤回。** 真凶是上面
+   * `beforeEach` 里那条：监听了 8.3 短路径，libuv 的前缀断言不成立、进程 abort
+   * （`src\win\fs-event.c:72`）。崩点在这一组的**第一条之前**，不是收尾时——
+   * 当时误判是因为 verbose reporter 是「测试跑完才打那一行」，崩溃时最后几行
+   * 没冲出 IPC 缓冲，看起来像停在 `Bus` 那组末尾。
    *
-   * 所以：先让出一拍再删，删不掉也不强求。临时目录留给系统清理，代价是几个
-   * `%TEMP%\todo-watch-*`；**为了把它删干净而让整个 job 崩掉是笔烂账**。
+   * 这一段本身留着：`watcher.close()` 返回时底层句柄未必关完，紧接着删掉被监听
+   * 的目录在 Windows 上确实是已知的危险动作，让出一拍不花什么钱。只是它**没有
+   * 修好过任何一次已观察到的红**，别把它当成那次事故的解释。
    */
   afterEach(async () => {
     stop?.();

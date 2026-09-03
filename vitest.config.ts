@@ -18,6 +18,35 @@ const TIMEOUT = 15_000;
 // 反而更快，也就没有取舍。
 const MAX_WORKERS = 6;
 
+/**
+ * **整套测试跑在哪个时区。**
+ *
+ * 这个应用的日期语义是「本地墙钟」（`dayKey`、`isAllDay`、四象限的「今天」全
+ * 按本地取值），测试里大量夹具是 `new Date(2026, 7, 11, 18)` 这种本地构造 +
+ * `toISOString()` 存进任务里，再跟另一个本地构造的期望值比——**只有整个进程
+ * 在同一个时区里，两边才对得上**。
+ *
+ * 原来的做法是在三个文件里 `beforeEach(() => vi.stubEnv('TZ', 'Asia/Shanghai'))`。
+ * 那是**假的钉死**，第一次推上 CI 就红了 6 条：`vi.stubEnv` 要等 `beforeEach`
+ * 才生效，而 `describe` 体里那些 `const t = task({ due: new Date(…) })` 是
+ * **收集阶段**就求值的——夹具按宿主时区算，断言按钉死的 +08 算。开发机宿主
+ * 本来就是 +08，两边碰巧一致，于是这个洞在本机永远看不见；GitHub runner 是
+ * UTC，`reschedulePatch` 收到的 `prev` 当场差 8 小时（实测：期望
+ * `2026-08-13T10:00:00.000Z`，拿到 `2026-08-12T18:00:00.000Z`，正好是把
+ * 「本地 18:00」当成「本地 02:00」）。
+ *
+ * 写在这里，worker 一起来就是这个时区，收集阶段和断言阶段同一个语境，跟宿主
+ * 机在哪儿无关。那三个文件里的 `vi.stubEnv('TZ', …)` 就成了同值的空操作，
+ * 留着无害（它们各自的注释还解释着那条守卫为什么要钉时区）。
+ *
+ * ponytail: **这等于宣布「这套测试只在东八区语境下验过」**。天花板很明确——
+ * 别的时区上的真 bug 这套测试看不见（比如负时区把只有日期的字符串按 UTC 解析
+ * 退回前一天，`calendarMarks.ts` 那条注释担心的正是它）。要真覆盖多时区，
+ * 得把时区变成用例的一个维度跑两遍，那是另一件事；现在先让「本机绿 = CI 绿」
+ * 成立，而不是让 CI 去发现开发机被宿主时区掩盖掉的洞。
+ */
+const TZ = 'Asia/Shanghai';
+
 export default defineConfig({
   test: {
     maxWorkers: MAX_WORKERS,
@@ -31,6 +60,8 @@ export default defineConfig({
           // 真实的设置和 data/。理由和那次真事故记在这个文件里。
           setupFiles: ['./scripts/test-setup-node.ts'],
           testTimeout: TIMEOUT,
+          // 跟 testTimeout 同一条理由：有 projects 时顶层不往下传，每档各写一遍。
+          env: { TZ },
         },
       },
       {
@@ -41,6 +72,7 @@ export default defineConfig({
           environment: 'jsdom',
           setupFiles: ['./web/src/test-setup.ts'],
           testTimeout: TIMEOUT,
+          env: { TZ },
         },
       },
     ],

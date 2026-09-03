@@ -75,6 +75,21 @@ asarUnpack:
 # package.json——上面那个说法不成立，撤回。
 npmRebuild: false
 
+# **不发布，只出包。** 这一条不是可选的洁癖，是第一次推 tag 时三个平台一起红的
+# 那个原因：electron-builder 看见当前提交上有 git tag 就会**隐式**打开发布流程
+# （日志原话：`Implicit publishing triggered by git tag. This behavior will be
+# disabled in electron-builder v27.`），而 `package.json` 的 `repository` 指向
+# GitHub，于是它推断出 github provider、去找 `GH_TOKEN`，找不到就
+# `⨯ GitHub Personal Access Token is not set` 退出码 1——**包其实已经全打完了**
+# （dmg / zip / AppImage / exe 都在日志里 building 过），死在最后一步。
+#
+# 这个仓库没有接 `electron-updater`（全仓零引用），也就没有「自动更新源」这回事，
+# 发布是 release workflow 用 upload-artifact 做的。所以这里明确关掉：`app-update.yml`
+# 和 `latest.yml` 那两份假的更新元数据也跟着不再生成（它们本来就名不副实——
+# `latest.yml` 里的文件名是 `desktop-setup-0.1.0.exe`，而真实产物叫
+# 「办事师爷 Setup 0.1.0.exe」，来自 `desktop/package.json` 的 `name: "desktop"`）。
+publish: null
+
 # 全部相对仓库根（electron-builder 管这叫 projectDir，就是跑 npm run dist:desktop
 # 时的 cwd）。to 是相对打包后 resources/ 目录的子路径。
 extraResources:

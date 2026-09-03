@@ -133,11 +133,32 @@ describe('watchData', () => {
     ensureDataFiles();
   });
 
-  afterEach(() => {
+  /**
+   * **关掉监听之后不能立刻删掉被监听的那个目录。**
+   *
+   * `watcher.close()` 返回时底层句柄（Windows 上是 ReadDirectoryChangesW）还没
+   * 真的关完，紧接着 `rmSync` 把目录端掉，会撞上 libuv 那条竞态——**进程直接
+   * 没了，没有 JS 异常、没有 unhandled rejection**，`watcher.on('error')` 那条
+   * 也接不到（它接的是 JS 层的错误事件，不是 native 崩溃）。
+   *
+   * 这不是理论：CI 头三次红，红的都不是断言——`[vitest-pool]: Worker exited
+   * unexpectedly`，168/169 个文件通过、零失败用例。对着逐文件用例数一比才找到
+   * 是这个文件：本机 28 条、CI 只跑了 9 条，正好断在 `Bus` 那组结束、`watchData`
+   * 这组开始的地方。开发机 20 核 + 快盘从来撞不上，4 核的 runner 上稳定复现。
+   *
+   * 所以：先让出一拍再删，删不掉也不强求。临时目录留给系统清理，代价是几个
+   * `%TEMP%\todo-watch-*`；**为了把它删干净而让整个 job 崩掉是笔烂账**。
+   */
+  afterEach(async () => {
     stop?.();
     stop = undefined;
     delete process.env.DATA_DIR;
-    rmSync(dir, { recursive: true, force: true });
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch {
+      // 留给系统清。
+    }
   });
 
   it('写 data/tasks/<id>.json 会广播一条 data-changed（file 是 tasks）—— 锁住递归监听', async () => {

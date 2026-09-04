@@ -108,8 +108,24 @@ function actionUri(kind: 'complete' | 'snooze', id: string): string {
  * 的逻辑，特意抽出来单独测，不埋在 main.ts 里。
  *
  * 两个按钮（「完成」「推迟 10 分钟」）走 `activationType="protocol"` +
- * `arguments`，**不是 `NotificationConstructorOptions.actions` 字段**——
- * 那个字段是 macOS 专属，Windows 上无效，见 main.ts 顶部说明。点击后
+ * `arguments`，**不是 `NotificationConstructorOptions.actions` 字段**。
+ *
+ * ⚠️ **这里原来写的理由是「`actions` 是 macOS 专属，Windows 上无效」——那是旧版
+ * 事实，已经不成立了**（2026-09 核对官方文档：`actions` 现在 macOS 和 Windows
+ * 都支持，Windows 还多一种 selection 型）。真正的理由换成下面这条，它跟版本无关：
+ *
+ * **`actions` 的回调只送给「正在跑的那个实例」**（`notification.on('action')`），
+ * 而协议这条路连**冷启动**都成立：Windows 的通知中心会把 toast 留着，托盘退出过、
+ * 或者机器重启过之后再点「完成」，系统按协议拉起一个新进程，URI 在 argv 里，
+ * bootstrap() 末尾那段照样把它 PATCH 掉（见 main.ts 的 I1 那段注释和对应测试）。
+ * 换成 `actions` 就丢掉这一半——应用没在跑的时候点了没反应。
+ *
+ * 另外两条顺带的（不是主要理由，但都指向同一个选择）：macOS 上 `actions` 要求
+ * **应用已签名**才出按钮，而这个仓库有意不签（`electron-builder.yml` 的
+ * `identity: null`）；Linux 压根不支持。所以「换成 actions 就能三平台统一」
+ * 这个说法在这个仓库的约束下不成立。
+ *
+ * 点击后
  * Windows 把这个 URI 当协议链接启动，命中 main.ts 里
  * `app.setAsDefaultProtocolClient(PROTOCOL)` 注册过的处理器，因为单实例锁
  * 已经被原来那个实例占着，新进程的命令行参数（含这个 URI）会经

@@ -210,7 +210,9 @@ describe('buildToastXml：结构', () => {
     expect(xml).toContain(`content="推迟 ${SNOOZE_MINUTES} 分钟"`);
   });
 
-  // 上限方向：按钮不能走 actions 字段那条路（macOS 专属，Windows 上无效）——
+  // 上限方向：按钮不走 actions 字段那条路。理由不是「它在 Windows 上无效」（那是
+  // 旧版事实，2026-09 核对官方文档：现在 macOS 和 Windows 都支持），是它的回调只
+  // 送给正在跑的那个实例，冷启动点通知中心里留着的旧 toast 就没人接了——
   // 这里测的是 toastXml 字符串本身没有把 <action> 元素落成别的、Windows
   // 认不出的形状，两个按钮都必须是 activationType="protocol"，不能悄悄退回
   // 默认的 "foreground"（那样点了会打开应用但分不清点的是哪个按钮）。

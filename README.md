@@ -125,7 +125,8 @@ Windows：
 - **安装版**（`办事师爷 Setup <版本号>.exe`）——普通 Windows 安装向导，装完开始菜单/
   桌面上有快捷方式。原生通知要走这一份（免安装版没有开始菜单快捷方式）。
 
-macOS：`.dmg`（拖进「应用程序」）和 `.zip`。Linux：`.AppImage`（`chmod +x` 之后
+macOS：`.dmg`（拖进「应用程序」）和 `.zip`，**Apple Silicon 和 Intel 各一份**，
+文件名里带 `arm64` 的是前者。Linux：`.AppImage`（`chmod +x` 之后
 双击就跑，删掉那个文件就是卸载）。
 
 **都没有签名**——个人使用买证书不划算，但三个平台的后果不一样：

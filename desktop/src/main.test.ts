@@ -297,7 +297,10 @@ describe('main.ts 真行为：应用已经在跑时收到的 second-instance', (
     expect(xml).toContain('<text>该做了</text>');
     expect(xml).toContain('<text>交房租</text>');
     expect(xml).toMatch(/src="file:\/\/\//); // 图标是 file:// URL，不是裸路径
-    expect(n.options.actions).toBeUndefined(); // 没用 actions 字段（macOS 专属）
+    // 没用 actions 字段。理由不是「它在 Windows 上无效」（那是旧版事实，2026-09
+    // 已核对：现在 Windows 也支持），是它的回调只送给正在跑的实例、丢掉冷启动那一半。
+    // 完整理由在 notify.ts 的 buildToastXml 注释里。
+    expect(n.options.actions).toBeUndefined();
 
     expect(n.handlers['click']).toBeTypeOf('function');
     state.lastWindow!.show.mockClear();

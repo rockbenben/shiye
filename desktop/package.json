@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "productName": "办事师爷",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "办事师爷的桌面外壳：托盘常驻、原生提醒、开机自启",
   "author": { "name": "rockbenben" },

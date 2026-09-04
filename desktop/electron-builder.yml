@@ -182,10 +182,23 @@ protocols:
 # 图标：`desktop/build/icon.png` 现在是 512×512（`brand/render.mjs` 里改的），
 # electron-builder 从它生成 .icns——**小于 512 直接报错打不出包**，那是只出
 # Windows 的时候一直没暴露的一条。
+# **两个架构都要出。** 只写 `- dmg` 的话 electron-builder 按**打包那台机器**的
+# 架构出一份——`macos-latest` 是 Apple Silicon，于是第一次发布只出了 arm64，
+# **Intel Mac 装不了**（实测确认：那次日志里三行全是 `arch=arm64`）。这件事不报
+# 错、不警告，产物名里也只有一个 `-arm64`，不去数很难发现。
+#
+# 不用 `universal`（把两份塞进一个包）：体积翻倍而且下载的人每次都白拿一半，
+# 分开两份反而是各取所需。x64 那份在 arm 机器上照样能打——`npmRebuild: false`，
+# 没有原生模块要编译，electron-builder 只是多下一份 x64 的 Electron 运行时。
+#
+# Linux 和 Windows 目前都只出 x64，那是有意的：ARM 的 Windows 笔记本和 ARM 的
+# Linux 桌面在这个应用的实际用户里都还不存在。哪天有了，照这里的写法加。
 mac:
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
   category: public.app-category.productivity
   identity: null
 

@@ -263,6 +263,10 @@ export const api = {
     () => req<{ ok: true }>('/api/review', { method: 'POST', ...(listId ? { body: body({ listId }) } : {}) }),
     offlineUnsupported('回顾现有任务'),
   ),
+  // AI 总览（/board 工作流）。只读、不产 outbox，回的是一段汇报文本——
+  // 服务端通过 agent-status message 广播，网页上跟拆解/回顾反馈同一个出口。
+  // 跟 expand/review 共用单飞锁，所以同样可能 409。
+  board: () => route(() => req<{ ok: true }>('/api/board', { method: 'POST' }), offlineUnsupported('看板总览')),
 
   /**
    * 设置页 AI 那三格旁边的「测试连接」。**传的是此刻框里那份**，不是存着的那份

@@ -2528,6 +2528,9 @@ export function App() {
         // 共用一把单飞锁（server/src/expand.ts 的 AgentKind），所以 `reviewing`
         // 直接用同一个 agent 状态——正在拆解时点回顾会被 409，不如先别让点。
         onReview={() => guard(() => api.review())}
+        // 「AI 总览」(/board)：只读汇总看板状态，不产 outbox、不写卡。跟拆解/
+        // 回顾共用单飞锁，按钮 tooltip 已经说清「AI 总览运行时拆解/回顾会排队」。
+        onBoard={() => guard(() => api.board())}
         reviewing={agent?.state === 'running'}
       />
     ),

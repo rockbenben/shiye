@@ -1,8 +1,8 @@
 import { type ChildProcess } from 'node:child_process';
 import crossSpawn from 'cross-spawn';
 import type { Bus } from './events.js';
-import { agentCwd, agentDataDir, aiSeesSameData, dataDir, readSettings } from './store.js';
-import { configProblem, runViaApi, scopeLine, type Fetcher, type ReviewScope } from './aiApi.js';
+import { agentCwd, agentDataDir, aiSeesSameData, dataDir, readLastOutboxError, readSettings } from './store.js';
+import { configProblem, clockLine, runBoardViaApi, runViaApi, scopeLine, type Fetcher, type ReviewScope } from './aiApi.js';
 
 export type { ReviewScope };
 
@@ -35,7 +35,7 @@ export function emitAgentStatus(bus: Bus | undefined, status: AgentStatus): void
  * 同一批 `outbox-*.json`，同时起两个 `claude` 对着同一个目录写，等于赌两次
  * `mergeOutbox` 不撞车。慢一件事，不赌。
  */
-export type AgentKind = 'expand' | 'review';
+export type AgentKind = 'expand' | 'review' | 'board';
 
 /**
  * 服务端只指路，不抄规则。规则的正本在 `workflows/expand.md` / `workflows/review.md`
@@ -56,17 +56,19 @@ export type AgentKind = 'expand' | 'review';
 export const PROMPT: Record<AgentKind, string> = {
   expand: '读 AGENTS.md 和 workflows/expand.md，处理收件箱里还没处理的条目。',
   review: '读 AGENTS.md 和 workflows/review.md，回顾一遍现有任务。',
+  board: '读 AGENTS.md 和 workflows/board.md，汇总当前看板状态。',
 };
 
 
 
 /** 报错和状态里怎么称呼这件事——这些字符串会原样出现在界面上，别把 'expand' 漏出去。 */
-const WORD: Record<AgentKind, string> = { expand: '拆解', review: '回顾' };
+const WORD: Record<AgentKind, string> = { expand: '拆解', review: '回顾', board: '总览' };
 
 /** 跑完了却什么都没写出来时，各自该说的实话。见下面 'exit' 里那段长注释。 */
 const NOTHING: Record<AgentKind, string> = {
   expand: 'AI 跑完了，但没有写出任何拆解结果（收件箱里可能没有要拆的内容）',
   review: 'AI 跑完了，但没有提出任何建议（现有的任务里可能没什么值得说的）',
+  board: 'AI 跑完了，但没有产出任何汇报',
 };
 
 const TEN_MINUTES = 10 * 60 * 1000;
@@ -275,9 +277,16 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
     }, timeoutMs);
     timer.unref?.();
 
-    void runViaApi(kind, cfg, fetchFn, ac.signal, scope)
+    // board 不写 outbox——它回的是一段汇报文本，不是 outbox JSON。走单独的
+    // `runBoardViaApi`，拿到文本直接 emit agent-status{ok, message: 文本}。
+    // expand/review 走 `runViaApi`：写 outbox 文件、交给 mergeOutbox 判断。
+    const run = kind === 'board'
+      ? runBoardViaApi(cfg, fetchFn, ac.signal, (msg) => emitAgentStatus(bus, { state: 'ok', message: msg }))
+      : runViaApi(kind, cfg, fetchFn, ac.signal, scope);
+    void run
       // wrote === false：模型明确回了空数组，等价于 CLI 那条路「跑完了什么都
-      // 没写出来」。true 的话一个字都不发，等合并去说。
+      // 没写出来」。true 的话一个字都不发，等合并去说。board 路的 runBoardViaApi
+      // 内部已经 emit 完了，这里 wrote 恒为 true、不重复发。
       .then((wrote) => finish(wrote ? undefined : () => emitAgentStatus(bus, { state: 'skipped', message: NOTHING[kind] })))
       // 超时那条已经自己发过 failed 了，`finish` 的幂等挡住第二次。
       .catch((e: Error) => finish(() => emitAgentStatus(bus, { state: 'failed', message: `${WORD[kind]}失败：${e.message}` })));
@@ -321,7 +330,12 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
     const statusAtStart = bus?.lastStatus;
 
     const s = readSettings();
-    const prompt = scope ? `${PROMPT[kind]}${scopeLine(scope)}` : PROMPT[kind];
+    // 跟 API 路 buildMessages 对齐：prompt 末尾追加 clockLine（现在几点/本地时区）
+    // 和上次 outbox 校验失败的提示——CLI 路 AI 之前两样都没有，跨时区跑时 due
+    // 只能瞎猜；校验失败后 AI 退出了就再也看不到上次的错，self-correcting 断链。
+    // 不改 `PROMPT` 本身，避免触发 agentsMd.guard.test.ts；只追加在它后面。
+    const tail = `${clockLine()}${readLastOutboxError() ?? ''}`;
+    const prompt = `${scope ? `${PROMPT[kind]}${scopeLine(scope)}` : PROMPT[kind]}${tail}`;
     const invocation = resolveCliInvocation(s, prompt);
 
     let proc: ChildProcess;
@@ -365,6 +379,13 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
     });
 
     proc.on('exit', (code) => {
+      // **我们对所有 CLI 的契约是统一的**：退出码非 0 = 失败；退出码 0 + 没写出
+      // 任何 outbox 文件 = skipped（见下面那段「`bus.lastStatus === statusAtStart`」）；
+      // 退出码 0 + outbox 出现 = 交给 mergeOutbox 判断、由它 emit。各 CLI 自身可能
+      // 在某些边缘场景下退出码语义不一致（aider/codex 等），但我们只认这个契约，
+      // 不按 CLI 分支判断退出码——可移植性比「为每个 CLI 单独维护一套退出码语义」
+      // 更可靠，也避免 `resolveCliInvocation` 那张分发表再加一份「每家 CLI 的退出码
+      // 怎么解读」这种东西。
       if (settled) return;
       settled = true;
       clearTimeout(timer);

@@ -19,7 +19,7 @@ const TASKS = [task({ id: 'T1', title: '写周报' })];
 
 describe('ReviewView', () => {
   it('没有 insight 时一行安静的字', () => {
-    render(<ReviewView insights={[]} tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.getByText(/还没有回顾/)).toBeTruthy();
   });
 
@@ -28,7 +28,7 @@ describe('ReviewView', () => {
     // 只是把渲染整个清空的话两条都不会显示——两种退化实现都得被这条测试逮到。
     render(<ReviewView
       insights={[ins('a', { dismissedAt: '2026-08-13T01:00:00.000Z' }), ins('b')]}
-      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.queryByText('a 的正文')).toBeNull();
     expect(screen.getByText('b 的正文')).toBeTruthy();
   });
@@ -36,7 +36,7 @@ describe('ReviewView', () => {
   it('点「知道了」带上这条的 id，不会误触 onOpen', () => {
     const onDismiss = vi.fn();
     const onOpen = vi.fn();
-    render(<ReviewView insights={[ins('a')]} tasks={[]} onDismiss={onDismiss} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[ins('a')]} tasks={[]} onDismiss={onDismiss} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     fireEvent.click(screen.getByRole('button', { name: '知道了' }));
     expect(onDismiss).toHaveBeenCalledWith('a');
     expect(onOpen).not.toHaveBeenCalled();
@@ -46,7 +46,7 @@ describe('ReviewView', () => {
     const onOpen = vi.fn();
     const onDismiss = vi.fn();
     render(<ReviewView insights={[ins('a', { taskIds: ['T1'] })]}
-                       tasks={TASKS} onDismiss={onDismiss} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+                       tasks={TASKS} onDismiss={onDismiss} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     fireEvent.click(screen.getByRole('button', { name: '写周报' }));
     expect(onOpen).toHaveBeenCalledWith('T1');
     expect(onDismiss).not.toHaveBeenCalled();
@@ -54,7 +54,7 @@ describe('ReviewView', () => {
 
   it('关联的任务已经被删掉了就不列它——不是显示一个裸 id', () => {
     render(<ReviewView insights={[ins('a', { taskIds: ['GONE'] })]}
-                       tasks={TASKS} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+                       tasks={TASKS} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.getByText('a 的正文')).toBeTruthy();
     expect(screen.queryByText('GONE')).toBeNull();
   });
@@ -66,7 +66,7 @@ describe('ReviewView', () => {
     render(<ReviewView
       insights={[ins('k1', { createdAt: '2026-08-01T00:00:00.000Z' }),
                  ins('z9', { createdAt: '2026-08-13T00:00:00.000Z' })]}
-      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     const texts = screen.getAllByRole('listitem').map((li) => li.textContent ?? '');
     expect(texts[0]).toContain('z9 的正文');
     expect(texts[1]).toContain('k1 的正文');
@@ -80,7 +80,7 @@ describe('ReviewView', () => {
     render(<ReviewView
       insights={[ins('bad', { createdAt: '不是一个合法的时间' }),
                  ins('good', { createdAt: '2026-08-10T00:00:00.000Z' })]}
-      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     const texts = screen.getAllByRole('listitem').map((li) => li.textContent ?? '');
     expect(texts[0]).toContain('good 的正文');
     expect(texts[1]).toContain('bad 的正文');
@@ -88,13 +88,13 @@ describe('ReviewView', () => {
 
   it('kind 对应的标签会显示——这个分支删掉整行照样能通过其它断言，得单独盯着', () => {
     render(<ReviewView insights={[ins('a', { kind: 'stuck' })]}
-                       tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+                       tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.getByText('卡住了')).toBeTruthy();
   });
 
   it('kind 是 note 时没有对应的中文标签，不渲染一个空标签元素', () => {
     const { container } = render(<ReviewView insights={[ins('a', { kind: 'note' })]}
-                       tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+                       tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(container.querySelector('.ink-review-kind')).toBeNull();
     // 正文必须真的挂着 .ink-review-text 这个类——群青是靠这个类名接到正文上的
     // （见 theme.css.test.ts 那条断言），组件测试这边只查过文字有没有渲染，
@@ -113,40 +113,40 @@ describe('ReviewView：卡住的项目', () => {
   const kid = (id: string, status: Task['status']) => task({ id, parentId: 'p', status });
 
   it('底下一个能动的下一步都没有时，把这个项目列出来', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.getByRole('heading', { name: /卡住的项目/ }).textContent).toContain('1');
     expect(screen.getByRole('button', { name: '装修' })).toBeTruthy();
   });
 
   it('**说清为什么算卡住**——光列标题的话，人点进去也看不出问题在哪', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(document.querySelector('.ink-review-stalled-why')?.textContent).toContain('一个能动的下一步都没有');
   });
 
   it('点标题打开那条任务', () => {
     const onOpen = vi.fn();
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'abandoned')]} onDismiss={vi.fn()} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'abandoned')]} onDismiss={vi.fn()} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     fireEvent.click(screen.getByRole('button', { name: '装修' }));
     expect(onOpen).toHaveBeenCalledWith('p');
   });
 
   it('还有能动的下一步就不列——那个项目没卡住', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'todo')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'todo')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.queryByRole('heading', { name: /卡住的项目/ })).toBeNull();
   });
 
   it('**没有「知道了」**——这一条描述的是此刻的事实，人去动了它自己就没了，不该能被点掉', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.queryByRole('button', { name: '知道了' })).toBeNull();
   });
 
   it('只有卡住的项目、一条 AI 观察都没有时，也不该显示空状态那句话', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.queryByText(/还没有回顾/)).toBeNull();
   });
 
   it('两样都没有才是空状态', () => {
-    render(<ReviewView insights={[]} tasks={[task({ id: 'x' })]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[task({ id: 'x' })]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     expect(screen.getByText(/还没有回顾/)).toBeTruthy();
   });
 });
@@ -168,7 +168,7 @@ describe('ReviewView：这一周该过一遍的', () => {
         now={NOW}
         onDismiss={vi.fn()}
         onOpen={vi.fn()}
-        onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false}
+        onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false}
       />,
     );
     return onGo;
@@ -194,7 +194,7 @@ describe('ReviewView：这一周该过一遍的', () => {
     render(
       <ReviewView
         insights={[]} tasks={[task({ id: 'a' })]} inbox={[]} now={NOW}
-        onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false}
+        onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false}
       />,
     );
     expect(screen.queryByRole('heading', { name: '这一周该过一遍的' })).toBeNull();
@@ -216,7 +216,7 @@ describe('ReviewView：清单那几行带着筛选跳', () => {
       <ReviewView
         insights={[]}
         tasks={[task({ id: 'a', waitingFor: '张老师', updatedAt: daysAgo(12) })]}
-        inbox={[]} now={NOW} onDismiss={vi.fn()} onOpen={vi.fn()} onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false}
+        inbox={[]} now={NOW} onDismiss={vi.fn()} onOpen={vi.fn()} onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /在等别人/ }));
@@ -229,7 +229,7 @@ describe('ReviewView：清单那几行带着筛选跳', () => {
       <ReviewView
         insights={[]}
         tasks={[task({ id: 'a', status: 'later', updatedAt: daysAgo(90) })]}
-        inbox={[]} now={NOW} onDismiss={vi.fn()} onOpen={vi.fn()} onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} reviewing={false}
+        inbox={[]} now={NOW} onDismiss={vi.fn()} onOpen={vi.fn()} onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /搁了超过/ }));
@@ -250,7 +250,7 @@ describe('ReviewView：让 AI 回顾一遍', () => {
     <ReviewView
       insights={[]} tasks={tasks} inbox={[]} now={NOW}
       onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()}
-      onReviewed={over.onReviewed ?? vi.fn()} onReview={over.onReview ?? vi.fn()} reviewing={over.reviewing ?? false}
+      onReviewed={over.onReviewed ?? vi.fn()} onReview={over.onReview ?? vi.fn()} onBoard={vi.fn()} reviewing={over.reviewing ?? false}
     />,
   );
   const btn = () => screen.getByRole('button', { name: /让 AI 回顾一遍/ }) as HTMLButtonElement;
@@ -320,7 +320,7 @@ describe('ReviewView：卡住的项目上那颗「看过了」', () => {
     render(<ReviewView
       insights={[]} tasks={tasks} inbox={[]} now={NOW_REVIEW}
       onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()}
-      onReviewed={onReviewed} onReview={vi.fn()} reviewing={false} />);
+      onReviewed={onReviewed} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
     return onReviewed;
   };
 

@@ -1596,6 +1596,15 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
     return result.ok ? c.json({ ok: true }) : c.json({ error: result.error }, 409);
   });
 
+  // 「AI 总览」按钮走这条。跟拆解/回顾共用同一把单飞锁——它也叫起一个 CLI/API
+  // 子进程，同时跑会乱；board 一次跑 90 秒，期间拆解/回顾会 409，按钮 tooltip
+  // 已经说清「AI 总览运行时拆解/回顾会排队」。board 不带 listId、不收 scope——
+  // 它是全局总览，按清单筛反而失了「总览」语义。见 `workflows/board.md`。
+  app.post('/api/board', (c) => {
+    const result = agentRunner.start('board');
+    return result.ok ? c.json({ ok: true }) : c.json({ error: result.error }, 409);
+  });
+
   // 未知的 /api/* 显式回 JSON 404。**必须注册在所有 API 路由之后**（Hono 按注册顺序
   // 匹配，先命中的先执行）。不写这条的话走 Hono 默认的 notFound——那是 text/plain，
   // 前端 api.ts 的 res.json() 会在报错路径上再抛一个解析错误，把真正的 404 盖掉；

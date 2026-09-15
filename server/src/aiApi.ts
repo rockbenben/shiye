@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentKind } from './expand.js';
 import {
-  agentCwd, nowIso, readInbox, readInsights, readLists, readProposals, readTasks, writeOutboxFile,
+  agentCwd, nowIso, readInbox, readInsights, readLastOutboxError, readLists, readProposals, readTasks, writeOutboxFile,
 } from './store.js';
 
 /**
@@ -172,8 +172,10 @@ const HANDOFF = `
 - 没有任何东西可产出时回空数组 \`[]\`，不要凭空造
 `;
 
-/** 现在几点。API 这条路没有环境可推断，不注入的话 `due` 只能靠模型瞎猜。 */
-const clockLine = (): string => {
+/** 现在几点。API 这条路没有环境可推断，不注入的话 `due` 只能靠模型瞎猜。
+ * CLI 路也用同一份——服务进程的本地时区就是用户视角的「现在」。export 给
+ * `expand.ts` 在拼 prompt 末尾时用，两路字面一致。 */
+export const clockLine = (): string => {
   const d = new Date();
   const week = '日一二三四五六'[d.getDay()];
   return `现在是 ${nowIso()}（本地时间 ${d.toLocaleString('zh-CN')}，周${week}）。所有相对日期以此为准。`;
@@ -189,26 +191,55 @@ const clockLine = (): string => {
  * 并且要在界面上说清楚裁了什么。
  */
 export function buildMessages(kind: AgentKind, scope?: ReviewScope): Array<{ role: 'system' | 'user'; content: string }> {
-  const workflow = kind === 'expand' ? 'workflows/expand.md' : 'workflows/review.md';
-  const system = `${rules('AGENTS.md')}\n\n---\n\n${rules(workflow)}\n${HANDOFF}`;
+  const workflow = kind === 'expand' ? 'workflows/expand.md' : kind === 'board' ? 'workflows/board.md' : 'workflows/review.md';
+  // board 的 HANDOFF 跟 expand/review 不一样：它不写 outbox，要的是一段汇报文本。
+  const handoff = kind === 'board'
+    ? '\n\n---\n\n你这次没有文件系统、不写任何 outbox 文件。把 [workflows/board.md](./workflows/board.md) Step 3 那段「汇报」直接作为消息内容返回，不要包 JSON、不要包 markdown 代码块——纯文本就行。\n'
+    : HANDOFF;
+  const system = `${rules('AGENTS.md')}\n\n---\n\n${rules(workflow)}${handoff}`;
 
   const j = (label: string, v: unknown): string => `## ${label}\n\n${JSON.stringify(v, null, 2)}`;
   const parts = [clockLine(), ''];
+  // 上次 outbox 校验失败的提示——跟 CLI 路对齐，两路都让 AI 看得到上次的错，
+  // self-correcting 才闭合。`readLastOutboxError` 在 store.ts。
+  const lastError = readLastOutboxError();
+  if (lastError) parts.push(lastError, '');
 
   if (kind === 'expand') {
     parts.push(j('data/inbox/ 里 processed: false 的条目', readInbox().filter((x) => !x.processed)));
     parts.push('', j('data/lists/（填 listId 用，对不上就写 null）', readLists()));
+  } else if (kind === 'board') {
+    // board 只看 tasks 和 inbox（见 workflows/board.md Step 1），不读
+    // proposals/insights——它是只读总览，不需要那些。不收 scope：board 是全局总览。
+    parts.push(j('data/tasks/', readTasks()));
+    parts.push('', j('data/inbox/ 里 processed: false 的条目', readInbox().filter((x) => !x.processed)));
   } else {
     // **范围既要说、也要真的筛掉。** 只说不筛，那几百条不相干的任务照样进提示词，
     // 省钱那一半就没了；只筛不说，模型看到的是一份「全部任务」，会拿一份残缺的
     // 数据去下「你手上只有三件事」这种跨任务判断。
     const tasks = readTasks();
     const mine = scope ? tasks.filter((t) => t.listId === scope.listId) : tasks;
-    if (scope) parts.push(scopeLine(scope), '', `（下面这份 data/tasks/ 已经按这个范围筛过了，全部 ${tasks.length} 条里的 ${mine.length} 条。）`, '');
-    parts.push(j('data/tasks/', mine));
-    parts.push('', j('data/lists/', readLists()));
-    parts.push('', j('data/proposals/（你以前提过、他还没处理的建议）', readProposals()));
-    parts.push('', j('data/insights/（你以前提过的跨任务观察）', readInsights()));
+    if (scope) {
+      parts.push(scopeLine(scope), '', `（下面这份 data/tasks/ 已经按这个范围筛过了、全部 ${tasks.length} 条里的 ${mine.length} 条；proposals 和 insights 同样按这个范围筛过了。）`, '');
+      // proposals/insights 也要跟着收窄——它们跟任务一样，按 scope.listId 关联的
+      // taskId 筛。AGENTS.md「跑之前先读 data/proposals/」那节说「已经挂着待决
+      // 建议的任务直接跳过」，dismissed 的更要跳过——全量塞进去的话，模型既可能
+      // 把已忽略的意见再提一遍，也白烧一份 token。
+      const scopeTaskIds = new Set(mine.map((t) => t.id));
+      const proposals = readProposals().filter((p) => !p.dismissed && scopeTaskIds.has(p.taskId));
+      const insights = readInsights().filter((i) => !i.dismissedAt && i.taskIds.some((id) => scopeTaskIds.has(id)));
+      parts.push(j('data/tasks/', mine));
+      parts.push('', j('data/lists/', readLists()));
+      const propNote = proposals.length === 0 ? '（按范围筛过后无）' : '';
+      parts.push('', j(`data/proposals/（你以前提过、他还没处理的建议，按范围筛过了）${propNote}`, proposals));
+      const insNote = insights.length === 0 ? '（按范围筛过后无）' : '';
+      parts.push('', j(`data/insights/（你以前提过的跨任务观察，按范围筛过了）${insNote}`, insights));
+    } else {
+      parts.push(j('data/tasks/', mine));
+      parts.push('', j('data/lists/', readLists()));
+      parts.push('', j('data/proposals/（你以前提过、他还没处理的建议）', readProposals()));
+      parts.push('', j('data/insights/（你以前提过的跨任务观察）', readInsights()));
+    }
   }
 
   return [
@@ -279,6 +310,22 @@ export async function runViaApi(kind: AgentKind, cfg: AiConfig, fetchFn: Fetcher
   const entries = extractJson(await chat(cfg, buildMessages(kind, scope), fetchFn, signal));
   if (entries.length === 0) return false;
   writeOutboxFile(entries);
+  return true;
+}
+
+/**
+ * board 走 API 路：跟 `runViaApi` 不一样，它不写 outbox——board 回的是一段汇报
+ * 文本（见 `workflows/board.md` Step 3），直接当 agent-status 的 message 广播。
+ *
+ * `emitAgentStatus` 从 `expand.ts` 拿——`runBoardViaApi` 在 `startApi` 里被调用，
+ * 那边有 `bus`，通过参数传进来；不在 aiApi.ts 里 import expand.ts（会循环）。
+ */
+export async function runBoardViaApi(
+  cfg: AiConfig, fetchFn: Fetcher, signal: AbortSignal,
+  emit: (msg: string) => void,
+): Promise<true> {
+  const text = await chat(cfg, buildMessages('board'), fetchFn, signal);
+  emit(text.trim() || 'AI 跑完了，但没有产出汇报文本');
   return true;
 }
 

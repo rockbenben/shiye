@@ -36,6 +36,9 @@ interface Props {
   /** 点「让 AI 回顾一遍」：`POST /api/review`，服务端去叫 AI（起 `claude` 子进程，
    *  或者按设置调接口，见 server/src/expand.ts）。 */
   onReview: () => void;
+  /** 点「AI 总览」：`POST /api/board`，只读汇总当前看板状态，不产 outbox、不写卡。
+   *  跟 onReview 共用单飞锁——正在跑任一件时都会 409，按钮置灰。 */
+  onBoard: () => void;
   /**
    * AI 这会儿正在跑。**拆解和回顾共用服务端那把单飞锁**（见 server/src/expand.ts
    * 顶部 `AgentKind` 的注释），所以这个值就是 `agent?.state === 'running'`，
@@ -65,7 +68,7 @@ export function openInsights(insights: Insight[]): Insight[] {
     .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0));
 }
 
-export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onReviewed, onGo, onReview, reviewing }: Props): ReactNode {
+export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onReviewed, onGo, onReview, onBoard, reviewing }: Props): ReactNode {
   const open = openInsights(insights);
   /**
    * **卡住的项目**——GTD 每周回顾专门要查的那一条：一个还挂着的项目，底下
@@ -128,12 +131,25 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
       让 AI 回顾一遍
     </Button>
   );
+  // 「AI 总览」(/board 工作流)：只读、不产 outbox、不写卡——比 review 更轻，
+  // 是「扫一眼现在什么情况」。跟 onReview 共用单飞锁，按钮 state 一致。
+  const boardButton = (
+    <Button
+      size="small"
+      icon={<EyeOutlined />}
+      loading={reviewing}
+      disabled={reviewing}
+      onClick={onBoard}
+    >
+      AI 总览
+    </Button>
+  );
   /* 按钮旁边那句话说的是「点下去会发生什么」，三种状态各说各的实话：正在跑的
      时候报时长（一两分钟不算短，没这句人会以为卡死了，跟「立即拆解」那行提示
      同一个理由）；能点的时候说清「只提建议、不直接改」——这是他点之前最该
      知道的一件事；置灰的时候说清为什么灰，不留一颗没有解释的死按钮。 */
   const runHint = reviewing
-    ? 'AI 正在回顾，一般要一两分钟……'
+    ? 'AI 正在跑，一般要一两分钟……'
     : hasLive
       // **不在这儿列它能改哪几样。** 上一版写的是「只提改期、拆细的建议」，
       // 而 `PROPOSABLE` 有十二个字段（标题/备注/截止/开始/提醒/子任务/标签/
@@ -147,11 +163,12 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
       //
       // 「只」的着力点因此回到它本来该在的地方：**只提建议、不直接改**——那才是
       // 他按下去之前最该知道的一件事。
-      ? '它只提建议，挂在对应的那张卡片上，等你点「接受」才算数——不会直接改任务。'
-      : '现在一条还挂着的任务都没有，没什么可回顾的。';
+      ? '「回顾」只提建议、挂在对应的那张卡片上，等你点「接受」才算数——不会直接改任务。「总览」更轻，只给一段汇报文本、不写任何卡。'
+      : '现在一条还挂着的任务都没有，没什么可回顾的。点「AI 总览」可以扫一眼现状。';
   const runBlock = (
     <p className="ink-review-nudge ink-review-run">
       {runButton}
+      {boardButton}
       <span className="ink-review-run-hint">{runHint}</span>
     </p>
   );

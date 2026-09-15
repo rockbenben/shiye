@@ -52,6 +52,22 @@ const noop = () => {};
  */
 const goto = (label: string) => fireEvent.click(screen.getByRole('tab', { name: label }));
 
+/**
+ * 「模型」那格是 AutoComplete，它的 `placeholder` 渲染成旁边一个占位 span、**不落
+ * 在 input 的 `placeholder` 属性上**（rc-select 只在收到 React element 形式的输入控件
+ * 时把 placeholder 拷过去），所以 `getByPlaceholderText` 找不到它，按表单项里的
+ * input 找——跟这个文件里别的地方找「专注时长」那种写法同一条路子。
+ */
+const modelInput = () =>
+  (screen.getByText('模型').closest('.ant-form-item') as HTMLElement).querySelector('input')! as HTMLInputElement;
+
+/**
+ * 下拉里那条**看得见**的选项，按它显示的文字找。rc-select 还会把选项再渲染一份藏进
+ * 0 高 0 宽的盒子里（给 aria-activedescendant 用的），`getByRole('option')` 命中的
+ * 全是那份——点它没有任何效果，选中值压根不动。
+ */
+const modelOption = (label: string) => screen.getByText(label, { selector: '.ant-select-item-option-content' });
+
 // 「导航显示」那一节的三个 prop——这几条测试盯的都是别的东西（导出、保存、
 // 读不到设置时不渲染表单），给一份最小的固定值就行，不用为每条各造一份。
 const NAV = {
@@ -485,7 +501,7 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
 
     const url = screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement;
     expect(url.value).toBe('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
-    expect((screen.getByPlaceholderText('gemini-3.7-flash') as HTMLInputElement).value).toBe('gemini-3.7-flash');
+    expect(modelInput().value).toBe('gemini-3.7-flash');
   });
 
   /**
@@ -498,7 +514,7 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
 
     const url = screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement;
     expect(url.value).toBe('http://127.0.0.1:11434/v1/chat/completions');
-    expect((screen.getByPlaceholderText('gemini-3.7-flash') as HTMLInputElement).value).toBe('我自己填的');
+    expect(modelInput().value).toBe('我自己填的');
   });
 
   it('地址框照样能自己写——预置只是起点，不是白名单', () => {
@@ -517,8 +533,38 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
     fireEvent.click(screen.getByText('DeepSeek'));
     expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
       .toBe('https://api.deepseek.com/chat/completions');
-    expect((screen.getByPlaceholderText('gemini-3.7-flash') as HTMLInputElement).value)
+    expect(modelInput().value)
       .toBe('deepseek-flash');
+  });
+
+  /**
+   * 「模型」那格是 AutoComplete：地址对上目录里某一家的端点，就出它家那份模型清单
+   * —— 地址是手填改过的，反查不到就出不来候选，但那格照样能自由输入（下面两条钉住
+   * 这两头，免得哪天改成下拉之后就拦掉手填了）。
+   */
+  it('点预置之后，「模型」那格出的是这一家自己的模型清单', () => {
+    open({ ...settings, aiMode: 'api' });
+    fireEvent.click(screen.getByText('DeepSeek'));
+    fireEvent.mouseDown(modelInput());
+    expect(modelOption('DeepSeek Flash')).toBeTruthy();
+    expect(modelOption('DeepSeek V4 Pro')).toBeTruthy();
+  });
+
+  it('点候选项，填进框里的是原样发接口的那个 id', () => {
+    open({ ...settings, aiMode: 'api' });
+    fireEvent.click(screen.getByText('DeepSeek'));
+    fireEvent.mouseDown(modelInput());
+    fireEvent.click(modelOption('DeepSeek V4 Pro'));
+    expect(modelInput().value).toBe('deepseek-v4-pro');
+  });
+
+  it('手填的地址查不到候选，但模型名照样能自己写', () => {
+    open({ ...settings, aiMode: 'api', aiBaseUrl: 'http://192.168.1.9:8080/v1' });
+    const model = modelInput() as HTMLInputElement;
+    fireEvent.mouseDown(model);
+    expect(screen.queryByRole('option')).toBeNull();
+    fireEvent.change(model, { target: { value: '本地装的模型' } });
+    expect(model.value).toBe('本地装的模型');
   });
 
   /**
@@ -555,13 +601,13 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
     fireEvent.click(screen.getByText('字节方舟 Coding Plan'));
     expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
       .toBe('https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions');
-    expect((screen.getByPlaceholderText('gemini-3.7-flash') as HTMLInputElement).value)
+    expect(modelInput().value)
       .toBe('doubao-seed-evolving');
 
     fireEvent.click(screen.getByText('阿里百炼 Token Plan'));
     expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
       .toBe('https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions');
-    expect((screen.getByPlaceholderText('gemini-3.7-flash') as HTMLInputElement).value)
+    expect(modelInput().value)
       .toBe('qwen3.8-flash');
   });
 
@@ -627,7 +673,7 @@ describe('设置 → AI 拆解：测试连接', () => {
 
   it('把此刻框里那三格送出去，不是存着的那份', async () => {
     open(apiCfg);
-    fireEvent.change(screen.getByPlaceholderText('gemini-3.7-flash'), { target: { value: '刚改的模型' } });
+    fireEvent.change(modelInput(), { target: { value: '刚改的模型' } });
     fireEvent.click(btn());
     await waitFor(() => expect(testAi).toHaveBeenCalled());
     expect(testAi.mock.calls[0][0]).toEqual({ baseUrl: 'https://x.test/v1', model: '刚改的模型', apiKey: '••••ijkl' });

@@ -1,12 +1,12 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
-import { Alert, App as AntApp, Button, ConfigProvider, Form, Input, InputNumber, Modal, Radio, Select, Space, Switch, Tag, Typography } from 'antd';
+import { Alert, App as AntApp, AutoComplete, Button, ConfigProvider, Form, Input, InputNumber, Modal, Radio, Select, Space, Switch, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { api } from '../api.js';
 import type { AiCliKind, List, Settings, WeekStart } from '../types.js';
 import { NAV_MODE_LABEL, type NavMode, type NavModes } from '../lib/navVisibility.js';
 import { NAV_GROUPS, NAV_GROUP_LABEL, RAIL_GROUPS, type NavGroup } from '../lib/views.js';
 import { REMIND_PRESETS } from '../lib/remindPreset.js';
-import { visibleAiPresets } from '../lib/aiPresets.js';
+import { modelSuggestionsFor, visibleAiPresets } from '../lib/aiPresets.js';
 import { getShowCodingPlans, setShowCodingPlans } from '../lib/showCodingPlans.js';
 import { boardLocalTheme } from '../theme.js';
 import { ServerSetup } from './ServerSetup.js';
@@ -616,11 +616,12 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
                       )}
                     </div>
                   </Form.Item>
-                  <Form.Item label="模型" help="原样发给接口。各家叫法不一样，照它文档里写的填。">
-                    <Input
+                  <Form.Item label="模型" help="原样发给接口。地址落在目录里某一家的端点上，就出它家那份模型清单；地址是自己填的，这里照样能自己写。">
+                    <AutoComplete
                       value={draft.aiModel}
                       placeholder="gemini-3.7-flash"
-                      onChange={(e) => { setDraft({ ...draft, aiModel: e.target.value }); setAiTest({ testing: false }); }}
+                      options={[...modelSuggestionsFor(draft.aiBaseUrl)]}
+                      onChange={(v: string) => { setDraft({ ...draft, aiModel: v }); setAiTest({ testing: false }); }}
                     />
                   </Form.Item>
                   <Form.Item label="密钥" help="只存在这台机器上，读回来的是打码后的形状（改了才会覆盖）。本机跑的 Ollama / LM Studio 不要密钥，留空就行。">

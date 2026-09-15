@@ -6,6 +6,10 @@
 // 形态按各 provider 的 protocol 给：claude / gemini 是【原生协议】的形状，走
 // OpenAI 兼容层时不适用。怎么发（流式/超时/重试/max_tokens）仍是各 app 自己的事。
 // 不含机器翻译类 provider。
+//
+// 例外一行：gemini-openai 不在 registry 里 —— 它是 Google 官方的 OpenAI 兼容面
+// （/v1beta/openai/chat/completions），由同步脚本从原生 gemini 行合成，给只讲
+// Chat Completions 的消费方用。见同步脚本里那条的注释。
 
 export interface CatalogEndpoint {
   /** 区域/产品线标签，如 "Mainland (CN)" / "International" */
@@ -195,6 +199,27 @@ export const PROVIDER_CATALOG: readonly CatalogProvider[] = [
       { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash", thinking: true, thinkingLevels: ["minimal","low","medium","high"], thinkingWire: {"off":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"minimal"}}},"low":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"low"}}},"medium":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"medium"}}},"high":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"high"}}}} },
       { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash", thinking: true, thinkingLevels: ["minimal","low","medium","high"], thinkingWire: {"off":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"minimal"}}},"low":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"low"}}},"medium":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"medium"}}},"high":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"high"}}}} },
       { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite", thinking: true, thinkingLevels: ["minimal","low","medium","high"], thinkingWire: {"off":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"minimal"}}},"low":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"low"}}},"medium":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"medium"}}},"high":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"high"}}}} },
+    ],
+  },
+  {
+    key: "gemini-openai",
+    label: "Google AI Studio",
+    category: "llm",
+    protocol: "openai",
+    docs: "https://ai.google.dev/gemini-api/docs/openai",
+    apiKeyUrl: "https://aistudio.google.com/app/api-keys",
+    defaultModel: "gemini-3.7-flash",
+    canDisableThinking: true,
+    directBlocked: false,
+    endpoints: [
+      { label: "OpenAI compatibility", url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai" },
+    ],
+    models: [
+      { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro (Preview)" },
+      { id: "gemini-3.7-flash", name: "Gemini 3.7 Flash" },
+      { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash" },
+      { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+      { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite" },
     ],
   },
   {

@@ -1,11 +1,23 @@
-# 打三个平台的桌面版产物。**这个 workflow 从来没有真的跑过**——跟 ci.yml 顶上
-# 那句同一个道理，仓库还没有远程。第一次推 tag 才会验证它，那次红了是预期内的。
+# 打三个平台的桌面版产物，并挂到 GitHub Release 上。
+#
+# 历史：v0.1.0 / v0.1.1 两个 tag 这个 workflow 都跑绿过，但当时最后一步只有
+# upload-artifact——包只放在 Actions 页的 Artifacts 里（要登录、90 天过期），
+# Releases 页面是空的。下面「发到 Release」那一步就是补这个缺的。
 #
 # ── 为什么必须是矩阵，不能一台机器全包 ──
 #
 # **macOS 的包只能在 macOS 上打。** dmg 要 hdiutil，.icns 要 iconutil，都是系统
 # 自带的东西，Windows/Linux 上没有替身。Linux 的 AppImage 理论上能在别的系统上
 # 用容器打，但那是另一套复杂度。所以三个 runner 各打各的，谁也不替谁。
+#
+# ── Release 这一步为什么每个平台各自发，不汇总成一个 job ──
+#
+# electron-builder 官方文档给 GitHub Actions 的多平台模式就是这样：矩阵的每个
+# job 打完直接用 softprops/action-gh-release 往**同一个 tag 的 Release** 上挂
+# （这个 action 对「Release 已存在」的处理是更新它，不是报错），不互相等。
+# 这正好配合下面 fail-fast: false 的态度——一个平台红了，另外两个照打照发，
+# 发布时手上有两个能下的包，比三个都没有强。三个 job 完成时刻差着几分钟，
+# 抢建同一个 Release 的概率很低，抢了也是「更新」语义。
 #
 # ── 为什么不跑测试 ──
 #
@@ -30,17 +42,24 @@
 
 name: Release
 
+# 建 Release 要写仓库内容；仓库设置里 Actions 权限若是只读，这条会让 workflow
+# 级别拿到 contents: write（softprops 官方 README 的要求）。
+permissions:
+  contents: write
+
 on:
   push:
     tags:
       - 'v*'
-  # 手动也能跑一次，不用为了试它专门打一个 tag。
+  # 手动也能跑一次，不用为了试它专门打一个 tag。手动跑没有 tag，下面发 Release
+  # 那步会被 if 收住——只出 Artifacts，等于一次免费的打包演练。
   workflow_dispatch:
 
 jobs:
   build:
     strategy:
-      # 一个平台挂了，另外两个照打完——发布时手上有两个能用的包，比三个都没有强。
+      # 一个平台挂了，另外两个照打完照发 Release——发布时手上有两个能用的包，
+      # 比三个都没有强（见顶上「为什么各自发」）。
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
@@ -62,6 +81,10 @@ jobs:
       # 里面已经含 npm run build（web + server）和 desktop 的 tsc。
       - run: npm run dist:desktop
 
+      # 留一份在 Actions Artifacts（90 天）：发布后若有人报「这个包装不上」，
+      # 不用现打一遍就能拿回当次的包和中间产物对照。真正给人下载的是下面 Release
+      # 那步挂的资产，不是这里。
+      #
       # 只捞最终产物，不要 win-unpacked / mac 那个 .app 目录——那两个是打包
       # 中间态，几百 MB，上传上去没人会去下。
       - uses: actions/upload-artifact@v4
@@ -69,6 +92,29 @@ jobs:
           name: desktop-${{ matrix.os }}
           if-no-files-found: error
           path: |
+            desktop/release/*.exe
+            desktop/release/*.zip
+            desktop/release/*.dmg
+            desktop/release/*.AppImage
+
+      # 挂到这个 tag 的 GitHub Release。electron-builder 官方文档给多平台矩阵的
+      # 模式就是每个 job 各自往同一个 Release 发。
+      #
+      # v3 不是追新：**v2 已停止维护，跑在 Actions 淘汰中的 Node 20 runtime 上**
+      # （softprops 自己 README 写的：v2.6.2 是最后一个 v2）。
+      #
+      # 文件名是中文带空格（「办事师爷 Setup 0.1.1.exe」）也照发——GitHub 资产
+      # 支持，跟本地打出来的名字保持一致，不在这里另起一套英文名。
+      # glob 匹配不到别的平台的扩展名是正常的（if 只在真有 tag 时才跑这一步，
+      # fail_on_unmatched_files 默认 false，缺一个模式不报错）。
+      #
+      # 重跑幂等：同一个 tag 重跑，action 发现 Release 已存在就更新它；同名资产
+      # 会被覆盖。
+      - uses: softprops/action-gh-release@v3
+        if: github.ref_type == 'tag'
+        with:
+          generate_release_notes: true
+          files: |
             desktop/release/*.exe
             desktop/release/*.zip
             desktop/release/*.dmg

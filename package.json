@@ -1,8 +1,8 @@
 {
   "name": "shiye",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
-  "description": "办事师爷 · 随手记一句话，AI 拆成任务，到点提醒 · 365 开源计划 #035",
+  "description": "办事师爷 · 随手记一句话，AI 拆成任务，到点提醒",
   "license": "MIT",
   "author": "rockbenben",
   "repository": {
@@ -30,7 +30,7 @@
     "dist:desktop": "npm run build && npm run build -w desktop && electron-builder --config desktop/electron-builder.yml"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.5.0",
+    "@capacitor/cli": "^8.5.2",
     "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^6.0.4",
     "concurrently": "^10.0.5",
@@ -39,8 +39,8 @@
     "vitest": "^4.1.11"
   },
   "dependencies": {
-    "@capacitor/android": "^8.5.0",
-    "@capacitor/core": "^8.5.0",
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
     "@capacitor/local-notifications": "^8.3.1",
     "@capacitor/preferences": "^8.0.1"
   }

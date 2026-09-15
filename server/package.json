@@ -12,11 +12,11 @@
     "@hono/node-server": "^2.0.12",
     "chinese-days": "^1.5.9",
     "cross-spawn": "^7.0.6",
-    "hono": "^4.12.32"
+    "hono": "^4.13.7"
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",
-    "@types/node": "^24.10.1",
+    "@types/node": "^24.13.4",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2"
   }

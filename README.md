@@ -117,17 +117,23 @@
 的包只能在那个平台上打**（macOS 的 dmg 要 hdiutil、.icns 要 iconutil，Windows 上
 没有替身），三份一起出要靠 `.github/workflows/release.yml` 那个矩阵。
 
-Windows：
+Windows：`shiye-<版本号>-win` 起头的两份，**名字只差扩展名**——`.zip` 是免安装、
+`.exe` 是安装版。
 
-- **免安装版**（`办事师爷-<版本号>-win.zip`）——不用装，解压出来双击里面的
+- **免安装版**（`shiye-<版本号>-win.zip`）——不用装，解压出来双击里面的
   `办事师爷.exe` 就跑，删掉整个文件夹就是卸载。**解压这一步只做一次**，之后每次
   启动都是一秒内出窗口。
-- **安装版**（`办事师爷 Setup <版本号>.exe`）——普通 Windows 安装向导，装完开始菜单/
+- **安装版**（`shiye-<版本号>-win.exe`）——普通 Windows 安装向导，装完开始菜单/
   桌面上有快捷方式。原生通知要走这一份（免安装版没有开始菜单快捷方式）。
 
-macOS：`.dmg`（拖进「应用程序」）和 `.zip`，**Apple Silicon 和 Intel 各一份**，
-文件名里带 `arm64` 的是前者。Linux：`.AppImage`（`chmod +x` 之后
-双击就跑，删掉那个文件就是卸载）。
+macOS：`shiye-<版本号>-mac-arm64.dmg`（拖进「应用程序」）和同名 `.zip`，
+**Apple Silicon 和 Intel 各一份**，文件名里带 `arm64` 的是前者、带 `x64` 的是 Intel。
+Linux：`shiye-<版本号>-linux.AppImage`（`chmod +x` 之后双击就跑，
+删掉那个文件就是卸载）。
+
+**产物名一律 ASCII。** 包**内**的应用名还是「办事师爷」，只是下载文件名不带中文——
+GitHub 会把非 ASCII 从 Release 资产名里抹掉（v0.1.2 就是撞在这上面，包传上去变成了
+`-0.1.2-win.zip`），细节写在 `desktop/electron-builder.yml` 的 artifactName 那节。
 
 **都没有签名**——个人使用买证书不划算，但三个平台的后果不一样：
 

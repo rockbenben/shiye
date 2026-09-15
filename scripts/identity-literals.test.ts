@@ -47,6 +47,19 @@ const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(
 const main = stripComments(read('desktop', 'src', 'main.ts'));
 const yml = read('desktop', 'electron-builder.yml').replace(/^\s*#.*$/gm, '');
 
+// 按顶级块切开（行首无缩进的 `xxx:`）。artifactName 那一对要按块取：
+// win / mac / linux 三个块里各有一条，跨块的宽正则会把它们串成一条。
+const ymlSections = (() => {
+  const marks = [...yml.matchAll(/^(\w[\w-]*):\s*$/gm)];
+  return Object.fromEntries(
+    marks.map((m, i) => {
+      const start = (m.index ?? 0) + m[0].length;
+      const end = i + 1 < marks.length ? marks[i + 1]!.index ?? yml.length : yml.length;
+      return [m[1], yml.slice(start, end)];
+    })
+  ) as Record<string, string>;
+})();
+
 it('main.ts 的 AUMID 跟 electron-builder.yml 的 appId 是同一个字符串', () => {
   const calls = [...main.matchAll(/app\.setAppUserModelId\('([^']+)'\)/g)];
   // 引号可有可无：`appId: "com.x.y"` 和 `appId: com.x.y` 在 YAML 里是同一个值。
@@ -190,4 +203,81 @@ it('Node 最低版本：package.json / CI / README 三处说的是同一个大�
   const said = [...readme.matchAll(/要 Node (\d+)/g)].map((m) => m[1]);
   expect(said.length, 'README 里没找到「要 Node N 以上」那句——改写了就把这条守卫的锚点一起改').toBe(1);
   expect(said[0], 'README 说的 Node 版本跟 engines 对不上——照它装的人第一步就被 npm 拒').toBe(want);
+});
+
+/**
+ * 第五对：**产物文件名**，跟「两份必须相等」这个形状不同——是**三份都必须满足
+ * 一个外部系统的硬约束**。
+ *
+ * `desktop/electron-builder.yml` 里 win / mac / linux 各有一条 `artifactName`，
+ * README 和 `desktop/冒烟清单.md` 抄的是同一套名字。
+ *
+ * 硬约束来自 GitHub：**它会把非 ASCII 从 Release 资产名里抹掉。** v0.1.2 是第一次
+ * 真发出 Release（之前两次只有 upload-artifact，Releases 页面是空的），
+ * electron-builder 打出来的是 `办事师爷-0.1.2-win.zip`（`sanitizedProductName`
+ * 原样返回中文，不是 builder 在动手），softprops 的日志也逐字打出了中文，
+ * 但传上去变成 `-0.1.2-win.zip`——前缀四个字和 ` Setup ` 里的两个空格都没了，
+ * 于是安装包叫 `Setup.0.1.2.exe`，一个 148 MB、看不出是哪个应用的包。
+ * 把它改回 `${productName}` 这种「读起来更友好」的写法没有任何一步会报错，
+ * 所以下面钉死是 ASCII。
+ */
+it('artifactName 三个平台都是纯 ASCII，不用 ${productName}', () => {
+  const sections: Record<'win' | 'mac' | 'linux', { name: string; body: string }> = {} as never;
+
+  for (const k of ['win', 'mac', 'linux'] as const) {
+    const body = ymlSections[k];
+    expect(body, `${k} 块在 electron-builder.yml 里找不到`).toBeTruthy();
+    // 两侧都要先断「真的匹配到了」：正则一旦失效，后面的 toMatch / toContain
+    // 拿到 undefined 会抛错信息，但断言本身会先绿——同上面 appId 那条的教训。
+    const m = body!.match(/^\s{2}artifactName:\s*(\S+)\s*$/m);
+    expect(m, `${k} 块里没有 artifactName`).toBeTruthy();
+    sections[k] = { name: m![1], body: body! };
+  }
+
+  for (const [k, { name }] of Object.entries(sections)) {
+    expect(
+      name,
+      `${k} 的 artifactName 带非 ASCII——GitHub 会把它从资产名里抹掉（v0.1.2 的事故）`
+    ).toMatch(/^[ -~]*$/);
+    expect(name, `${k} 用了 \${productName}，它展开成 productName（办事师爷）`).not.toContain('${productName}');
+    expect(name, `${k} 的 artifactName 里出现了 \${productName} 展开成的 productName 本身`).not.toContain('办事师爷');
+  }
+
+  // 出多份架构的平台，名字里必须自己带 ${arch}：用户指定了 artifactName 之后
+  // `isUserForced` 为真，builder 不再自动补架构后缀（platformPackager.js 的
+  // expandArtifactNamePattern 那句 `!isUserForced && …`）。v0.1.2 那次 x64 的
+  // dmg 只有版本号、arm64 的带 `-arm64`，两个 dmg 分不出哪个是哪个。
+  for (const [k, { name, body }] of Object.entries(sections)) {
+    const archs = [...body.matchAll(/^\s*arch:\s*\[([^\]]+)\]/gm)]
+      .map((m) => m[1].split(',').map((s) => s.trim()))
+      .flat();
+    if (new Set(archs).size > 1) {
+      expect(name, `${k} 出了 ${archs.join(' / ')}，artifactName 必须带 \${arch}，否则产物同名互盖`).toContain('${arch}');
+    }
+  }
+});
+
+it('README 和冒烟清单写的产物名不带中文，跟 artifactName 那套一致', () => {
+  const readme = read('README.md');
+  const smoke = read('desktop', '冒烟清单.md');
+  const both = readme + '\n' + smoke;
+
+  // v0.1.2 那个形状的旧名字，两份文档里都不该再出现。
+  expect(both, '文档里还留着中文起头的产物名').not.toMatch(/办事师爷[- ]*<版本号>|办事师爷 ?Setup|办事师爷-0\.\d/);
+
+  // 现在的名字得真的写进去——上面那条 not.toMatch 单独成立时，文档把这一节
+  // 整个删掉也是绿的，而删掉就是「照文档装的人找不到包」。
+  for (const want of [
+    'shiye-<版本号>-win.zip',
+    'shiye-<版本号>-win.exe',
+    'shiye-<版本号>-mac-arm64.dmg',
+    'shiye-<版本号>-linux.AppImage',
+  ]) {
+    expect(both, `文档里没写到 ${want} 这个名字`).toContain(want);
+  }
+
+  // README 说「名字只差扩展名」那一句是免安装版和安装版的唯一区分方式，
+  // 两条得都在。
+  expect(readme).toContain('shiye-<版本号>-win.zip');
+  expect(readme).toContain('shiye-<版本号>-win.exe');
 });

@@ -88,8 +88,8 @@ npmRebuild: false
 # 发布是 release workflow 用 softprops/action-gh-release 直接挂到 GitHub Release
 # 的（upload-artifact 只留 90 天的调试档）。所以这里明确关掉：`app-update.yml`
 # 和 `latest.yml` 那两份假的更新元数据也跟着不再生成（它们本来就名不副实——
-# `latest.yml` 里的文件名是 `desktop-setup-0.1.0.exe`，而真实产物叫
-# 「办事师爷 Setup 0.1.0.exe」，来自 `desktop/package.json` 的 `name: "desktop"`）。
+# `latest.yml` 里的文件名是 `desktop-setup-0.1.0.exe`，而真实产物当时叫
+# 「办事师爷 Setup 0.1.0.exe」——见下面 artifactName 那节，现在改成 ASCII 了）。
 publish: null
 
 # 全部相对仓库根（electron-builder 管这叫 projectDir，就是跑 npm run dist:desktop
@@ -151,7 +151,37 @@ extraResources:
   - from: workflows
     to: workflows
 
+# ── artifactName：全部用 ASCII ──
+#
+# `artifactName` 不带扩展名，扩展名由 electron-builder 自己拼。
+#
+# **不能写 `${productName}`（办事师爷）——GitHub 会把非 ASCII 从资产名里抹掉。**
+# 这是 v0.1.2 第一次真发出 Release 才撞到的（v0.1.0 / v0.1.1 那两次只有
+# upload-artifact，Releases 页面是空的）：electron-builder 打出来的文件**名字是对的**
+# （`办事师爷-0.1.2-win.zip`，`sanitizedProductName` 原样返回中文，不是 builder 在动手），
+# softprops 的日志也逐字打出了中文（`⬆️ Uploading 办事师爷-0.1.2-win.zip...`、
+# `✅ Uploaded ...`），但传到 GitHub 上就变成 `-0.1.2-win.zip`——
+# 前缀四个字没了，空格也没了（` Setup ` → `.`），于是安装包叫 `Setup.0.1.2.exe`。
+# 日志里那句 `✏️ Restoring asset label to ...` 是它上传后用改名接口想改回去，
+# 报了成功但没生效。用原始 API JSON 的字节核过（纯 ASCII），不是终端编码的假象。
+#
+# 那个 `-0.1.2-win.zip` 是 148 MB 的包，下载下来看不出是哪个应用。
+# 于是这里显式给全 ASCII 的名字：`shiye-<version>-<平台>[-<架构>]`。
+# README 和 `desktop/冒烟清单.md` 抄的也是这一份，`scripts/identity-literals.test.ts`
+# 守两边一致。
+#
+# `${arch}` 在 mac 这边要留：两个架构各出一份，而 `artifactName` 用户指定之后
+# `isUserForced` 为真，arch 后缀**不再被自动省略**（`platformPackager.js` 的
+# `expandArtifactNamePattern` 那句 `!isUserForced && …`）——以前靠 builder 自动补的那个
+# `-arm64` 只在 arm64 那份上出现，x64 那份是 `办事师爷-0.1.2.dmg`，两个 dmg 一个叫
+# `0.1.2.dmg` 一个叫 `0.1.2-arm64.dmg`，看不出哪个是哪个。写进 pattern 之后两边都带。
+# 顺手修掉了这个。
+#
+# linux 只出 x64，不用写 `${arch}`：写了会变成 `x86_64`（`getArtifactArchName` 对
+# AppImage 专门把 x64 映射成 `x86_64`），多一个读者要猜的词。
+
 win:
+  artifactName: shiye-${version}-win
   target:
     # **免安装那一份是 zip，不是 portable——这一条是实测撤下来的，别凭直觉换回去。**
     #
@@ -229,6 +259,7 @@ protocols:
 # Linux 和 Windows 目前都只出 x64，那是有意的：ARM 的 Windows 笔记本和 ARM 的
 # Linux 桌面在这个应用的实际用户里都还不存在。哪天有了，照这里的写法加。
 mac:
+  artifactName: shiye-${version}-mac-${arch}
   target:
     - target: dmg
       arch: [arm64, x64]
@@ -247,6 +278,7 @@ mac:
 # 托盘图标在 Linux 上不保证有：它走 StatusNotifier/AppIndicator，GNOME 默认不带
 # （要装扩展）。窗口关掉之后可能就真的找不回来了——这条只能在真机上验。
 linux:
+  artifactName: shiye-${version}-linux
   target:
     - AppImage
   category: Utility

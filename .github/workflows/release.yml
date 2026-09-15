@@ -103,10 +103,15 @@ jobs:
       # v3 不是追新：**v2 已停止维护，跑在 Actions 淘汰中的 Node 20 runtime 上**
       # （softprops 自己 README 写的：v2.6.2 是最后一个 v2）。
       #
-      # 文件名是中文带空格（「办事师爷 Setup 0.1.1.exe」）也照发——GitHub 资产
-      # 支持，跟本地打出来的名字保持一致，不在这里另起一套英文名。
-      # glob 匹配不到别的平台的扩展名是正常的（if 只在真有 tag 时才跑这一步，
-      # fail_on_unmatched_files 默认 false，缺一个模式不报错）。
+      # 资产名全是 ASCII（`shiye-0.1.3-win.exe` 这种），跟本地打出来的名字一致，
+      # 不在这里另起一套。glob 匹配不到别的平台的扩展名是正常的（if 只在真有 tag
+      # 时才跑这一步，fail_on_unmatched_files 默认 false，缺一个模式不报错）。
+      #
+      # **别把 artifactName 改成带中文的。** v0.1.2 是第一次真发出 Release，实测
+      # GitHub 会把非 ASCII 从资产名里抹掉：builder 打出来的是
+      # `办事师爷-0.1.2-win.zip`（日志逐字打印得出来），传上去变成 `-0.1.2-win.zip`，
+      # softprops 那句 `Restoring asset label to ...` 报成功但改不回去。原因和
+      # 现在的命名都在 `desktop/electron-builder.yml` 的 artifactName 那节。
       #
       # 重跑幂等：同一个 tag 重跑，action 发现 Release 已存在就更新它；同名资产
       # 会被覆盖。

@@ -1,60 +1,72 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeListPatch, sanitizeFolderPatch, checkListPatch, checkFolderPatch, INK_AI } from './list.js';
+import { checkListPatch, checkFolderPatch, INK_AI } from './list.js';
 import type { SanitizeFail, SanitizeOk } from './task.js';
 import type { ListPatch, FolderPatch } from './list.js';
 
+// 测试用的「只要值、不要原因」投影：路由那边个个都要 field/reason 去回 400，
+// 产品代码里没有只要 null 的调用方（旧的 sanitize* 包装因此已删），
+// 但这批白名单断言只关心「收了 / 拒了」，本地投影一下保持一行一条。
+const listPatchOf = (body: unknown): ListPatch | null => {
+  const r = checkListPatch(body);
+  return r.ok ? r.value : null;
+};
+const folderPatchOf = (body: unknown): FolderPatch | null => {
+  const r = checkFolderPatch(body);
+  return r.ok ? r.value : null;
+};
+
 describe('清单白名单', () => {
   it('已知字段都能改', () => {
-    expect(sanitizeListPatch({ name: '工作' })?.name).toBe('工作');
-    expect(sanitizeListPatch({ color: '#8B5E34' })?.color).toBe('#8B5E34');
-    expect(sanitizeListPatch({ folderId: 'f1' })?.folderId).toBe('f1');
-    expect(sanitizeListPatch({ folderId: null })?.folderId).toBeNull();
-    expect(sanitizeListPatch({ order: 3 })?.order).toBe(3);
-    expect(sanitizeListPatch({ archived: true })?.archived).toBe(true);
+    expect(listPatchOf({ name: '工作' })?.name).toBe('工作');
+    expect(listPatchOf({ color: '#8B5E34' })?.color).toBe('#8B5E34');
+    expect(listPatchOf({ folderId: 'f1' })?.folderId).toBe('f1');
+    expect(listPatchOf({ folderId: null })?.folderId).toBeNull();
+    expect(listPatchOf({ order: 3 })?.order).toBe(3);
+    expect(listPatchOf({ archived: true })?.archived).toBe(true);
   });
 
   it('白名单外的字段整条拒收，不是悄悄过滤——PATCH 原来是裸展开，这里补的就是这道信任边界', () => {
-    expect(sanitizeListPatch({ name: '工作', 别的字段: 1 })).toBeNull();
+    expect(listPatchOf({ name: '工作', 别的字段: 1 })).toBeNull();
     // id 不在白名单里：不是「传了不采纳」，是整条请求直接拒收。
-    expect(sanitizeListPatch({ id: '篡改' })).toBeNull();
+    expect(listPatchOf({ id: '篡改' })).toBeNull();
   });
 
   it('名字为空或纯空白拒收', () => {
-    expect(sanitizeListPatch({ name: '' })).toBeNull();
-    expect(sanitizeListPatch({ name: '   ' })).toBeNull();
+    expect(listPatchOf({ name: '' })).toBeNull();
+    expect(listPatchOf({ name: '   ' })).toBeNull();
   });
 
   it('颜色必须是 #RRGGBB', () => {
-    expect(sanitizeListPatch({ color: '#000' })).toBeNull();
-    expect(sanitizeListPatch({ color: 'red' })).toBeNull();
-    expect(sanitizeListPatch({ color: 123 })).toBeNull();
+    expect(listPatchOf({ color: '#000' })).toBeNull();
+    expect(listPatchOf({ color: 'red' })).toBeNull();
+    expect(listPatchOf({ color: 123 })).toBeNull();
   });
 
   it('群青不能当清单色，大小写都挡', () => {
-    expect(sanitizeListPatch({ color: INK_AI })).toBeNull();
-    expect(sanitizeListPatch({ color: '#2e3ed4' })).toBeNull();
+    expect(listPatchOf({ color: INK_AI })).toBeNull();
+    expect(listPatchOf({ color: '#2e3ed4' })).toBeNull();
   });
 
   it('folderId 只收字符串或 null', () => {
-    expect(sanitizeListPatch({ folderId: 1 })).toBeNull();
+    expect(listPatchOf({ folderId: 1 })).toBeNull();
   });
 
   it('order 必须是有限数字', () => {
-    expect(sanitizeListPatch({ order: '第一' })).toBeNull();
-    expect(sanitizeListPatch({ order: Number.NaN })).toBeNull();
+    expect(listPatchOf({ order: '第一' })).toBeNull();
+    expect(listPatchOf({ order: Number.NaN })).toBeNull();
   });
 
   it('archived 必须是布尔值', () => {
-    expect(sanitizeListPatch({ archived: 'true' })).toBeNull();
+    expect(listPatchOf({ archived: 'true' })).toBeNull();
   });
 
   it('filter 为 null 合法，表示「这不是智能清单」', () => {
-    expect(sanitizeListPatch({ filter: null })?.filter).toBeNull();
+    expect(listPatchOf({ filter: null })?.filter).toBeNull();
   });
 
   it('filter 形状对就收——嵌套结构，七个必填字段都要齐', () => {
     const filter = { status: ['todo'], listIds: [], tags: ['紧急'], priority: [1, 2], contexts: ['computer'], dueWithinDays: 3, hasWaitingFor: false, text: '', tagsAll: false, noList: false, noTag: false, noDue: false, isRepeating: false, notStarted: false, estimateWithinMinutes: null, not: [], or: [] };
-    expect(sanitizeListPatch({ filter })?.filter).toEqual(filter);
+    expect(listPatchOf({ filter })?.filter).toEqual(filter);
   });
 
   it('**noList / noTag / noDue 缺了不算错，落 false**——它们是后加的，加之前存下来的智能清单里没有这几个键，拒收会让一批本来好好的清单突然打不开（跟 tagsAll 同一条）', () => {
@@ -62,7 +74,7 @@ describe('清单白名单', () => {
     // `contexts` 跟它们同一批（情境是后加的一维），缺了落空数组。
     // isRepeating / notStarted / estimateWithinMinutes / not 是再后来那一批
     // （仿 OmniFocus 的自定义视角规则），同一条待遇：缺了落默认值，不是拒收。
-    expect(sanitizeListPatch({ filter: legacy })?.filter)
+    expect(listPatchOf({ filter: legacy })?.filter)
       .toEqual({
         ...legacy, contexts: [], noList: false, noTag: false, noDue: false,
         isRepeating: false, notStarted: false, estimateWithinMinutes: null, not: [],
@@ -71,45 +83,45 @@ describe('清单白名单', () => {
 
   it('noList / noTag / noDue 不是布尔值就整条拒收', () => {
     const base = { status: [], listIds: [], tags: [], priority: [], dueWithinDays: null, hasWaitingFor: false, text: '', tagsAll: false, noList: false, noTag: false, noDue: false, isRepeating: false, notStarted: false, estimateWithinMinutes: null, not: [], or: [] };
-    expect(sanitizeListPatch({ filter: { ...base, noList: 'true' } })).toBeNull();
-    expect(sanitizeListPatch({ filter: { ...base, noTag: 1 } })).toBeNull();
-    expect(sanitizeListPatch({ filter: { ...base, noDue: 'yes' } })).toBeNull();
+    expect(listPatchOf({ filter: { ...base, noList: 'true' } })).toBeNull();
+    expect(listPatchOf({ filter: { ...base, noTag: 1 } })).toBeNull();
+    expect(listPatchOf({ filter: { ...base, noDue: 'yes' } })).toBeNull();
   });
 
   it('filter 少一个字段就整条拒收', () => {
     const { text: _text, ...missing } = { status: ['todo'], listIds: [], tags: [], priority: [], dueWithinDays: null, hasWaitingFor: false, text: '', tagsAll: false, noList: false, noTag: false, noDue: false, isRepeating: false, notStarted: false, estimateWithinMinutes: null, not: [], or: [] };
-    expect(sanitizeListPatch({ filter: missing })).toBeNull();
+    expect(listPatchOf({ filter: missing })).toBeNull();
   });
 
   it('filter 里塞进白名单外的键——整个 filter 拒收，这是嵌套结构里最容易被漏掉的一层', () => {
     const filter = { status: [], listIds: [], tags: [], priority: [], dueWithinDays: null, hasWaitingFor: false, text: '', 别的: 1 };
-    expect(sanitizeListPatch({ filter })).toBeNull();
+    expect(listPatchOf({ filter })).toBeNull();
   });
 
   it('filter.status 里出现不合法的状态值——整个 filter 拒收', () => {
     const filter = { status: ['乱写的'], listIds: [], tags: [], priority: [], dueWithinDays: null, hasWaitingFor: false, text: '', tagsAll: false, noList: false, noTag: false, noDue: false, isRepeating: false, notStarted: false, estimateWithinMinutes: null, not: [], or: [] };
-    expect(sanitizeListPatch({ filter })).toBeNull();
+    expect(listPatchOf({ filter })).toBeNull();
   });
 
   it('filter.priority 只收 0..3', () => {
     const base = { status: [], listIds: [], tags: [], dueWithinDays: null, hasWaitingFor: false, text: '', tagsAll: false, noList: false, noTag: false, noDue: false, isRepeating: false, notStarted: false, estimateWithinMinutes: null, not: [], or: [] };
-    expect(sanitizeListPatch({ filter: { ...base, priority: [0, 3] } })).not.toBeNull();
-    expect(sanitizeListPatch({ filter: { ...base, priority: [4] } })).toBeNull();
+    expect(listPatchOf({ filter: { ...base, priority: [0, 3] } })).not.toBeNull();
+    expect(listPatchOf({ filter: { ...base, priority: [4] } })).toBeNull();
   });
 });
 
 describe('文件夹白名单', () => {
   it('name / order 能改', () => {
-    expect(sanitizeFolderPatch({ name: '项目' })?.name).toBe('项目');
-    expect(sanitizeFolderPatch({ order: 2 })?.order).toBe(2);
+    expect(folderPatchOf({ name: '项目' })?.name).toBe('项目');
+    expect(folderPatchOf({ order: 2 })?.order).toBe(2);
   });
 
   it('白名单外的字段整条拒收', () => {
-    expect(sanitizeFolderPatch({ name: '项目', id: '篡改' })).toBeNull();
+    expect(folderPatchOf({ name: '项目', id: '篡改' })).toBeNull();
   });
 
   it('名字为空拒收', () => {
-    expect(sanitizeFolderPatch({ name: '   ' })).toBeNull();
+    expect(folderPatchOf({ name: '   ' })).toBeNull();
   });
 });
 
@@ -182,10 +194,6 @@ describe('checkListPatch：说得出是哪个字段、为什么', () => {
     expect(checkListPatch(body).ok).toBe(true);
   });
 
-  it('sanitizeListPatch 还是老样子：合法给 patch，不合法给 null', () => {
-    expect(sanitizeListPatch({ name: '工作' })).toEqual({ name: '工作' });
-    expect(sanitizeListPatch({ name: '  ' })).toBeNull();
-  });
 });
 
 describe('checkFolderPatch：说得出是哪个字段、为什么', () => {
@@ -223,10 +231,6 @@ describe('checkFolderPatch：说得出是哪个字段、为什么', () => {
     expect((r as SanitizeOk<FolderPatch>).value).toEqual({ name: '项目', order: 2 });
   });
 
-  it('sanitizeFolderPatch 还是老样子：合法给 patch，不合法给 null', () => {
-    expect(sanitizeFolderPatch({ name: '项目' })).toEqual({ name: '项目' });
-    expect(sanitizeFolderPatch({ name: '  ' })).toBeNull();
-  });
 });
 
 /**
@@ -236,7 +240,7 @@ describe('checkSmartFilter：tagsAll / or', () => {
   const base = {
     status: [], listIds: [], tags: [], priority: [], dueWithinDays: null, hasWaitingFor: false, text: '',
   };
-  const filterOf = (v: unknown) => sanitizeListPatch({ filter: v })?.filter;
+  const filterOf = (v: unknown) => listPatchOf({ filter: v })?.filter;
 
   it('两个都不给：落默认值，不算校验失败——加它们之前存下来的智能清单没有这两个键', () => {
     expect(filterOf(base)).toMatchObject({ tagsAll: false, noList: false, noTag: false, noDue: false, isRepeating: false, notStarted: false, estimateWithinMinutes: null, not: [], or: [] });
@@ -248,24 +252,24 @@ describe('checkSmartFilter：tagsAll / or', () => {
   });
 
   it('tagsAll 不是布尔值：拒收', () => {
-    expect(sanitizeListPatch({ filter: { ...base, tagsAll: '是' } })).toBeNull();
+    expect(listPatchOf({ filter: { ...base, tagsAll: '是' } })).toBeNull();
   });
 
   it('or 不是数组：拒收', () => {
-    expect(sanitizeListPatch({ filter: { ...base, or: 'x' } })).toBeNull();
+    expect(listPatchOf({ filter: { ...base, or: 'x' } })).toBeNull();
   });
 
   it('or 里那一组自己形状不对：整条拒收', () => {
-    expect(sanitizeListPatch({ filter: { ...base, or: [{ ...base, priority: [9] }] } })).toBeNull();
+    expect(listPatchOf({ filter: { ...base, or: [{ ...base, priority: [9] }] } })).toBeNull();
   });
 
   it('**「或」组只能嵌一层**——or 里那几组自己不能再有 or', () => {
     // 不拦的话一份存下来的查询能长成一棵任意深的树，筛选栏画不出来、人也读不懂，
     // 而它是会被写进 data/lists/ 长期留着的。
-    expect(sanitizeListPatch({ filter: { ...base, or: [{ ...base, or: [base] }] } })).toBeNull();
+    expect(listPatchOf({ filter: { ...base, or: [{ ...base, or: [base] }] } })).toBeNull();
   });
 
   it('or 里那几组自己的 or 是空数组：正常收下', () => {
-    expect(sanitizeListPatch({ filter: { ...base, or: [{ ...base, or: [] }] } })?.filter?.or).toHaveLength(1);
+    expect(listPatchOf({ filter: { ...base, or: [{ ...base, or: [] }] } })?.filter?.or).toHaveLength(1);
   });
 });

@@ -188,12 +188,6 @@ export function checkListPatch(body: unknown): SanitizeResult<ListPatch> {
   return { ok: true, value: out };
 }
 
-/** 只要「合法与否」的调用方继续用这个。带原因的走 `checkListPatch`。 */
-export function sanitizeListPatch(body: unknown): ListPatch | null {
-  const r = checkListPatch(body);
-  return r.ok ? r.value : null;
-}
-
 /** 客户端能改的文件夹字段，白名单。字段比清单少很多——文件夹没有颜色、没有筛选条件。 */
 export type FolderPatch = Partial<Pick<Folder, 'name' | 'order'>>;
 
@@ -217,10 +211,4 @@ export function checkFolderPatch(body: unknown): SanitizeResult<FolderPatch> {
     out.order = b.order;
   }
   return { ok: true, value: out };
-}
-
-/** 只要「合法与否」的调用方继续用这个。带原因的走 `checkFolderPatch`。 */
-export function sanitizeFolderPatch(body: unknown): FolderPatch | null {
-  const r = checkFolderPatch(body);
-  return r.ok ? r.value : null;
 }

@@ -90,7 +90,7 @@ import type { StatusFilter } from './lib/taskView.js';
 
 // 清单的分类色。只上 background-color，永不上 color——见 theme.css 里
 // .ink-nav-dot 的注释。**群青 #2E3ED4 不在这盘里**：它是 AI 墨水的配额，
-// 让用户建的清单借走它，双色墨水这套记号就废了（服务端 sanitizeListPatch
+// 让用户建的清单借走它，双色墨水这套记号就废了（服务端 checkListPatch
 // 也会拒收这个颜色，这里只是不让界面先撞上那道墙）。放在 App.tsx 顶部而
 // 不是 lib/views.tsx：那张表是「去处」的定义，清单颜色跟「去处」无关。
 

@@ -377,6 +377,36 @@ export function readLastOutboxError(): string | null {
 }
 
 /**
+ * 命令行路 `/board` 的汇报落点。CLI 子进程 stdio 接的是控制台（`stdio: 'inherit'`），
+ * 模型回的那段纯文本服务收不到；而 board 又不能走 outbox（它的产物是给人看的
+ * 汇报，不是任务/建议）。于是让 AI 按 `workflows/board.md` 的约定把汇报写进
+ * `data/.board-report.md`，进程正常退出后由 runner 调这里取走。
+ *
+ * **取走即删（read-and-delete 一次完成）**：这份文件只服务「这一次运行」，
+ * 留下次只会让下一轮 board 读到上一轮的旧汇报。AI 侧要求原子写（先 `.tmp`
+ * 再 rename），跟 outbox 同款。
+ *
+ * dotfile 的隔离论证跟 `.last-outbox-error.json` 一样：不在任何实体目录里、
+ * 不命中 `WATCHED` 目录名、不匹配 `OUTBOX_RE`，不触发任何监听器——由 runner
+ * 在进程退出时主动来读，不靠文件事件。
+ *
+ * 读失败（文件被别的程序锁了、编码坏了）按「没有汇报」处理，返回 null，不抛：
+ * 上层会发 skipped「没有产出任何汇报」，跟 AI 压根没写文件是同一个用户可见结果。
+ */
+export function takeBoardReport(): string | null {
+  const file = join(dataDir(), '.board-report.md');
+  try {
+    if (!existsSync(file)) return null;
+    const text = readFileSync(file, 'utf8');
+    unlinkSync(file);
+    const trimmed = text.trim();
+    return trimmed ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 启动时把 `data/` 准备好。**先迁移再铺目录**：迁移要读旧的
  * `tasks.json`，铺目录不能抢在它前面把状态搅乱。
  *

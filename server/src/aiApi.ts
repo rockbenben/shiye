@@ -193,8 +193,11 @@ export const clockLine = (): string => {
 export function buildMessages(kind: AgentKind, scope?: ReviewScope): Array<{ role: 'system' | 'user'; content: string }> {
   const workflow = kind === 'expand' ? 'workflows/expand.md' : kind === 'board' ? 'workflows/board.md' : 'workflows/review.md';
   // board 的 HANDOFF 跟 expand/review 不一样：它不写 outbox，要的是一段汇报文本。
+  // 必须把「不写文件」说死：board.md 的 Step 3 默认让命令行路把汇报写进
+  // `data/.board-report.md`，接口路模型也读得到那一段，不压住它就可能照着写，
+  // 而这边没人会去读那个文件（runBoardViaApi 只认返回文本）。
   const handoff = kind === 'board'
-    ? '\n\n---\n\n你这次没有文件系统、不写任何 outbox 文件。把 [workflows/board.md](./workflows/board.md) Step 3 那段「汇报」直接作为消息内容返回，不要包 JSON、不要包 markdown 代码块——纯文本就行。\n'
+    ? '\n\n---\n\n你这次走的是接口路、没有文件系统：不要写任何文件（尤其不要写 `data/.board-report.md`——那是命令行路的交付方式，写了这边没人读）、不写任何 outbox。把 [workflows/board.md](./workflows/board.md) Step 3 那段「汇报」直接作为消息内容返回，不要包 JSON、不要包 markdown 代码块——纯文本就行。\n'
     : HANDOFF;
   const system = `${rules('AGENTS.md')}\n\n---\n\n${rules(workflow)}${handoff}`;
 
@@ -324,8 +327,11 @@ export async function runBoardViaApi(
   cfg: AiConfig, fetchFn: Fetcher, signal: AbortSignal,
   emit: (msg: string) => void,
 ): Promise<true> {
+  // 空白内容 chat() 自己会抛「接口回的内容是空的」（跟 expand/review 同一条
+  // 契约），这里不另设兜底——空汇报按失败走，由 runner 的 catch 发 failed，
+  // 不假装绿色成功。
   const text = await chat(cfg, buildMessages('board'), fetchFn, signal);
-  emit(text.trim() || 'AI 跑完了，但没有产出汇报文本');
+  emit(text.trim());
   return true;
 }
 

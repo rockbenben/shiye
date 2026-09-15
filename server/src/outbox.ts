@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, renameSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
 import type { Bus } from './events.js';
 import { isSafeId } from './entityStore.js';
-import { emitAgentStatus } from './expand.js';
+import { emitAgentStatus, type AgentStatus } from './expand.js';
 import { bad, checkProposalPatch, checkTaskPatch, type SanitizeResult } from './task.js';
 import {
   dataDir, deleteOutboxFile, newTask, nowIso, outboxFiles, readInbox, readInsights, readOutboxFile, readProposals, readTasks,
@@ -682,6 +682,12 @@ export function mergeOutbox(bus: Bus): void {
 
   if (files.length === 0) return;
 
+  // 这次合并是三件事里的哪一件跑出来的——文件监听器触发时距 runner 发出
+  // running 不过几百毫秒，`bus.lastStatus` 还带着那条 running 的 kind；启动时
+  // 补合并历史坏文件则没有正在进行的运行（lastStatus 为空或是 scheduled/idle，
+  // 都不带 kind），kind 缺省、前端按拆解的通用文案回退。
+  const kind = (bus?.lastStatus as AgentStatus | undefined)?.kind;
+
   let newTaskCount = 0;
   let proposalCount = 0;
   let insightCount = 0;
@@ -738,7 +744,7 @@ export function mergeOutbox(bus: Bus): void {
     // `writeFailures` 不记：那是落盘问题、不是 AI 写错了什么，塞回去当「上次你
     // 写错了」是误导。
     if (validationFailures.length > 0) writeLastOutboxError(validationFailures);
-    emitAgentStatus(bus, { state: 'failed', message });
+    emitAgentStatus(bus, { state: 'failed', message, kind });
     return;
   }
 
@@ -756,7 +762,7 @@ export function mergeOutbox(bus: Bus): void {
     const bits: string[] = [];
     if (proposalCount > 0) bits.push(`提了 ${proposalCount} 条修改建议，在「按来源」对应的任务卡上等你确认`);
     if (insightCount > 0) bits.push(`记录了 ${insightCount} 条观察`);
-    emitAgentStatus(bus, { state: 'ok', message: `分析完成，AI ${bits.join('；')}${duplicateNote}${droppedNote}` });
+    emitAgentStatus(bus, { state: 'ok', message: `分析完成，AI ${bits.join('；')}${duplicateNote}${droppedNote}`, kind });
     return;
   }
 
@@ -770,10 +776,10 @@ export function mergeOutbox(bus: Bus): void {
         // 有内容、也真处理了，但没有一条落成新任务——AI 判断都不是任务，
         // 或者对应的任务因为 id 冲突被跳过（多半是中断后的重试）。
         : `AI 跑完了，但没有产出新任务（可能是内容都不算需要拆的任务，或者对应的任务已经存在）${duplicateNote}${droppedNote}`;
-    emitAgentStatus(bus, { state: 'skipped', message });
+    emitAgentStatus(bus, { state: 'skipped', message, kind });
     return;
   }
 
   const skippedNote = skippedCount > 0 ? `，跳过 ${skippedCount} 条已处理过的` : '';
-  emitAgentStatus(bus, { state: 'ok', message: `拆解完成，新增 ${newTaskCount} 个任务${proposalNote}${insightNote}${skippedNote}${duplicateNote}${droppedNote}` });
+  emitAgentStatus(bus, { state: 'ok', message: `拆解完成，新增 ${newTaskCount} 个任务${proposalNote}${insightNote}${skippedNote}${duplicateNote}${droppedNote}`, kind });
 }

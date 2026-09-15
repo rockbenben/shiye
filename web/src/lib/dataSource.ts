@@ -208,7 +208,7 @@ export async function route<T>(http: () => Promise<T>, local: () => Promise<T>, 
 export class OfflineUnsupportedError extends Error {}
 
 /**
- * 这一批没有本地实现的操作：AI 相关（`expand`/`expandSkip`/`review`/`redoInbox`
+ * 这一批没有本地实现的操作：AI 相关（`expand`/`expandSkip`/`review`/`board`/`redoInbox`
  * ——叫 AI 这件事整个发生在服务端，手机上既没有 `claude` 子进程、也没有那份
  * 存着接口地址和密钥的设置，见 已归档的
  * docs/superpowers/plans/2026-08-21-offline-core.md 开工前①。**`redoInbox` 尤其

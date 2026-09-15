@@ -2766,8 +2766,14 @@ export function App() {
    * 是同一个思路，这里把触发条件换成页面可见性。
    */
   const agentState = agent?.state;
+  const agentKind = agent?.kind;
   useEffect(() => {
     if (agentState !== 'ok' && agentState !== 'skipped') return undefined;
+    // **board 的 ok 不自动消失。** 拆解/回顾的 ok 是「办完了，去看板/卡片上
+    // 看结果」的信号，结果在别处，信号 6 秒后收走无妨；总览的 ok 本身就是那段
+    // 汇报——一整段人要读的字，自动收走等于把唯一产物删掉，跟「跑完什么都
+    // 没发生」一模一样。skipped（没产出汇报）仍然是普通告知，照走。
+    if (agentState === 'ok' && agentKind === 'board') return undefined;
     let left = AGENT_TOAST_MS;
     let since: number | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2784,7 +2790,7 @@ export function App() {
     if (document.visibilityState === 'visible') start();
     document.addEventListener('visibilitychange', onVis);
     return () => { stop(); document.removeEventListener('visibilitychange', onVis); };
-  }, [agentState]);
+  }, [agentState, agentKind]);
 
   /**
    * 清单侧栏宽度。**可拖，落 localStorage。**
@@ -3285,8 +3291,22 @@ export function App() {
               type={agent.state === 'failed' ? 'error' : agent.state === 'skipped' ? 'warning' : 'success'}
               showIcon
               closable
-              message={agent.state === 'failed' ? 'AI 拆解失败' : agent.state === 'skipped' ? '没有新增任务' : 'AI 拆解完成'}
-              description={agent.message}
+              // 标题按这次跑的是哪件事走——以前写死「拆解」，回顾跑完也顶着
+              // 「AI 拆解完成」，总览更是名实不符。kind 缺省（启动时补合并的
+              // 历史状态、SSE 重连错过 running）回退到拆解的老文案。
+              message={
+                agent.state === 'failed'
+                  ? `AI ${agent.kind === 'review' ? '回顾' : agent.kind === 'board' ? '总览' : '拆解'}失败`
+                  : agent.state === 'skipped'
+                    ? agent.kind === 'review'
+                      ? '没有新的建议'
+                      : agent.kind === 'board' ? '没有产出汇报' : '没有新增任务'
+                    : agent.kind === 'review' ? 'AI 回顾完成'
+                      : agent.kind === 'board' ? 'AI 总览' : 'AI 拆解完成'
+              }
+              // board 的汇报是多行纯文本，React 默认把 \n 压成空格——pre-wrap
+              // 保住换行。white-space 是继承属性，短消息标题不受影响。
+              description={<span style={{ whiteSpace: 'pre-wrap' }}>{agent.message}</span>}
               onClose={() => setAgent(null)}
             />
           )}

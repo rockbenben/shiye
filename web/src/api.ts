@@ -348,6 +348,9 @@ export interface AgentStatus {
   message?: string;
   /** 只有 state === 'scheduled' 时才有意义：排定的绝对触发时间（ISO）。 */
   at?: string;
+  /** 这条状态是拆解/回顾/总览哪一件跑出来的；scheduled/idle 和启动时补合并
+   *  的历史状态不带，缺省按拆解的通用文案回退。跟 server/src/expand.ts 对齐。 */
+  kind?: 'expand' | 'review' | 'board';
 }
 
 /** 服务端 data-changed 事件里的 file。跟 server/src/events.ts 的 WATCHED 对齐。 */

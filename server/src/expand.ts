@@ -1,7 +1,7 @@
 import { type ChildProcess } from 'node:child_process';
 import crossSpawn from 'cross-spawn';
 import type { Bus } from './events.js';
-import { agentCwd, agentDataDir, aiSeesSameData, dataDir, readLastOutboxError, readSettings } from './store.js';
+import { agentCwd, agentDataDir, aiSeesSameData, dataDir, readLastOutboxError, readSettings, takeBoardReport } from './store.js';
 import { configProblem, clockLine, runBoardViaApi, runViaApi, scopeLine, type Fetcher, type ReviewScope } from './aiApi.js';
 
 export type { ReviewScope };
@@ -22,6 +22,17 @@ export interface AgentStatus {
   message?: string;
   /** 只有 state === 'scheduled' 时才有意义。 */
   at?: string;
+  /**
+   * 这条状态是三件事里的哪一件跑出来的。前端按它选横幅标题——「拆解完成」
+   * 「回顾完成」「总览」是三个不同的结果，标题写死成「拆解完成」会让回顾和
+   * 总览顶着错名字；board 的 ok 还靠它决定「别在 6 秒后自动消失」（总览的
+   * 汇报文本本身就是产物，不是「去看板看新卡片」的信号）。
+   *
+   * scheduled/idle 是 autoExpand 的排期信号、不挂 kind；mergeOutbox 在启动时
+   * 补合并历史坏文件也没有 kind（那时候没有「这一次运行」）——缺省按拆解的
+   * 通用文案回退，见 App.tsx 的标题映射。
+   */
+  kind?: AgentKind;
 }
 
 export function emitAgentStatus(bus: Bus | undefined, status: AgentStatus): void {
@@ -226,6 +237,13 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
   // 同一份 `data/`、同一批 outbox 文件，各锁各的等于没锁。
   let child: { kind: AgentKind; stop: () => void } | null = null;
   let onSettled: (() => void) | undefined;
+  // 这次（或最近一次）运行是三件事里的哪一件。runner 自己的每条状态都经
+  // `emit()` 发出、自动带上它；mergeOutbox 拿不到 runner 闭包，走的是另一条
+  // 路：它在文件监听器里触发时 `bus.lastStatus` 还是这条运行的 running（带着
+  // kind），直接从那儿读，见 outbox.ts。启动时补合并历史坏文件时没有正在进行
+  // 的运行，kind 缺省、前端回退到通用文案。
+  let activeKind: AgentKind | null = null;
+  const emit = (status: AgentStatus): void => emitAgentStatus(bus, { ...status, kind: status.kind ?? (activeKind ?? undefined) });
 
   /**
    * 设置里选了「调接口」时走这条。**只换「谁去想」，别的全不变**：单飞锁、
@@ -252,28 +270,28 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
     const bad = configProblem(cfg);
     if (bad) {
       const message = `设置里的 AI ${bad}，改好再${WORD[kind]}`;
-      emitAgentStatus(bus, { state: 'failed', message });
+      emit({ state: 'failed', message });
       return { ok: false, error: message };
     }
 
-    emitAgentStatus(bus, { state: 'running' });
+    emit({ state: 'running' });
     const ac = new AbortController();
     child = { kind, stop: () => ac.abort() };
 
     let settled = false;
-    const finish = (emit?: () => void): void => {
+    const finish = (emitStatus?: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child = null;
-      emit?.();
+      emitStatus?.();
       onSettled?.();
     };
 
     const timer = setTimeout(() => {
       if (settled) return;
       ac.abort();
-      finish(() => emitAgentStatus(bus, { state: 'failed', message: `${WORD[kind]}超过 10 分钟没结束，已经中止` }));
+      finish(() => emit({ state: 'failed', message: `${WORD[kind]}超过 10 分钟没结束，已经中止` }));
     }, timeoutMs);
     timer.unref?.();
 
@@ -281,15 +299,15 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
     // `runBoardViaApi`，拿到文本直接 emit agent-status{ok, message: 文本}。
     // expand/review 走 `runViaApi`：写 outbox 文件、交给 mergeOutbox 判断。
     const run = kind === 'board'
-      ? runBoardViaApi(cfg, fetchFn, ac.signal, (msg) => emitAgentStatus(bus, { state: 'ok', message: msg }))
+      ? runBoardViaApi(cfg, fetchFn, ac.signal, (msg) => emit({ state: 'ok', message: msg }))
       : runViaApi(kind, cfg, fetchFn, ac.signal, scope);
     void run
       // wrote === false：模型明确回了空数组，等价于 CLI 那条路「跑完了什么都
       // 没写出来」。true 的话一个字都不发，等合并去说。board 路的 runBoardViaApi
       // 内部已经 emit 完了，这里 wrote 恒为 true、不重复发。
-      .then((wrote) => finish(wrote ? undefined : () => emitAgentStatus(bus, { state: 'skipped', message: NOTHING[kind] })))
+      .then((wrote) => finish(wrote ? undefined : () => emit({ state: 'skipped', message: NOTHING[kind] })))
       // 超时那条已经自己发过 failed 了，`finish` 的幂等挡住第二次。
-      .catch((e: Error) => finish(() => emitAgentStatus(bus, { state: 'failed', message: `${WORD[kind]}失败：${e.message}` })));
+      .catch((e: Error) => finish(() => emit({ state: 'failed', message: `${WORD[kind]}失败：${e.message}` })));
 
     return { ok: true };
   }
@@ -302,6 +320,9 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
     if (child) {
       return { ok: false, error: `上一次${WORD[child.kind]}还在跑，等它跑完或者超时（最多 10 分钟）再试一次` };
     }
+    // 放在任何分流/失败之前——哪怕下一行就因配置或数据目录不一致而 failed，
+    // 那条横幅也得带对 kind（「回顾失败」不是「拆解失败」）。
+    activeKind = kind;
 
     // **排在下面 aiSeesSameData 那道守卫之前，是有意的。** 那道守卫防的是
     // 「服务读 A 目录、spawn 出去的 AI 却对着 B 目录跑」——只有 CLI 那条路
@@ -319,11 +340,11 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
     // DATA_DIR 指到临时目录，一刀切会把它们全拦下来。
     if (spawnFn === crossSpawn && !aiSeesSameData()) {
       const message = `服务在读 ${dataDir()}，而 AI 会去读 ${agentDataDir()}——两边不是同一份数据，不能${WORD[kind]}。把 DATA_DIR 和 AGENT_CWD 指到同一处再试。`;
-      emitAgentStatus(bus, { state: 'failed', message });
+      emit({ state: 'failed', message });
       return { ok: false, error: message };
     }
 
-    emitAgentStatus(bus, { state: 'running' });
+    emit({ state: 'running' });
     // 拿到「running 这条本身」的引用，不是拷贝一份快照——退出时拿它跟
     // `bus.lastStatus` 做引用比较，用来判断「这期间有没有别的 agent-status
     // 落地过」。见下面 'exit' 里的注释：这是 C 的一处回归修复。
@@ -345,7 +366,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
       proc = spawnFn(invocation.command, invocation.args, { cwd: agentCwd(), stdio: 'inherit' });
     } catch (e) {
       const message = `没能启动 AI：${(e as Error).message}`;
-      emitAgentStatus(bus, { state: 'failed', message });
+      emit({ state: 'failed', message });
       return { ok: false, error: message };
     }
 
@@ -357,7 +378,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
       settled = true;
       child = null;
       proc.kill();
-      emitAgentStatus(bus, { state: 'failed', message: `${WORD[kind]}超过 10 分钟没结束，已经中止` });
+      emit({ state: 'failed', message: `${WORD[kind]}超过 10 分钟没结束，已经中止` });
       onSettled?.();
     }, timeoutMs);
     timer.unref?.();
@@ -374,7 +395,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
       const message = e.code === 'ENOENT'
         ? `AI 命令行工具没找到，确认 ${invocation.displayName} 在 PATH 里；或者去设置 → AI 拆解，改成「调接口」`
         : `启动 AI 失败：${e.message}`;
-      emitAgentStatus(bus, { state: 'failed', message });
+      emit({ state: 'failed', message });
       onSettled?.();
     });
 
@@ -392,7 +413,16 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
       child = null;
 
       if (code !== 0) {
-        emitAgentStatus(bus, { state: 'failed', message: `AI 进程退出码 ${code}` });
+        emit({ state: 'failed', message: `AI 进程退出码 ${code}` });
+      } else if (kind === 'board') {
+        // board 的汇报不走 outbox（产物是给人看的一段文本，不是任务/建议），
+        // CLI 的 stdio 又接在控制台上、服务收不到模型的回复——AI 按
+        // workflows/board.md 的约定把汇报写进 `data/.board-report.md`，在这里
+        // 取走（取走即删）。取不到才落 skipped：没写文件或者写了空内容，
+        // 用户可见的结果都是「跑完了，没汇报」。
+        const report = takeBoardReport();
+        if (report) emit({ state: 'ok', message: report });
+        else emit({ state: 'skipped', message: NOTHING[kind] });
       } else if (bus?.lastStatus === statusAtStart) {
         // 退出码 0 只代表「AI 进程正常退出」，不代表拆解真的合并成功了——写没写
         // outbox 文件、outbox 校验过没过，是 outbox.ts 的 mergeOutbox 自己另外
@@ -408,7 +438,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
         // `bus.lastStatus` 就不再是 `statusAtStart` 那个对象了。真的什么都没发生
         // 过，说明 AI 没写出任何 outbox 文件（收件箱本来就没有要拆的，或者
         // AI 自己判断没什么好写的），诚实说清楚，不能用绿色的「完成」。
-        emitAgentStatus(bus, { state: 'skipped', message: NOTHING[kind] });
+        emit({ state: 'skipped', message: NOTHING[kind] });
       }
       // 不管上面发没发、发了哪一条：这次运行到此彻底结束了，单飞锁也已经解开
       // （`child = null` 在上面）。这是 autoExpand.ts 用来判断「要不要重新算一次

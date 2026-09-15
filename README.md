@@ -117,14 +117,13 @@
 的包只能在那个平台上打**（macOS 的 dmg 要 hdiutil、.icns 要 iconutil，Windows 上
 没有替身），三份一起出要靠 `.github/workflows/release.yml` 那个矩阵。
 
-Windows：`shiye-<版本号>-win` 起头的两份，**名字只差扩展名**——`.zip` 是免安装、
-`.exe` 是安装版。
+Windows：`shiye-<版本号>-win` 起头的两份——`.zip` 是免安装，`-setup.exe` 是安装版。
 
 - **免安装版**（`shiye-<版本号>-win.zip`）——不用装，解压出来双击里面的
   `办事师爷.exe` 就跑，删掉整个文件夹就是卸载。**解压这一步只做一次**，之后每次
   启动都是一秒内出窗口。
-- **安装版**（`shiye-<版本号>-win.exe`）——普通 Windows 安装向导，装完开始菜单/
-  桌面上有快捷方式。原生通知要走这一份（免安装版没有开始菜单快捷方式）。
+- **安装版**（`shiye-<版本号>-win-setup.exe`）——普通 Windows 安装向导，装完
+  开始菜单/桌面上有快捷方式。原生通知要走这一份（免安装版没有开始菜单快捷方式）。
 
 macOS：`shiye-<版本号>-mac-arm64.dmg`（拖进「应用程序」）和同名 `.zip`，
 **Apple Silicon 和 Intel 各一份**，文件名里带 `arm64` 的是前者、带 `x64` 的是 Intel。

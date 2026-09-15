@@ -210,7 +210,8 @@ it('Node 最低版本：package.json / CI / README 三处说的是同一个大�
  * 一个外部系统的硬约束**。
  *
  * `desktop/electron-builder.yml` 里 win / mac / linux 各有一条 `artifactName`，
- * README 和 `desktop/冒烟清单.md` 抄的是同一套名字。
+ * 加上顶层 `nsis:` 块里那一条（Windows 的安装器），README 和
+ * `desktop/冒烟清单.md` 抄的是同一套名字。
  *
  * 硬约束来自 GitHub：**它会把非 ASCII 从 Release 资产名里抹掉。** v0.1.2 是第一次
  * 真发出 Release（之前两次只有 upload-artifact，Releases 页面是空的），
@@ -229,11 +230,17 @@ it('Node 最低版本：package.json / CI / README 三处说的是同一个大�
  * zip 和 dmg 写的是同一个路径、dmg 把 zip 盖掉，`Pattern 'desktop/release/*.zip'
  * does not match any files`，两份 zip 静默丢失而 job 还是绿的。默认 pattern 是带
  * `.${ext}` 的，所以只有「自己写了 artifactName」时才会踩——下面钉死必须带。
+ *
+ * 第三条约束是命名本身要分得出东西：v0.1.3 实际发出去的是 `shiye-0.1.3-win.exe`
+ * 和 `shiye-0.1.3-win.zip`，**只差扩展名**——而一个是安装向导、一个是解压即用，
+ * 同一个版本的两种不同用法被写成了「同一份文件、两种格式」。安装器的名字改带
+ * `-setup`，`Setup` 是 electron-builder 自己默认 pattern 里的词。它写在顶层
+ * `nsis:` 块而不是 `win:` 块里，所以这个文件要多读一个块——`win` 那条只管 zip。
  */
-it('artifactName 三个平台都是纯 ASCII、不用 ${productName}、而且自带 .${ext}', () => {
-  const sections: Record<'win' | 'mac' | 'linux', { name: string; body: string }> = {} as never;
+it('artifactName（win / mac / linux / nsis）都是纯 ASCII、不用 ${productName}、而且自带 .${ext}', () => {
+  const sections: Record<'win' | 'mac' | 'linux' | 'nsis', { name: string; body: string }> = {} as never;
 
-  for (const k of ['win', 'mac', 'linux'] as const) {
+  for (const k of ['win', 'mac', 'linux', 'nsis'] as const) {
     const body = ymlSections[k];
     expect(body, `${k} 块在 electron-builder.yml 里找不到`).toBeTruthy();
     // 两侧都要先断「真的匹配到了」：正则一旦失效，后面的 toMatch / toContain
@@ -268,6 +275,21 @@ it('artifactName 三个平台都是纯 ASCII、不用 ${productName}、而且自
       expect(name, `${k} 出了 ${archs.join(' / ')}，artifactName 必须带 \${arch}，否则产物同名互盖`).toContain('${arch}');
     }
   }
+
+  // 免安装和安装两份的名字不能只差扩展名：拿掉 `.${ext}` 之后两者必须不相等。
+  // 少了这条，把 `nsis.artifactName` 那行删掉就静默退回 v0.1.3 的 `-win.exe` /
+  // `-win.zip`，而它存在的唯一理由就是这个区别。钉具体词而不是只比不等，是因为
+  // 上面 `not.toBe` 允许「改成随便别的词」也通过，而 README 和冒烟清单抄的是
+  // 这个具体拼写。
+  const base = (n: string) => n.replace(/\.\$\{ext\}$/, '');
+  expect(
+    base(sections.nsis.name),
+    '安装器和免安装版的名字去掉扩展名后一模一样——又变成只差扩展名了'
+  ).not.toBe(base(sections.win.name));
+  expect(
+    sections.nsis.name,
+    '安装器的名字里没有说明「这是安装包」的词（README / 冒烟清单抄的是 -setup.exe）'
+  ).toContain('-setup');
 });
 
 it('README 和冒烟清单写的产物名不带中文，跟 artifactName 那套一致', () => {
@@ -282,15 +304,16 @@ it('README 和冒烟清单写的产物名不带中文，跟 artifactName 那套�
   // 整个删掉也是绿的，而删掉就是「照文档装的人找不到包」。
   for (const want of [
     'shiye-<版本号>-win.zip',
-    'shiye-<版本号>-win.exe',
+    'shiye-<版本号>-win-setup.exe',
     'shiye-<版本号>-mac-arm64.dmg',
     'shiye-<版本号>-linux.AppImage',
   ]) {
     expect(both, `文档里没写到 ${want} 这个名字`).toContain(want);
   }
 
-  // README 说「名字只差扩展名」那一句是免安装版和安装版的唯一区分方式，
-  // 两条得都在。
+  // Windows 两份的名字都得在 README 里真的写出来。上面的 toContain 只保证「出现过」，
+  // 单独留着免安装那份、把安装那份删掉也还是绿的，而删掉就是照 README 装的人
+  // 找不到安装器。
   expect(readme).toContain('shiye-<版本号>-win.zip');
-  expect(readme).toContain('shiye-<版本号>-win.exe');
+  expect(readme).toContain('shiye-<版本号>-win-setup.exe');
 });

@@ -198,6 +198,24 @@ extraResources:
 #
 # linux 只出 x64，不用写 `${arch}`：写了会变成 `x86_64`（`getArtifactArchName` 对
 # AppImage 专门把 x64 映射成 `x86_64`），多一个读者要猜的词。
+#
+# **③ 安装包的名字在 `nsis:` 块里，不在 `win:` 块里——两个平台的差异必须落在这个位置。**
+# v0.1.3 出的是 `shiye-0.1.3-win.exe` 和 `shiye-0.1.3-win.zip`，只差扩展名：`exe` 看着
+# 像安装器、`zip` 看着像裸的压缩包，而它们是同一个版本的两份不同东西（安装向导 vs
+# 解压即用）。命名里得有个词把这份区别说出来——`Setup` 就是 electron-builder 自己默认
+# pattern 里的那个词（`"${productName} " + "Setup " + "${version}"`），也是 Windows 上
+# 「这是安装包」的通用说法，于是安装包叫 `-win-setup.exe`，免安装的那份留在 `-win.zip`。
+#
+# 放在 `nsis:` 块里而不是 `win:` 块里，是这条改动唯一的实现要点：
+# - 顶层 `nsis:` 块会被 deepAssign 进 NSIS target 自己的 options（`NsisTarget.js` 那句
+#   `deepAssign(this.options, this.packager.config[targetName])`），所以它只作用于安装器
+#   这一个 target，`win.artifactName` 留给 zip。`nsis` 是 Windows 独有的 key。
+# - **不能反过来用顶层 `zip:` 块给压缩包改名。** `ArchiveTarget` 两个平台共用，
+#   `this.name` 都是 `"zip"`，顶层 `zip.artifactName` 会盖掉 `mac.artifactName`，
+#   把 macOS 那两份 zip 一起改名。所以「安装器和压缩包不一样」这件事只能挂在
+#   平台独有的 key 上（这里就是 `nsis`）。
+# - 也不能写进 `win.target` 数组里的条目：`targetFactory` 的 `normalizeTargets` 会把它们
+#   逐个 `toLowerCase().trim()` 成纯字符串，条目里的选项字段放不进去。
 
 win:
   artifactName: shiye-${version}-win.${ext}
@@ -235,6 +253,9 @@ win:
   # 就会跳过签名这一步，只在日志里提一句，不是错误。
 
 nsis:
+  # 这一条只给安装器，zip 不受影响——为什么它必须写在这里而不是 `win:` 里，
+  # 见上面 artifactName 那节的 ③。装出来的文件是 `shiye-<版本号>-win-setup.exe`。
+  artifactName: shiye-${version}-win-setup.${ext}
   # 个人用的桌面小工具，装哪儿、要不要建桌面快捷方式让用户自己选，不强制一键装。
   oneClick: false
   allowToChangeInstallationDirectory: true

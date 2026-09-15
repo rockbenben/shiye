@@ -220,8 +220,17 @@ it('Node 最低版本：package.json / CI / README 三处说的是同一个大�
  * 于是安装包叫 `Setup.0.1.2.exe`，一个 148 MB、看不出是哪个应用的包。
  * 把它改回 `${productName}` 这种「读起来更友好」的写法没有任何一步会报错，
  * 所以下面钉死是 ASCII。
+ *
+ * 同一节的第二条硬约束跟 GitHub 无关，是 electron-builder 自己的行为：
+ * `artifactName` **逐字照抄**，缺了 `.${ext}` 产物就真的没有扩展名。v0.1.3 试过：
+ * 写 `shiye-${version}-win` 之后 builder 打出 `file=desktop\release\shiye-0.1.3-win`，
+ * 7za 直接 `System ERROR: The parameter is incorrect.`；linux 那份连
+ * `*.AppImage` 都匹配不到，`if-no-files-found: error` 杀掉 ubuntu job；mac 上更隐蔽，
+ * zip 和 dmg 写的是同一个路径、dmg 把 zip 盖掉，`Pattern 'desktop/release/*.zip'
+ * does not match any files`，两份 zip 静默丢失而 job 还是绿的。默认 pattern 是带
+ * `.${ext}` 的，所以只有「自己写了 artifactName」时才会踩——下面钉死必须带。
  */
-it('artifactName 三个平台都是纯 ASCII，不用 ${productName}', () => {
+it('artifactName 三个平台都是纯 ASCII、不用 ${productName}、而且自带 .${ext}', () => {
   const sections: Record<'win' | 'mac' | 'linux', { name: string; body: string }> = {} as never;
 
   for (const k of ['win', 'mac', 'linux'] as const) {
@@ -241,6 +250,10 @@ it('artifactName 三个平台都是纯 ASCII，不用 ${productName}', () => {
     ).toMatch(/^[ -~]*$/);
     expect(name, `${k} 用了 \${productName}，它展开成 productName（办事师爷）`).not.toContain('${productName}');
     expect(name, `${k} 的 artifactName 里出现了 \${productName} 展开成的 productName 本身`).not.toContain('办事师爷');
+    // 缺了 `.ext` 时产物没有扩展名，上传的 glob（`*.exe` / `*.zip` / `*.dmg` /
+    // `*.AppImage`）一个都匹配不到——v0.1.3 那次 mac 的两份 zip 就这么丢的，
+    // 而且那个 job 是绿的。钉在末尾：写在中间（`shiye-${ext}-…`）等于没写。
+    expect(name, `${k} 的 artifactName 没以 .\${ext} 收尾——artifactName 是逐字照抄的`).toMatch(/\.\$\{ext\}$/);
   }
 
   // 出多份架构的平台，名字里必须自己带 ${arch}：用户指定了 artifactName 之后

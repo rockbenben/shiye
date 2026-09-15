@@ -113,6 +113,12 @@ jobs:
       # softprops 那句 `Restoring asset label to ...` 报成功但改不回去。原因和
       # 现在的命名都在 `desktop/electron-builder.yml` 的 artifactName 那节。
       #
+      # **`artifactName` 也必须带 `.${ext}`。** v0.1.3 那次写的是 `shiye-${version}-win`
+      # （没扩展名），builder 打出的文件就是没扩展名的，于是上面那四个 glob 一个都
+      # 匹配不到：macos 的 `Pattern 'desktop/release/*.zip' does not match any files`
+      # 两份 zip 静默丢失而 job 是绿的，ubuntu 的 `if-no-files-found: error` 直接红。
+      # 现在三条都是 `…-${ext}`，`scripts/identity-literals.test.ts` 守着不退回。
+      #
       # 重跑幂等：同一个 tag 重跑，action 发现 Release 已存在就更新它；同名资产
       # 会被覆盖。
       - uses: softprops/action-gh-release@v3

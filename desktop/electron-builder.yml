@@ -151,11 +151,11 @@ extraResources:
   - from: workflows
     to: workflows
 
-# ── artifactName：全部用 ASCII ──
+# ── artifactName：全 ASCII，而且必须自己带 `.${ext}` ──
 #
-# `artifactName` 不带扩展名，扩展名由 electron-builder 自己拼。
+# 下面两条各自都有实测事故的支撑，缺哪条都是**构建全绿、产物却不能用**。
 #
-# **不能写 `${productName}`（办事师爷）——GitHub 会把非 ASCII 从资产名里抹掉。**
+# **① 不能写 `${productName}`（办事师爷）——GitHub 会把非 ASCII 从资产名里抹掉。**
 # 这是 v0.1.2 第一次真发出 Release 才撞到的（v0.1.0 / v0.1.1 那两次只有
 # upload-artifact，Releases 页面是空的）：electron-builder 打出来的文件**名字是对的**
 # （`办事师爷-0.1.2-win.zip`，`sanitizedProductName` 原样返回中文，不是 builder 在动手），
@@ -166,9 +166,28 @@ extraResources:
 # 报了成功但没生效。用原始 API JSON 的字节核过（纯 ASCII），不是终端编码的假象。
 #
 # 那个 `-0.1.2-win.zip` 是 148 MB 的包，下载下来看不出是哪个应用。
-# 于是这里显式给全 ASCII 的名字：`shiye-<version>-<平台>[-<架构>]`。
+# 于是这里显式给全 ASCII 的名字：`shiye-<version>-<平台>[-<架构>].<ext>`。
 # README 和 `desktop/冒烟清单.md` 抄的也是这一份，`scripts/identity-literals.test.ts`
 # 守两边一致。
+#
+# **② 必须自己带 `.${ext}`——`artifactName` 是逐字照抄的，builder 不帮你补扩展名。**
+# v0.1.3 就是栽在这条（当时写的是 `shiye-${version}-win`，没有 `.${ext}`）：
+# builder 日志逐字打出 `building target=zip arch=x64
+# file=desktop\release\shiye-0.1.3-win`，7za 拿到一个没有扩展名的目标路径直接
+# `System ERROR: The parameter is incorrect.` 退出 2；linux 那份 `shiye-0.1.3-linux`
+# 同样没扩展名，`desktop/release/*.AppImage` 一个文件都匹配不到，
+# `if-no-files-found: error` 把 ubuntu 那个 job 杀掉。
+#
+# mac 上更隐蔽，因为那个 job **还是绿的**：zip 和 dmg 两个 target 写的是**同一个路径**
+# `desktop/release/shiye-0.1.3-mac-arm64`，dmg 在后面写把 zip 盖掉了，于是上传那步
+# `🤔 Pattern 'desktop/release/*.zip' does not match any files`——两份 zip 静默丢失，
+# Release 上只剩两个 dmg。dmg 自己能带上 `.dmg` 纯粹是 `hdiutil` 对缺扩展名的输出
+# 自动补一个，跟 builder 无关，zip 那边没有任何兜底。
+#
+# 默认 pattern 是带扩展名的（`platformPackager.js` 的 `expandArtifactNamePattern`：
+# `"${productName} ${version} ${arch}.${ext}"`），所以**不写** artifactName 时不会踩；
+# 一旦自己写，就全靠自己。四个 target 各自传给它的 ext 是 NSIS `"exe"`、AppImage
+# `"AppImage"`、dmg `"dmg"`、zip `"zip"`，`${ext}` 会被换成对应那一个。
 #
 # `${arch}` 在 mac 这边要留：两个架构各出一份，而 `artifactName` 用户指定之后
 # `isUserForced` 为真，arch 后缀**不再被自动省略**（`platformPackager.js` 的
@@ -181,7 +200,7 @@ extraResources:
 # AppImage 专门把 x64 映射成 `x86_64`），多一个读者要猜的词。
 
 win:
-  artifactName: shiye-${version}-win
+  artifactName: shiye-${version}-win.${ext}
   target:
     # **免安装那一份是 zip，不是 portable——这一条是实测撤下来的，别凭直觉换回去。**
     #
@@ -259,7 +278,7 @@ protocols:
 # Linux 和 Windows 目前都只出 x64，那是有意的：ARM 的 Windows 笔记本和 ARM 的
 # Linux 桌面在这个应用的实际用户里都还不存在。哪天有了，照这里的写法加。
 mac:
-  artifactName: shiye-${version}-mac-${arch}
+  artifactName: shiye-${version}-mac-${arch}.${ext}
   target:
     - target: dmg
       arch: [arm64, x64]
@@ -278,7 +297,7 @@ mac:
 # 托盘图标在 Linux 上不保证有：它走 StatusNotifier/AppIndicator，GNOME 默认不带
 # （要装扩展）。窗口关掉之后可能就真的找不回来了——这条只能在真机上验。
 linux:
-  artifactName: shiye-${version}-linux
+  artifactName: shiye-${version}-linux.${ext}
   target:
     - AppImage
   category: Utility

@@ -7120,6 +7120,47 @@ describe('App：AI 拆解结果那条提示', () => {
       expect(screen.queryByText('AI 拆解完成')).toBeNull();
     } finally { spy.mockRestore(); vi.useRealTimers(); }
   });
+
+  /**
+   * 总览的 ok 跟拆解/回顾不是一类东西：它的产物**就是横幅里那段汇报**，
+   * 不是「去别处看结果」的信号。6 秒自动收走等于把唯一产物删掉。
+   */
+  it('总览的汇报不自动消失——标题是「AI 总览」，挂多久都在等人关', async () => {
+    vi.useFakeTimers();
+    try {
+      render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+      await act(async () => { await Promise.resolve(); });
+      act(() => { handlers.onAgentStatus?.({ state: 'ok', kind: 'board', message: '待办 3 张' }); });
+      expect(screen.queryByText('AI 总览')).not.toBeNull();
+      act(() => { vi.advanceTimersByTime(60_000); });
+      expect(screen.queryByText('AI 总览'), '总览汇报被自动收走了').not.toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('横幅标题跟着 kind 走——回顾跑完不再顶「拆解完成」，失败也带对名字', async () => {
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { handlers.onAgentStatus?.({ state: 'ok', kind: 'review', message: '分析完成' }); });
+    expect(screen.queryByText('AI 回顾完成')).not.toBeNull();
+    expect(screen.queryByText('AI 拆解完成')).toBeNull();
+
+    act(() => { handlers.onAgentStatus?.({ state: 'failed', kind: 'board', message: '超时' }); });
+    expect(screen.queryByText('AI 总览失败')).not.toBeNull();
+
+    // kind 缺省（启动时补合并的历史状态）回退到老文案，不顶个空标题。
+    act(() => { handlers.onAgentStatus?.({ state: 'ok', message: '拆解完成，新增 1 个任务' }); });
+    expect(screen.queryByText('AI 拆解完成')).not.toBeNull();
+  });
+
+  it('总览汇报里的换行保留下来——纯文本的 \\n 不能被压成一行', async () => {
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await act(async () => { await Promise.resolve(); });
+    act(() => { handlers.onAgentStatus?.({ state: 'ok', kind: 'board', message: '第一行\n第二行' }); });
+    // 默认 normalizer 会把 \n 折叠成空格，这里关掉才验得真换行
+    const el = screen.getByText('第一行\n第二行', { normalizer: (s) => s });
+    expect(getComputedStyle(el).whiteSpace).toBe('pre-wrap');
+  });
 });
 
 /**

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { aiKeyFrom, buildMessages, chat, chatUrl, configProblem, extractJson, maskKey, runViaApi, scopeLine, testAi, type AiConfig } from './aiApi.js';
+import { aiKeyFrom, buildMessages, chat, chatUrl, configProblem, extractJson, maskKey, runBoardViaApi, runViaApi, scopeLine, testAi, type AiConfig } from './aiApi.js';
 import { outboxFiles, writeInbox, writeLists, writeTasks } from './store.js';
 import type { Task } from './model.js';
 
@@ -268,6 +268,42 @@ describe('buildMessages：规则读原文，数据当场读盘', () => {
     expect(sys.content).toContain('没有文件系统');
     expect(sys.content).toContain('把那个 JSON 数组作为回复正文直接发回来');
   });
+
+  /**
+   * 总览是第三种 buildMessages：读的是 board.md，数据只要 tasks + 未处理收件箱
+   * （建议/观察跟「现在什么情况」无关），handoff 要把「别写文件」说死——
+   * board.md 正文默认让命令行路写 `data/.board-report.md`，接口路模型也读得到
+   * 那一段，不压住它就可能照着写，而这边没人读那个文件。
+   */
+  describe('总览（board）', () => {
+    it('system 里是 board.md 原文，不是 expand/review', () => {
+      const [sys] = buildMessages('board');
+      expect(sys.content).toContain(readFileSync('workflows/board.md', 'utf8').slice(0, 200));
+      expect(sys.content).not.toContain(readFileSync('workflows/expand.md', 'utf8').slice(0, 80));
+      expect(sys.content).not.toContain(readFileSync('workflows/review.md', 'utf8').slice(0, 80));
+    });
+
+    it('带任务和未处理收件箱，但不带建议/观察——总览不需要那两份', () => {
+      writeTasks([task({ id: 'a', title: '看板上的任务' })]);
+      writeInbox([
+        { id: 'i1', text: '还没拆的', createdAt: '2026-08-01T00:00:00.000Z', processed: false, taskIds: [] },
+        { id: 'i2', text: '拆过的', createdAt: '2026-08-01T00:00:00.000Z', processed: true, taskIds: ['a'] },
+      ]);
+      const [, user] = buildMessages('board');
+      expect(user.content).toContain('看板上的任务');
+      expect(user.content).toContain('还没拆的');
+      expect(user.content).not.toContain('拆过的');
+      expect(user.content).not.toContain('data/proposals/');
+      expect(user.content).not.toContain('data/insights/');
+    });
+
+    it('handoff 明确压住 board.md 的写文件约定：直接回文本，尤其别写 .board-report.md', () => {
+      const [sys] = buildMessages('board');
+      expect(sys.content).toContain('没有文件系统');
+      expect(sys.content).toContain('.board-report.md');
+      expect(sys.content).toContain('直接作为消息内容返回');
+    });
+  });
 });
 
 describe('chat：请求怎么发、报错怎么说', () => {
@@ -331,6 +367,24 @@ describe('runViaApi：结果落成 outbox 文件', () => {
   it('原子写：不留 .tmp 在 data/ 里', async () => {
     await runViaApi('expand', cfg, replying('[{"inboxId":"a","tasks":[]}]'), new AbortController().signal);
     expect(outboxFiles().some((f) => f.endsWith('.tmp'))).toBe(false);
+  });
+});
+
+describe('runBoardViaApi：汇报走回调，不落任何文件', () => {
+  it('模型回的文本 trim 后交给回调；不产生 outbox 文件', async () => {
+    const seen: string[] = [];
+    const ret = await runBoardViaApi(cfg, replying('  待办 3 张\n过期 2 条  '), new AbortController().signal, (m) => seen.push(m));
+    expect(ret).toBe(true);
+    expect(seen).toEqual(['待办 3 张\n过期 2 条']);
+    expect(outboxFiles()).toEqual([]);
+  });
+
+  it('模型回空白：按 chat 的统一契约抛错（由 runner 发 failed），不发空汇报', async () => {
+    const seen: string[] = [];
+    await expect(
+      runBoardViaApi(cfg, replying('   \n  '), new AbortController().signal, (m) => seen.push(m)),
+    ).rejects.toThrow(/空的/);
+    expect(seen).toEqual([]);
   });
 });
 

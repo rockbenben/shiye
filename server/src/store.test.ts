@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   DEFAULT_SETTINGS, dataDir, deleteOutboxFile, deviceConfigPath, ensureDataFiles, newTask, outboxFiles,
-  paths, readOutboxFile, readSettings, readTasks, writeSettings, writeTasks,
+  paths, readLastOutboxError, readOutboxFile, readSettings, readTasks, takeBoardReport, writeSettings, writeTasks,
 } from './store.js';
 
 let dir: string;
@@ -245,5 +245,43 @@ describe('readTasks：把缺了会当场炸的字段补齐', () => {
     const [t] = readTasks();
     expect(t.tags).toEqual(['紧急']);
     expect(t.attachments).toEqual(['报告.pdf']);
+  });
+});
+
+/**
+ * 两个服务跟 AI 之间传递、但不进任何实体目录的 dotfile：
+ * `.last-outbox-error.json`（校验失败回灌）和 `.board-report.md`（CLI 路总览汇报）。
+ */
+describe('AI 回灌/汇报用的 dotfile', () => {
+  it('takeBoardReport：读到内容、trim、取走即删——下一轮不许读到上一轮的旧汇报', () => {
+    const file = join(dataDir(), '.board-report.md');
+    writeFileSync(file, '  待办 3 张\n过期 2 条\n', 'utf8');
+    expect(takeBoardReport()).toBe('待办 3 张\n过期 2 条');
+    expect(existsSync(file)).toBe(false);
+    expect(takeBoardReport()).toBeNull();
+  });
+
+  it('takeBoardReport：只有空白也算没汇报，文件同样清掉', () => {
+    const file = join(dataDir(), '.board-report.md');
+    writeFileSync(file, '  \n ', 'utf8');
+    expect(takeBoardReport()).toBeNull();
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it('readLastOutboxError：把失败原因拼成给 AI 的提示句', () => {
+    writeFileSync(join(dataDir(), '.last-outbox-error.json'), JSON.stringify({
+      failures: ['outbox-a.json 第 1 项：status 不合法', 'outbox-b.json 第 2 项：due 不是时间'],
+      at: '2026-09-15T10:00:00.000Z',
+    }), 'utf8');
+    const s = readLastOutboxError();
+    expect(s).toContain('outbox-a.json 第 1 项');
+    expect(s).toContain('outbox-b.json 第 2 项');
+    expect(s).toContain('请避免同样的错');
+  });
+
+  it('readLastOutboxError：文件不存在或坏 JSON 都安静回 null，不抛', () => {
+    expect(readLastOutboxError()).toBeNull();
+    writeFileSync(join(dataDir(), '.last-outbox-error.json'), '半截 JSON {', 'utf8');
+    expect(readLastOutboxError()).toBeNull();
   });
 });

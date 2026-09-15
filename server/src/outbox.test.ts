@@ -74,6 +74,26 @@ describe('mergeOutbox：成功合并', () => {
     expect(tasks[0].id).toMatch(/^[0-9a-f-]{36}$/);
     expect(tasks[0].title).toBe('没给 id 的任务');
   });
+
+  /**
+   * 合并状态要带「这是谁跑出来的」——文件监听器触发时 bus 上挂着的最后一条
+   * 还是 runner 的 running（带 kind），mergeOutbox 从那儿继承。前端靠它选
+   * 「回顾完成」而不是「拆解完成」。新 Bus（启动时补合并历史坏文件）没有
+   * running，kind 缺省、不硬塞。
+   */
+  it('bus 上挂着 review 的 running 时，合并出的 ok 带着 kind: review', () => {
+    writeInbox([inboxItem()]);
+    writeOutbox([{ inboxId: 'inbox-1', tasks: [rawTask({ id: 'new-1' })] }]);
+
+    const bus = new Bus();
+    bus.emit('agent-status', { state: 'running', kind: 'review' });
+    const seen = statusEvents(bus);
+    mergeOutbox(bus);
+
+    // 订阅在 emit 之后注册会收到一次 running 重放（Bus 的 TTL 重放机制），
+    // 这里只认合并自己发的最后一条。
+    expect(seen.at(-1)).toEqual({ state: 'ok', message: '拆解完成，新增 1 个任务', kind: 'review' });
+  });
 });
 
 describe('mergeOutbox：校验不过', () => {

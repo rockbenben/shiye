@@ -1443,6 +1443,82 @@ describe('POST /api/review', () => {
   });
 });
 
+/**
+ * 总览是第三个 kind，跟拆解/回顾共用 runner 和单飞锁，但产物形状完全不同：
+ * 不写 outbox，CLI 路把汇报写进 `data/.board-report.md`、接口路直接回文本。
+ * 这一族盯三件事：提示词别拿错、锁是同一把、CLI 路的汇报文件真的被取回来
+ * （取不到时诚实落 skipped，不能假装绿色成功）。
+ */
+describe('POST /api/board', () => {
+  const fakeProc = (): ChildProcess => (new EventEmitter() as unknown as ChildProcess);
+  const promptOf = (spawnFn: unknown, nth = 0): string => {
+    const args = (spawnFn as { mock: { calls: [string, string[], unknown][] } }).mock.calls[nth][1];
+    return args[args.indexOf('-p') + 1];
+  };
+  type SeenStatus = { state: string; message?: string; kind?: string };
+
+  it('跑的是 board 那份提示词，不是拆解或回顾', async () => {
+    const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+    const withRunner = createApp(undefined, spawnFn);
+
+    expect((await withRunner.request('/api/board', { method: 'POST' })).status).toBe(200);
+    const prompt = promptOf(spawnFn);
+    expect(prompt).toContain('workflows/board.md');
+    expect(prompt).not.toContain('expand.md');
+    expect(prompt).not.toContain('review.md');
+  });
+
+  it('单飞：总览跑着的时候拆解也被 409——三者同一把锁', async () => {
+    const proc = Object.assign(fakeProc(), { kill: vi.fn() });
+    const spawnFn: Spawner = vi.fn(() => proc);
+    const withRunner = createApp(undefined, spawnFn);
+
+    expect((await withRunner.request('/api/board', { method: 'POST' })).status).toBe(200);
+    const blocked = await withRunner.request('/api/expand', { method: 'POST' });
+    expect(blocked.status).toBe(409);
+    expect(((await blocked.json()) as { error: string }).error).toMatch(/还在跑/);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('CLI 路：进程退出但没写汇报文件，落 skipped（kind=board），不假装成功', async () => {
+    const bus = new Bus();
+    const seen: SeenStatus[] = [];
+    bus.subscribe((e, d) => { if (e === 'agent-status') seen.push(d as SeenStatus); });
+    const proc = Object.assign(fakeProc(), { kill: vi.fn() });
+    const withRunner = createApp(bus, vi.fn(() => proc) as Spawner);
+
+    await withRunner.request('/api/board', { method: 'POST' });
+    proc.emit('exit', 0);
+
+    expect(seen).toContainEqual(expect.objectContaining({ state: 'running', kind: 'board' }));
+    const last = seen[seen.length - 1];
+    expect(last.state).toBe('skipped');
+    expect(last.kind).toBe('board');
+    expect(last.message).toContain('没有产出任何汇报');
+  });
+
+  it('CLI 路：汇报写进 data/.board-report.md，退出后取回来发 ok，文件取走即删', async () => {
+    const bus = new Bus();
+    const seen: SeenStatus[] = [];
+    bus.subscribe((e, d) => { if (e === 'agent-status') seen.push(d as SeenStatus); });
+    const proc = Object.assign(fakeProc(), { kill: vi.fn() });
+    const withRunner = createApp(bus, vi.fn(() => proc) as Spawner);
+
+    await withRunner.request('/api/board', { method: 'POST' });
+    // 模拟 AI 在进程退出前按 workflows/board.md 的约定原子写出汇报。
+    const reportFile = join(dir, '.board-report.md');
+    writeFileSync(reportFile, '待办 3 张、进行中 1 张\n过期 2 条：xxx、yyy', 'utf8');
+    proc.emit('exit', 0);
+
+    const last = seen[seen.length - 1];
+    expect(last.state).toBe('ok');
+    expect(last.kind).toBe('board');
+    expect(last.message).toContain('过期 2 条');
+    // 取走即删：留着只会让下一轮读到上一轮的旧汇报。
+    expect(existsSync(reportFile)).toBe(false);
+  });
+});
+
 describe('自动拆解调度跟路由的接线', () => {
   const fakeAutoProc = (): ChildProcess & { emitExit: (code: number) => void } => {
     const e = new EventEmitter() as unknown as ChildProcess & { emitExit: (code: number) => void };

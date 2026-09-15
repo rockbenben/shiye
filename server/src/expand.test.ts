@@ -58,7 +58,7 @@ describe('createAgentRunner：状态广播', () => {
     const runner = createAgentRunner(bus, () => proc);
 
     runner.start();
-    expect(seen[0]).toEqual({ state: 'running' });
+    expect(seen[0]).toEqual({ state: 'running', kind: 'expand' });
   });
 
   // 时序是固定的：AI 把 outbox 文件写完之后还要花几秒生成收尾文字、打印
@@ -269,7 +269,7 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
     expect(r.ok).toBe(false);
     expect((r as { error: string }).error).toMatch(/模型名还没填/);
     expect(f).not.toHaveBeenCalled();
-    expect(seen).toEqual([{ state: 'failed', message: expect.stringMatching(/模型名还没填/) }]);
+    expect(seen).toEqual([{ state: 'failed', kind: 'expand', message: expect.stringMatching(/模型名还没填/) }]);
   });
 
   /**
@@ -284,7 +284,7 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
 
     runner.start();
     await settle();
-    expect(seen).toEqual([{ state: 'running' }]);
+    expect(seen).toEqual([{ state: 'running', kind: 'expand' }]);
     expect(runner.isRunning()).toBe(false);
   });
 
@@ -296,7 +296,10 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
 
     runner.start();
     await settle();
-    expect(seen).toEqual([{ state: 'running' }, { state: 'skipped', message: expect.stringMatching(/没有写出任何拆解结果/) }]);
+    expect(seen).toEqual([
+      { state: 'running', kind: 'expand' },
+      { state: 'skipped', kind: 'expand', message: expect.stringMatching(/没有写出任何拆解结果/) },
+    ]);
   });
 
   it('接口报错：failed，而且带上接口自己那句话', async () => {
@@ -307,7 +310,7 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
 
     runner.start();
     await settle();
-    expect(seen[1]).toEqual({ state: 'failed', message: expect.stringMatching(/拆解失败.*Incorrect API key/) });
+    expect(seen[1]).toEqual({ state: 'failed', kind: 'expand', message: expect.stringMatching(/拆解失败.*Incorrect API key/) });
     expect(runner.isRunning()).toBe(false);
   });
 
@@ -325,7 +328,7 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
       runner.start();
       await vi.advanceTimersByTimeAsync(1001);
       expect(aborted).toBe(true);
-      expect(seen[1]).toEqual({ state: 'failed', message: expect.stringMatching(/超过 10 分钟没结束/) });
+      expect(seen[1]).toEqual({ state: 'failed', kind: 'expand', message: expect.stringMatching(/超过 10 分钟没结束/) });
       expect(runner.isRunning()).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -357,7 +360,7 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
     const seen = statusEvents(bus);
     createAgentRunner(bus, () => fakeProc(), 1000, f).start('review');
     await settle();
-    expect(seen[1]).toEqual({ state: 'failed', message: expect.stringMatching(/^回顾失败/) });
+    expect(seen[1]).toEqual({ state: 'failed', kind: 'review', message: expect.stringMatching(/^回顾失败/) });
   });
 
   it('设置改回 cli 就还是起子进程——这一格是每次 start 现读的，不是启动时定死的', () => {

@@ -16,10 +16,10 @@ export function resolveBindHost(env: NodeJS.ProcessEnv): '0.0.0.0' | '127.0.0.1'
  * 家庭 Wi-Fi），这句提示是唯一的防线。
  *
  * **两条后果原来没写进这句提示，实测发现之后补的**（final-review.md I1/I2）：
- * - `POST /api/expand`、`POST /api/review` 局域网内无认证可达，能触发一次真实的 `claude -p`
- *   子进程——不只是「读写任务」，是「花掉你的订阅额度」。而且它是简单请求
- *   （`POST` 不带/带简单 `Content-Type`），不触发预检，CORS 白名单挡不住，
- *   任意网页的 `fetch(..., {mode:'no-cors'})` 都能打进来。
+ * - `POST /api/expand`、`POST /api/review`、`POST /api/board` 局域网内无认证可达，
+ *   能触发一次真实的 `claude -p` 子进程——不只是「读写任务」，是「花掉你的订阅
+ *   额度」。而且它是简单请求（`POST` 不带/带简单 `Content-Type`），不触发预检，
+ *   CORS 白名单挡不住，任意网页的 `fetch(..., {mode:'no-cors'})` 都能打进来。
  * - `webhookUrl` 改掉之后，**关掉 `LAN=1`、重启服务都不会自己恢复**——它是
  *   settings 里持久化的一个字段，此后每条提醒都会把任务原文 POST 给那个地址，
  *   是唯一一条能活过「关闭局域网模式」这个动作本身的外泄通道。
@@ -27,7 +27,7 @@ export function resolveBindHost(env: NodeJS.ProcessEnv): '0.0.0.0' | '127.0.0.1'
  */
 export const LAN_WARNING =
   '⚠️ 局域网模式已开启（LAN=1），服务绑在 0.0.0.0：同一个 Wi-Fi 下的任何设备都能' +
-  '读写你的全部任务（收件箱原文、任务内容，没有任何认证），还能触发 AI 拆解和回顾（花你的' +
+  '读写你的全部任务（收件箱原文、任务内容，没有任何认证），还能触发 AI 拆解、回顾和总览（花你的' +
   '订阅额度）、改掉提醒 webhook（这一条改了之后，就算关掉局域网模式也不会自己恢复，' +
   '此后每条提醒都会把任务原文发给对方）、把 AI 接口地址改到别处（同样不会自己恢复；改了之后每次拆解都会把你的收件箱原文和全部任务发给那个地址）。别在咖啡馆、机场这类公共 Wi-Fi 上开这个模式。';
 

@@ -1,11 +1,12 @@
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, renameSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
 import type { Bus } from './events.js';
 import { isSafeId } from './entityStore.js';
 import { emitAgentStatus } from './expand.js';
 import { bad, checkProposalPatch, checkTaskPatch, type SanitizeResult } from './task.js';
 import {
-  deleteOutboxFile, newTask, nowIso, outboxFiles, readInbox, readInsights, readOutboxFile, readProposals, readTasks,
+  dataDir, deleteOutboxFile, newTask, nowIso, outboxFiles, readInbox, readInsights, readOutboxFile, readProposals, readTasks,
   strayOutboxFiles, writeInbox, writeInsights, writeProposals, writeTasks,
   type InboxItem, type Insight, type OutboxEntry, type OutboxInsightEntry, type OutboxUpdateEntry, type Proposal, type Task,
 } from './store.js';
@@ -642,6 +643,32 @@ function mergeOneFile(file: string): FileResult {
  * 处理过的重复触发、还是收件箱里根本没内容要拆、还是 AI 真的跑了一圈但没判出
  * 任何任务。
  */
+
+/**
+ * 把上次校验失败的那批写进 `data/.last-outbox-error.json`——下次 AI 跑之前
+ * `readLastOutboxError()` 会读到它，拼进 prompt 末尾。AI 退出后校验失败的
+ * 错误它原本永远看不到，这条管道让 self-correcting 闭合。
+ *
+ * **只记校验失败（`validationFailures`）**——`writeFailures` 是落盘/清理
+ * 那一步出的意外，重写一次文件解决不了，也不该塞给 AI 当「上次你写错了」
+ * 的提示。原子写：先 `.tmp` 再 rename，跟 `writeOutboxFile` 同款，避免
+ * 监听器读到半截 JSON。
+ */
+function writeLastOutboxError(failures: string[]): void {
+  const dir = dataDir();
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, '.last-outbox-error.json');
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ failures, at: nowIso() }, null, 2), 'utf8');
+  renameSync(tmp, file);
+}
+
+/** 成功合并一次之后删掉——错误已经被这次成功消化了，留着只会让 AI 一直看到陈年旧账。 */
+function deleteLastOutboxError(): void {
+  const file = join(dataDir(), '.last-outbox-error.json');
+  if (existsSync(file)) unlinkSync(file);
+}
+
 export function mergeOutbox(bus: Bus): void {
   const files = outboxFiles();
 
@@ -706,9 +733,18 @@ export function mergeOutbox(bus: Bus): void {
     if (writeFailures.length > 0) parts.push(`以下文件校验通过但落盘/清理时出了问题（不是校验没过，数据可能已经部分改动）：${writeFailures.join('；')}`);
     const message = parts.join('；');
     console.warn('[outbox]', message);
+    // 把校验失败那批写进 `data/.last-outbox-error.json`——下次 AI 跑之前
+    // `readLastOutboxError()` 会读到它，拼进 prompt 末尾，让 self-correcting 闭合。
+    // `writeFailures` 不记：那是落盘问题、不是 AI 写错了什么，塞回去当「上次你
+    // 写错了」是误导。
+    if (validationFailures.length > 0) writeLastOutboxError(validationFailures);
     emitAgentStatus(bus, { state: 'failed', message });
     return;
   }
+
+  // 成功合并了一次（校验全过、且真有产出）——上次的错误已经被这次成功消化，
+  // 删掉它，免得 AI 一直看到陈年旧账。只有全跳过（skipped）的路径不算消化。
+  if (newTaskCount > 0 || proposalCount > 0 || insightCount > 0) deleteLastOutboxError();
 
   // 只提了建议/记录了观察、没拆出新任务：这是定期分析的正常结果，不是
   // 「什么都没发生」。两种不能共用「提了 N 条建议，在任务卡上等你确认」这句

@@ -351,6 +351,32 @@ export function deleteOutboxFile(file: string): void {
 }
 
 /**
+ * 上次 outbox 校验失败的提示句，给下次 AI 跑之前拼进 prompt 末尾——让 AI
+ * 能从自己上次的错误中学，而不是反复踩同一个坑。文件不存在或空返回 null。
+ *
+ * **dotfile，不在任何 entityStore 实体目录里**：`data/.last-outbox-error.json`
+ * 是 `data/` 根目录下的散落文件，`events.ts` 的 `WATCHED` 名单是目录名，取
+ * 第一段拿到整个文件名，不命中任何目录名 → 天然不触发 `data-changed` 广播；
+ * `OUTBOX_RE = /^outbox-.+\.json$/` 也不匹配（不以 `outbox-` 开头）→ 不被
+ * outbox 监听器认作待合并文件。安静地躺着，只给 `mergeOutbox` 写、给
+ * `expand.ts`/`aiApi.ts` 读。
+ */
+export function readLastOutboxError(): string | null {
+  const file = join(dataDir(), '.last-outbox-error.json');
+  try {
+    if (!existsSync(file)) return null;
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as { failures?: string[]; at?: string };
+    const failures = Array.isArray(raw.failures) ? raw.failures.filter((s) => typeof s === 'string' && s) : [];
+    if (failures.length === 0) return null;
+    const at = typeof raw.at === 'string' ? raw.at : '';
+    const when = at ? `（${at}）` : '';
+    return `上次 outbox 校验失败${when}：${failures.join('；')}。请避免同样的错。`;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 启动时把 `data/` 准备好。**先迁移再铺目录**：迁移要读旧的
  * `tasks.json`，铺目录不能抢在它前面把状态搅乱。
  *

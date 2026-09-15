@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
-import { createAgentRunner, type Spawner } from './expand.js';
+import { createAgentRunner, parseCustomArgs, resolveCliInvocation, type Spawner } from './expand.js';
 import { Bus } from './events.js';
 import { aiSeesSameData, writeSettings } from './store.js';
 import { DEFAULT_SETTINGS } from './model.js';
@@ -368,3 +368,170 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
     expect(spawnFn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('parseCustomArgs：解析自定义 CLI 参数模板', () => {
+  it('模板为空：默认返回 -p <prompt>', () => {
+    expect(parseCustomArgs('', '提示词')).toEqual(['-p', '提示词']);
+    expect(parseCustomArgs('   ', '提示词')).toEqual(['-p', '提示词']);
+  });
+
+  it('模板包含 {prompt}：正确替换并保留其它参数', () => {
+    expect(parseCustomArgs('-p "{prompt}" --dangerously-skip-permissions', '请拆解')).toEqual([
+      '-p', '请拆解', '--dangerously-skip-permissions',
+    ]);
+    expect(parseCustomArgs('--prompt="{prompt}"', '测试')).toEqual(['--prompt=测试']);
+  });
+
+  it('模板不包含 {prompt}：在末尾追加提示词', () => {
+    expect(parseCustomArgs('--execute --yes', '提示词')).toEqual(['--execute', '--yes', '提示词']);
+  });
+});
+
+describe('resolveCliInvocation：按设置解析 CLI 命令与参数', () => {
+  const origEnv = process.env;
+  beforeEach(() => { process.env = { ...origEnv }; });
+  afterEach(() => { process.env = origEnv; });
+
+  it('默认或 claude：使用 claude 及 Claude Code 参数', () => {
+    delete process.env.CLAUDE_CLI;
+    const inv = resolveCliInvocation({ aiCli: 'claude' }, '测试提示词');
+    expect(inv.command).toBe('claude');
+    expect(inv.args).toEqual([
+      '-p', '测试提示词',
+      '--allowedTools', 'Read,Edit,Write,Bash',
+      '--permission-mode', 'acceptEdits',
+      '--output-format', 'json',
+    ]);
+  });
+
+  it('claude 支持 CLAUDE_CLI 环境变量与自定义路径覆盖', () => {
+    process.env.CLAUDE_CLI = '/custom/claude';
+    expect(resolveCliInvocation({ aiCli: 'claude' }, 'x').command).toBe('/custom/claude');
+
+    delete process.env.CLAUDE_CLI;
+    expect(resolveCliInvocation({ aiCli: 'claude', aiCliPath: 'D:\\claude.cmd' }, 'x').command).toBe('D:\\claude.cmd');
+  });
+
+  it('agy：使用 agy 及对应参数', () => {
+    delete process.env.AGY_CLI;
+    const inv = resolveCliInvocation({ aiCli: 'agy' }, '测试提示词');
+    expect(inv.command).toBe('agy');
+    expect(inv.args).toEqual(['-p', '测试提示词', '--mode', 'accept-edits', '--dangerously-skip-permissions']);
+  });
+
+  it('agy 支持 AGY_CLI 环境变量与自定义路径覆盖', () => {
+    process.env.AGY_CLI = '/opt/bin/agy';
+    expect(resolveCliInvocation({ aiCli: 'agy' }, 'x').command).toBe('/opt/bin/agy');
+
+    delete process.env.AGY_CLI;
+    expect(resolveCliInvocation({ aiCli: 'agy', aiCliPath: 'C:\\agy\\agy.exe' }, 'x').command).toBe('C:\\agy\\agy.exe');
+  });
+
+  it('codex：使用 codex 及对应参数，支持 CODEX_CLI 与路径覆盖', () => {
+    delete process.env.CODEX_CLI;
+    const inv = resolveCliInvocation({ aiCli: 'codex' }, '测试提示词');
+    expect(inv.command).toBe('codex');
+    expect(inv.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '测试提示词']);
+
+    process.env.CODEX_CLI = '/usr/bin/codex';
+    expect(resolveCliInvocation({ aiCli: 'codex' }, 'x').command).toBe('/usr/bin/codex');
+  });
+
+  it('gemini：使用 gemini 及对应参数，支持 GEMINI_CLI 与路径覆盖', () => {
+    delete process.env.GEMINI_CLI;
+    const inv = resolveCliInvocation({ aiCli: 'gemini' }, '测试提示词');
+    expect(inv.command).toBe('gemini');
+    expect(inv.args).toEqual(['-p', '测试提示词', '-y']);
+
+    process.env.GEMINI_CLI = 'gemini.cmd';
+    expect(resolveCliInvocation({ aiCli: 'gemini' }, 'x').command).toBe('gemini.cmd');
+  });
+
+  it('aider：使用 aider 及对应参数，支持 AIDER_CLI 与路径覆盖', () => {
+    delete process.env.AIDER_CLI;
+    const inv = resolveCliInvocation({ aiCli: 'aider' }, '测试提示词');
+    expect(inv.command).toBe('aider');
+    expect(inv.args).toEqual(['--message', '测试提示词', '--yes-always']);
+
+    process.env.AIDER_CLI = '/opt/aider';
+    expect(resolveCliInvocation({ aiCli: 'aider' }, 'x').command).toBe('/opt/aider');
+  });
+
+  it('custom：使用自定义路径与参数模板', () => {
+    const inv = resolveCliInvocation({
+      aiCli: 'custom',
+      aiCliPath: 'my-agent',
+      aiCliCustomArgs: '--run "{prompt}" --auto',
+    }, '测试提示词');
+    expect(inv.command).toBe('my-agent');
+    expect(inv.args).toEqual(['--run', '测试提示词', '--auto']);
+  });
+});
+
+describe('createAgentRunner：支持多款 CLI', () => {
+  it('设置设为 agy 时，spawn 传入 agy 命令与对应参数', () => {
+    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'cli', aiCli: 'agy' });
+    const proc = fakeProc();
+    const spawnFn: Spawner = vi.fn(() => proc);
+    const runner = createAgentRunner(undefined, spawnFn);
+
+    runner.start();
+    expect(spawnFn).toHaveBeenCalledWith(
+      'agy',
+      expect.arrayContaining(['-p', expect.stringContaining('AGENTS.md'), '--mode', 'accept-edits', '--dangerously-skip-permissions']),
+      expect.anything(),
+    );
+  });
+
+  it('agy 工具未找到（ENOENT）时错误信息提示 agy', () => {
+    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'cli', aiCli: 'agy' });
+    const proc = fakeProc();
+    const bus = new Bus();
+    const seen = statusEvents(bus);
+    const runner = createAgentRunner(bus, () => proc);
+
+    runner.start();
+    const err = Object.assign(new Error('spawn agy ENOENT'), { code: 'ENOENT' });
+    proc.emit('error', err);
+
+    const last = seen[seen.length - 1] as { state: string; message: string };
+    expect(last.state).toBe('failed');
+    expect(last.message).toContain('确认 agy 在 PATH 里');
+  });
+
+  it('设置设为 custom 时，spawn 传入自定义可执行文件与模板参数', () => {
+    writeSettings({
+      ...DEFAULT_SETTINGS,
+      aiMode: 'cli',
+      aiCli: 'custom',
+      aiCliPath: 'my-agent.cmd',
+      aiCliCustomArgs: '-m "{prompt}" --force',
+    });
+    const proc = fakeProc();
+    const spawnFn: Spawner = vi.fn(() => proc);
+    const runner = createAgentRunner(undefined, spawnFn);
+
+    runner.start();
+    expect(spawnFn).toHaveBeenCalledWith(
+      'my-agent.cmd',
+      ['-m', expect.stringContaining('AGENTS.md'), '--force'],
+      expect.anything(),
+    );
+  });
+
+  it('设置设为 codex 时，spawn 传入 codex 命令与对应 exec 参数', () => {
+    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'cli', aiCli: 'codex' });
+    const proc = fakeProc();
+    const spawnFn: Spawner = vi.fn(() => proc);
+    const runner = createAgentRunner(undefined, spawnFn);
+
+    runner.start();
+    expect(spawnFn).toHaveBeenCalledWith(
+      'codex',
+      ['exec', '--dangerously-bypass-approvals-and-sandbox', expect.stringContaining('AGENTS.md')],
+      expect.anything(),
+    );
+  });
+});
+
+

@@ -48,6 +48,17 @@ export type TaskContext = 'computer' | 'out' | 'home' | 'contact' | 'easy';
  */
 export type WeekStart = 0 | 1 | 6;
 
+/**
+ * 用哪款命令行工具叫 AI。
+ * `'claude'` = Claude Code（默认）
+ * `'agy'` = Google Antigravity CLI（`agy`）
+ * `'codex'` = OpenAI Codex CLI
+ * `'gemini'` = Google Gemini CLI
+ * `'aider'` = Aider
+ * `'custom'` = 自定义 CLI
+ */
+export type AiCliKind = 'claude' | 'agy' | 'codex' | 'gemini' | 'aider' | 'custom';
+
 
 export interface Subtask {
   text: string;
@@ -622,6 +633,31 @@ export interface Settings {
   aiMode: 'cli' | 'api';
 
   /**
+   * `aiMode: 'cli'` 时调用哪款命令行工具。
+   * `'claude'` = Claude Code（默认）
+   * `'agy'` = Google Antigravity CLI（`agy`）
+   * `'codex'` = OpenAI Codex CLI
+   * `'gemini'` = Google Gemini CLI
+   * `'aider'` = Aider
+   * `'custom'` = 自定义 CLI
+   */
+  aiCli: AiCliKind;
+
+  /**
+   * CLI 的可执行文件路径或命令名。留空时根据 `aiCli` 退回默认策略：
+   * - `'claude'`: 环境变量 `CLAUDE_CLI` 优先，否则为 `'claude'`
+   * - `'agy'`: 环境变量 `AGY_CLI` 优先，否则为 `'agy'`
+   * - `'custom'`: 留空退回 `'claude'`
+   */
+  aiCliPath: string;
+
+  /**
+   * `aiCli: 'custom'` 时的参数模板，支持 `{prompt}` 占位符。
+   * 留空或未包含 `{prompt}` 时默认追加提示词参数。
+   */
+  aiCliCustomArgs: string;
+
+  /**
    * `aiMode: 'api'` 时打到哪儿。填完整地址（`…/v1/chat/completions`）、base
    * （`…/v1`）、或者光一个域名都认，`aiApi.ts` 的 `chatUrl` 负责补齐。
    */
@@ -879,5 +915,5 @@ export const DEFAULT_SETTINGS: Settings = {
   // AI 默认还是走 `claude` 子进程——这是这个应用一直以来的行为，也是本事最大的
   // 那条。另外三格留空：地址和模型没有一个「多数人都对」的默认值（各家互不相同），
   // 猜一个填进去，只会让「我明明没配过，怎么会报 401」变成一次没必要的排查。
-  aiMode: 'cli', aiBaseUrl: '', aiKey: '', aiModel: '',
+  aiMode: 'cli', aiCli: 'claude', aiCliPath: '', aiCliCustomArgs: '', aiBaseUrl: '', aiKey: '', aiModel: '',
 };

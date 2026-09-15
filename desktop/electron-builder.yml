@@ -10,10 +10,11 @@
 #      用 join(here,'..','..') 从「自己所在目录」往上两级找 web/dist，把 server/dist
 #      放在 <resourcesPath>/server/dist/ 正好让这个相对关系在打包后继续成立
 #      （<resourcesPath>/server/dist/.. /.. = <resourcesPath>，web/dist 在它下面）。
-#   3) server/dist/index.js 头几行是裸 specifier（'@hono/node-server'、'hono'、
-#      'dotenv'），tsc 不会帮它们打包依赖——这三个包也得各自进 extraResources
-#      （见下面 extraResources 里的注释），否则子进程一 spawn 就是
-#      ERR_MODULE_NOT_FOUND，只在产物挪出仓库之后才会暴露。
+#   3) server/dist 里有裸 specifier（index.js 的 '@hono/node-server'、'hono'，
+#      chineseDays.js 的 'chinese-days'，expand.js 的 'cross-spawn'），tsc 不会
+#      帮它们打包依赖——这些包都得进 extraResources（见下面 extraResources 里的
+#      注释），否则子进程一 spawn 就是 ERR_MODULE_NOT_FOUND，只在产物挪出仓库
+#      之后才会暴露。
 
 appId: com.rockbenben.shiye
 productName: 办事师爷
@@ -84,7 +85,8 @@ npmRebuild: false
 # （dmg / zip / AppImage / exe 都在日志里 building 过），死在最后一步。
 #
 # 这个仓库没有接 `electron-updater`（全仓零引用），也就没有「自动更新源」这回事，
-# 发布是 release workflow 用 upload-artifact 做的。所以这里明确关掉：`app-update.yml`
+# 发布是 release workflow 用 softprops/action-gh-release 直接挂到 GitHub Release
+# 的（upload-artifact 只留 90 天的调试档）。所以这里明确关掉：`app-update.yml`
 # 和 `latest.yml` 那两份假的更新元数据也跟着不再生成（它们本来就名不副实——
 # `latest.yml` 里的文件名是 `desktop-setup-0.1.0.exe`，而真实产物叫
 # 「办事师爷 Setup 0.1.0.exe」，来自 `desktop/package.json` 的 `name: "desktop"`）。
@@ -95,20 +97,53 @@ publish: null
 extraResources:
   - from: server/dist
     to: server/dist
-  # server/dist/index.js 是 tsc 直出，裸 specifier（import { serve } from
+  # server/dist/*.js 是 tsc 直出，裸 specifier（import { serve } from
   # '@hono/node-server' 这种）要靠 Node 的 node_modules 向上查找解析；
   # <resources>/server/node_modules 正好在它的查找路径上（从
   # <resources>/server/dist/ 往上一级）。这三个包各自零传递依赖——
-  # @hono/node-server 对 hono 只是 peerDependency，hono 和 dotenv 本身没有
-  # dependencies 字段，npm workspaces 把三者都提到了仓库根 node_modules——
-  # 所以只用各拷一份自己，不用管它们的依赖树。不这么做的话打包后子进程一
-  # spawn 就是 ERR_MODULE_NOT_FOUND：产物在仓库外时找不到仓库根的 node_modules。
+  # @hono/node-server 对 hono 只是 peerDependency；hono 没有 dependencies 字段；
+  # chinese-days 的 main 是一个零依赖的 dist/index.min.js。npm workspaces 把它们
+  # 都提到了仓库根 node_modules，所以只用各拷一份自己，不用管依赖树。不这么做的
+  # 话打包后子进程一 spawn 就是 ERR_MODULE_NOT_FOUND：产物在仓库外时找不到仓库根
+  # 的 node_modules。
+  #
+  # ⚠️ **chinese-days 这一条是 v0.1.0 / v0.1.1 两个版本的安装包实际点不开之后才补的**：
+  # chineseDays.ts 把它 import 进了 server 的启动模块图，但这里只拷了 hono、
+  # @hono/node-server 和（当时还在用的）dotenv，漏了它。CI 三个平台全绿，因为
+  # 「包打得出来」和「打完的包里服务起得来」是两件事——后者没有任何一步在跑。
+  # 本地守卫：把 extraResources 的布局在仓库外原样摆好真起一次服务——建临时
+  # <r>/server/dist、<r>/server/node_modules、<r>/web/dist，照下面三份拷过去，
+  # DATA_DIR=<tmp> node <r>/server/dist/index.js，再探 /api/health。以后 server
+  # 每加一条运行时依赖，先扫编译产物里的裸包清单，照这张清单过：
+  #   grep -rhoE "(from |import\()['\"][^.'\"][^'\"]*['\"]" server/dist --include=*.js
+  #
+  # dotenv 已经不在这份清单里：.env 改用 Node 自带的 process.loadEnvFile 读取
+  # （index.ts），依赖删掉了；多留一条只会被 electron-builder 静默跳过——来源
+  # 不存在时它只打 debug 日志、不报错，这也是漏拷 chinese-days 从没被构建拦住的
+  # 原因之一。
   - from: node_modules/hono
     to: server/node_modules/hono
   - from: node_modules/@hono/node-server
     to: server/node_modules/@hono/node-server
-  - from: node_modules/dotenv
-    to: server/node_modules/dotenv
+  - from: node_modules/chinese-days
+    to: server/node_modules/chinese-days
+  # expand.ts 叫 AI CLI 用的是 cross-spawn（为什么不用原生 spawn，见 expand.ts
+  # createAgentRunner 顶上那段 Windows .cmd 的实测）。它是 CJS、tsc 不打包，连同
+  # 运行时依赖树一共六个包：cross-spawn → shebang-command → shebang-regex，
+  # cross-spawn → which → isexe，外加 path-key。少任何一个，dev 下被根 node_modules
+  # 提升盖住看不出来，打包后一选命令行模式就是 ERR_MODULE_NOT_FOUND。
+  - from: node_modules/cross-spawn
+    to: server/node_modules/cross-spawn
+  - from: node_modules/shebang-command
+    to: server/node_modules/shebang-command
+  - from: node_modules/shebang-regex
+    to: server/node_modules/shebang-regex
+  - from: node_modules/which
+    to: server/node_modules/which
+  - from: node_modules/isexe
+    to: server/node_modules/isexe
+  - from: node_modules/path-key
+    to: server/node_modules/path-key
   - from: web/dist
     to: web/dist
   - from: AGENTS.md

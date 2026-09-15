@@ -51,7 +51,7 @@ let trashFetchCount = 0;
 // focusMinutes，卡片会悄悄落回那个写死的默认值——如果这里的夹具也用 25，
 // 「传对了」和「传漏了」在屏幕上长得一模一样，测试测不出来。45 分钟没有
 // 别的含义，只是随手挑一个不等于 25 的数。
-const settings: Settings = { webhookUrl: '', toastEnabled: true, autoExpand: true, autoExpandDelaySec: 60, focusMinutes: 45, breakMinutes: 5, dailySummaryAt: null, dailySummaryOn: null, defaultListId: null, defaultPriority: 0, defaultDue: 'none' as const, defaultRemindMinutes: null, defaultTags: [], weekStart: 1 as const, smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true, showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiBaseUrl: '', aiKey: '', aiModel: '' };
+const settings: Settings = { webhookUrl: '', toastEnabled: true, autoExpand: true, autoExpandDelaySec: 60, focusMinutes: 45, breakMinutes: 5, dailySummaryAt: null, dailySummaryOn: null, defaultListId: null, defaultPriority: 0, defaultDue: 'none' as const, defaultRemindMinutes: null, defaultTags: [], weekStart: 1 as const, smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true, showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiCli: 'claude' as const, aiCliPath: '', aiCliCustomArgs: '', aiBaseUrl: '', aiKey: '', aiModel: '' };
 
 vi.mock('./api.js', () => ({
   api: {

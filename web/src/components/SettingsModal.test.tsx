@@ -5,7 +5,7 @@ import { SETTING_SECTIONS, SettingsModal } from './SettingsModal.js';
 import { getApiBase, setApiBase } from '../lib/apiBase.js';
 import type { InboxItem, Proposal, Settings, Task } from '../types.js';
 
-const settings: Settings = { webhookUrl: 'https://x', toastEnabled: true, autoExpand: true, autoExpandDelaySec: 60, focusMinutes: 25, breakMinutes: 5, dailySummaryAt: null, dailySummaryOn: null, defaultListId: null, defaultPriority: 0 as const, defaultDue: 'none' as const, defaultRemindMinutes: null, defaultTags: [], weekStart: 1 as const, smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true, showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiBaseUrl: '', aiKey: '', aiModel: '' };
+const settings: Settings = { webhookUrl: 'https://x', toastEnabled: true, autoExpand: true, autoExpandDelaySec: 60, focusMinutes: 25, breakMinutes: 5, dailySummaryAt: null, dailySummaryOn: null, defaultListId: null, defaultPriority: 0 as const, defaultDue: 'none' as const, defaultRemindMinutes: null, defaultTags: [], weekStart: 1 as const, smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true, showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiCli: 'claude' as const, aiCliPath: '', aiCliCustomArgs: '', aiBaseUrl: '', aiKey: '', aiModel: '' };
 const inbox: InboxItem[] = [{ id: 'i1', text: '条目', createdAt: '2026-08-01T00:00:00.000Z', processed: false, taskIds: [] }];
 const tasks: Task[] = [{
   id: 't1', title: '任务', notes: '备注', status: 'todo', due: null, startAt: null, endAt: null, reminders: [],
@@ -408,6 +408,9 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
     goto('AI 拆解');
   };
 
+  // 「显示订阅套餐节点」开关存 localStorage，用例间不能让上一条打开的状态漏过来。
+  beforeEach(() => localStorage.clear());
+
   /**
    * 默认那档是「本机 Claude Code」，接口那三格连出现都不该出现——没选它的时候
    * 摆三个空框，人会以为不填就用不了 AI，而默认那条路压根不需要它们。
@@ -417,6 +420,55 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
     expect(screen.queryByText('接口地址')).toBeNull();
     expect(screen.queryByText('模型')).toBeNull();
     expect(screen.queryByText('密钥')).toBeNull();
+  });
+
+  it('默认走本机命令行时显示命令行工具选择与路径框，未选自定义时不画参数模板框', () => {
+    open(settings);
+    expect(screen.getByText('命令行工具')).toBeDefined();
+    expect(screen.getByRole('radio', { name: 'Claude Code' })).toBeDefined();
+    expect(screen.getByRole('radio', { name: 'Antigravity CLI (agy)' })).toBeDefined();
+    expect(screen.getByRole('radio', { name: 'OpenAI Codex' })).toBeDefined();
+    expect(screen.getByRole('radio', { name: 'Gemini CLI' })).toBeDefined();
+    expect(screen.getByRole('radio', { name: 'Aider' })).toBeDefined();
+    expect(screen.getByRole('radio', { name: '自定义' })).toBeDefined();
+    expect(screen.getByLabelText('命令行工具路径')).toBeDefined();
+    expect(screen.queryByLabelText('自定义命令行参数')).toBeNull();
+  });
+
+  it('切到「自定义」后显示参数模板框，并可输入路径与模板', async () => {
+    const onSave = vi.fn(async (_v: Settings) => {});
+    open(settings, onSave);
+
+    fireEvent.click(screen.getByRole('radio', { name: '自定义' }));
+    expect(screen.getByLabelText('自定义命令行参数')).toBeDefined();
+
+    fireEvent.change(screen.getByLabelText('命令行工具路径'), { target: { value: 'my-agent' } });
+    fireEvent.change(screen.getByLabelText('自定义命令行参数'), { target: { value: '--run "{prompt}"' } });
+
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '保存')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]).toMatchObject({
+      aiMode: 'cli',
+      aiCli: 'custom',
+      aiCliPath: 'my-agent',
+      aiCliCustomArgs: '--run "{prompt}"',
+    });
+  });
+
+  it('选择 Antigravity CLI (agy) 保存时正确传出 aiCli: "agy"', async () => {
+    const onSave = vi.fn(async (_v: Settings) => {});
+    open(settings, onSave);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Antigravity CLI (agy)' }));
+    fireEvent.change(screen.getByLabelText('命令行工具路径'), { target: { value: 'C:\\tools\\agy.exe' } });
+
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '保存')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]).toMatchObject({
+      aiMode: 'cli',
+      aiCli: 'agy',
+      aiCliPath: 'C:\\tools\\agy.exe',
+    });
   });
 
   it('切到「调接口」之后那三格才出现', () => {
@@ -454,6 +506,82 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
     const url = screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement;
     fireEvent.change(url, { target: { value: 'http://192.168.1.9:8080/v1' } });
     expect(url.value).toBe('http://192.168.1.9:8080/v1');
+  });
+
+  /**
+   * 云厂商预置（地址 + 默认模型）由 web-tools 同步的 provider 目录提供，
+   * 这里钉一条确认目录值真的流到了 Tag 上，目录改了这条就跟着改。
+   */
+  it('云厂商预置的地址和默认模型来自 provider 目录', () => {
+    open({ ...settings, aiMode: 'api' });
+    fireEvent.click(screen.getByText('DeepSeek'));
+    expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
+      .toBe('https://api.deepseek.com/chat/completions');
+    expect((screen.getByPlaceholderText('gemini-3.7-flash') as HTMLInputElement).value)
+      .toBe('deepseek-flash');
+  });
+
+  /**
+   * 两个订阅套餐端点默认隐藏（官方文档写明有封号风险，见开关旁的说明），
+   * 但只是「默认选项不显示」——不是禁用：高级开关一开就出现。
+   */
+  it('两个订阅套餐预置默认藏着；打开高级开关后出现，偏好写入 localStorage', () => {
+    open({ ...settings, aiMode: 'api' });
+    expect(screen.queryByText('字节方舟 Coding Plan')).toBeNull();
+    expect(screen.queryByText('阿里百炼 Token Plan')).toBeNull();
+    // 其余预置照常显示，不是整块被藏了。
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+    // 关着时风险说明不占位。
+    expect(screen.queryByText(/官方文档指明/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('switch', { name: '显示订阅套餐节点（Coding Plan / Token Plan）' }));
+    expect(localStorage.getItem('showCodingPlans')).toBe('1');
+    expect(screen.getByText('字节方舟 Coding Plan')).toBeTruthy();
+    expect(screen.getByText('阿里百炼 Token Plan')).toBeTruthy();
+    expect(screen.getByText(/官方文档指明/)).toBeTruthy();
+  });
+
+  it('上次打开过开关，重新挂载后两个预置直接可见——偏好被记住', () => {
+    localStorage.setItem('showCodingPlans', '1');
+    open({ ...settings, aiMode: 'api' });
+    expect(screen.getByText('字节方舟 Coding Plan')).toBeTruthy();
+    expect(screen.getByText('阿里百炼 Token Plan')).toBeTruthy();
+  });
+
+  it('打开开关后点订阅套餐预置，套餐端点地址和模型一起填好', () => {
+    open({ ...settings, aiMode: 'api' });
+    fireEvent.click(screen.getByRole('switch', { name: '显示订阅套餐节点（Coding Plan / Token Plan）' }));
+
+    fireEvent.click(screen.getByText('字节方舟 Coding Plan'));
+    expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
+      .toBe('https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions');
+    expect((screen.getByPlaceholderText('gemini-3.7-flash') as HTMLInputElement).value)
+      .toBe('doubao-seed-evolving');
+
+    fireEvent.click(screen.getByText('阿里百炼 Token Plan'));
+    expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
+      .toBe('https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions');
+    expect((screen.getByPlaceholderText('gemini-3.7-flash') as HTMLInputElement).value)
+      .toBe('qwen3.8-flash');
+  });
+
+  /**
+   * hidden 只过滤「默认选项列表」：他已存的配置恰好落在隐藏预置上时，
+   * 那颗 Tag 必须照常显示且高亮——否则界面上看不到当前选中了什么，
+   * 切开关也不该改写他已有的配置。另一家没选中的仍然藏着。
+   */
+  it('已存地址命中隐藏预置时，开关关着也把那颗 Tag 留住并高亮', () => {
+    open({
+      ...settings,
+      aiMode: 'api',
+      aiBaseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions',
+      aiModel: 'doubao-seed-2.0-code',
+    });
+
+    // antd 6 的 CheckableTag 是 role="checkbox" 的 span，选中态在 aria-checked 上。
+    const volcTag = screen.getByRole('checkbox', { name: '字节方舟 Coding Plan' });
+    expect(volcTag.getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByText('阿里百炼 Token Plan')).toBeNull();
   });
 
   /** 界面读回来的密钥是打码后的形状，不碰它就得原样送回去（服务端认这串 = 保持原样）。 */

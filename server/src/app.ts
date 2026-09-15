@@ -1251,6 +1251,10 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
       showHolidays: body.showHolidays !== false,
       // 认不出的模式落回 'cli'，跟上面那几个白名单同一个态度。
       aiMode: body.aiMode === 'api' ? 'api' : 'cli',
+      aiCli: (['claude', 'agy', 'codex', 'gemini', 'aider', 'custom'] as const).includes(body.aiCli as 'claude')
+        ? body.aiCli as Settings['aiCli'] : DEFAULT_SETTINGS.aiCli,
+      aiCliPath: typeof body.aiCliPath === 'string' ? body.aiCliPath.trim() : DEFAULT_SETTINGS.aiCliPath,
+      aiCliCustomArgs: typeof body.aiCliCustomArgs === 'string' ? body.aiCliCustomArgs.trim() : DEFAULT_SETTINGS.aiCliCustomArgs,
       aiBaseUrl,
       aiModel: typeof body.aiModel === 'string' ? body.aiModel.trim() : DEFAULT_SETTINGS.aiModel,
       // 密钥三种走法，缺一不可：
@@ -1279,7 +1283,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
      * 因为别的原因失败过的条目全放回候选池。`autoExpand` 本来也一直不管这个——
      * 它自己只在收件箱变化时评估。
      */
-    const aiChanged = (['aiMode', 'aiBaseUrl', 'aiKey', 'aiModel'] as const).some((k) => stored[k] !== next[k]);
+    const aiChanged = (['aiMode', 'aiCli', 'aiCliPath', 'aiCliCustomArgs', 'aiBaseUrl', 'aiKey', 'aiModel'] as const).some((k) => stored[k] !== next[k]);
     if (aiChanged) autoExpand.clearAll();
 
     // settings 存在设备本地的 device.json，不在 data/ 里（见 store.ts 的

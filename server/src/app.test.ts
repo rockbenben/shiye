@@ -955,7 +955,7 @@ describe('设置', () => {
         showLunar: true, showHolidays: true,
         // AI 默认还是走本机 `claude`；地址/模型/密钥没有「多数人都对」的默认值，
         // 一律留空。密钥这一格回的永远是打码后的形状，空串打码还是空串。
-        aiMode: 'cli', aiBaseUrl: '', aiKey: '', aiModel: '',
+        aiMode: 'cli', aiCli: 'claude', aiCliPath: '', aiCliCustomArgs: '', aiBaseUrl: '', aiKey: '', aiModel: '',
       });
   });
 
@@ -3189,6 +3189,28 @@ describe('设置里的 AI 密钥不原样回给浏览器', () => {
     expect(s.aiMode).toBe('cli');
     expect(s.aiBaseUrl).toBe('https://x.test/v1');
     expect(s.aiModel).toBe('m');
+  });
+
+  it('aiCli / aiCliPath / aiCliCustomArgs 正常保存，aiCli 不合法落回 claude', async () => {
+    await put({
+      ...DEFAULT_SETTINGS,
+      aiCli: 'agy',
+      aiCliPath: '  C:\\tools\\agy.exe  ',
+      aiCliCustomArgs: '  -p "{prompt}" --dangerously-skip-permissions  ',
+    });
+    let s = store.readSettings();
+    expect(s.aiCli).toBe('agy');
+    expect(s.aiCliPath).toBe('C:\\tools\\agy.exe');
+    expect(s.aiCliCustomArgs).toBe('-p "{prompt}" --dangerously-skip-permissions');
+
+    for (const cli of ['agy', 'codex', 'gemini', 'aider', 'custom'] as const) {
+      await put({ ...DEFAULT_SETTINGS, aiCli: cli });
+      expect(store.readSettings().aiCli).toBe(cli);
+    }
+
+    await put({ ...DEFAULT_SETTINGS, aiCli: 'unknown-cli' as never });
+    s = store.readSettings();
+    expect(s.aiCli).toBe('claude');
   });
 });
 

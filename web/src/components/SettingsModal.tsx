@@ -2,10 +2,12 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { Alert, App as AntApp, Button, ConfigProvider, Form, Input, InputNumber, Modal, Radio, Select, Space, Switch, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { api } from '../api.js';
-import type { List, Settings, WeekStart } from '../types.js';
+import type { AiCliKind, List, Settings, WeekStart } from '../types.js';
 import { NAV_MODE_LABEL, type NavMode, type NavModes } from '../lib/navVisibility.js';
 import { NAV_GROUPS, NAV_GROUP_LABEL, RAIL_GROUPS, type NavGroup } from '../lib/views.js';
 import { REMIND_PRESETS } from '../lib/remindPreset.js';
+import { visibleAiPresets } from '../lib/aiPresets.js';
+import { getShowCodingPlans, setShowCodingPlans } from '../lib/showCodingPlans.js';
 import { boardLocalTheme } from '../theme.js';
 import { ServerSetup } from './ServerSetup.js';
 import { PRI_LABEL_ALL } from './TaskFields.js';
@@ -79,32 +81,36 @@ export const SETTING_SECTIONS: Section[] = [
  */
 const NAV_MODE_ORDER: NavMode[] = ['show', 'auto', 'hide'];
 
-/**
- * 「调接口」那栏的几个快捷地址。
- *
- * **这不是「支持哪几家」的白名单**——地址框本来就能自己填，填什么都行，只要它
- * 说 OpenAI 兼容的那套。这几条只是省掉去翻文档抄地址那一步，挑的是常见的、
- * 以及本机跑的那两个（那两个不要密钥，是「先试试看」成本最低的一条路）。
- *
- * 地址和模型名抄自同一个人维护的 subtitle-translator 那份 registry（那边按月
- * 对着各家文档核过），不是凭印象写的。模型名留空的两条是**本机运行时**：装了
- * 什么模型只有他自己知道，猜一个填进去只会让第一次调用报一个「模型不存在」。
- *
- * Google 那条走的是 Gemini 的 **OpenAI 兼容端点**（`/v1beta/openai/`），不是它
- * 原生的 `:generateContent`——写在这儿是因为地址长得不像别家，报 404 时得知道
- * 该去查哪一份文档。**这个地址实测过**（2026-08-30）：不带密钥 POST 一个空 body
- * 回的是 `400 model is not specified`，说明路径存在且就是那个 chat 端点；同一手法
- * 打一个故意写错的路径回 404。别凭印象改它。
- */
-const AI_PRESETS: Array<{ label: string; url: string; model: string }> = [
-  { label: 'Google AI Studio', url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-3.7-flash' },
-  { label: 'OpenAI', url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5.6-luna' },
-  { label: 'DeepSeek', url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-v4-flash' },
-  { label: '硅基流动', url: 'https://api.siliconflow.cn/v1/chat/completions', model: 'deepseek-ai/DeepSeek-V4-Flash' },
-  { label: 'OpenRouter', url: 'https://openrouter.ai/api/v1/chat/completions', model: '' },
-  { label: 'Ollama（本机）', url: 'http://127.0.0.1:11434/v1/chat/completions', model: '' },
-  { label: 'LM Studio（本机）', url: 'http://127.0.0.1:1234/v1/chat/completions', model: '' },
-];
+// 「调接口」那栏的快捷预置在 lib/aiPresets.ts：云厂商那几条从 web-tools 同步的
+// provider 目录派生（地址 / 默认模型跟着上游更新），Google OpenAI 兼容端点与
+// Ollama / LM Studio 是本地特殊项。那不是白名单——地址框本来就能自己填。
+
+const CLI_META: Record<AiCliKind, { defaultCmd: string; help: string }> = {
+  claude: {
+    defaultCmd: 'claude',
+    help: '留空默认使用系统 PATH 中的 claude 命令（支持环境变量 CLAUDE_CLI）。',
+  },
+  agy: {
+    defaultCmd: 'agy',
+    help: '留空默认使用系统 PATH 中的 agy 命令（支持环境变量 AGY_CLI）。',
+  },
+  codex: {
+    defaultCmd: 'codex',
+    help: '留空默认使用系统 PATH 中的 codex 命令（支持环境变量 CODEX_CLI）。非交互执行时自动调用 codex exec。',
+  },
+  gemini: {
+    defaultCmd: 'gemini',
+    help: '留空默认使用系统 PATH 中的 gemini 命令（支持环境变量 GEMINI_CLI）。',
+  },
+  aider: {
+    defaultCmd: 'aider',
+    help: '留空默认使用系统 PATH 中的 aider 命令（支持环境变量 AIDER_CLI）。',
+  },
+  custom: {
+    defaultCmd: '可执行文件路径或名称，如 my-agent',
+    help: '可执行文件名称或完整路径，留空退回 claude。',
+  },
+};
 
 /** 「默认标签」那个框：逗号分开的一行字 ←→ 字符串数组。中英文逗号都认——
  *  中文输入法下打出来的是全角逗号，为这个让人回去改一遍是没道理的。 */
@@ -127,6 +133,10 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [section, setSection] = useState('modules');
+  // 「显示订阅套餐节点」是这台设备的界面偏好（localStorage），不进 draft、
+  // 不上服务端。默认关——两个订阅套餐端点（火山 Coding Plan / 阿里 Token Plan）
+  // 的封号风险写在开关下方。
+  const [showCodingPlans, setShowCodingPlansState] = useState(getShowCodingPlans);
 
   // 每次打开都从当前设置重新起草：弹层关掉时组件不卸载，
   // 不同步的话上次改了没保存的草稿会一直留着。
@@ -498,18 +508,65 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
               {/* **摆在这一节最上面**：下面「自动拆解」那两格描述的是「什么时候拆」，
                   而这一格决定「谁来拆」——没这一格的时候，没装 Claude Code 的人打开
                   这一屏只能看到两个开关，看不出为什么点了拆解永远报「命令行工具没找到」。 */}
-              <Form.Item label="怎么叫 AI" help="本机命令行本事最大（能自己反复读文件、自己纠错），代价是这台机器上要装 Claude Code。调接口只要一个地址加密钥，任何 OpenAI 兼容的服务都行。">
+              <Form.Item label="怎么叫 AI" help="本机命令行本事最大（能自己反复读文件、自己纠错），代价是这台机器上要装对应 CLI。调接口只要一个地址加密钥，任何 OpenAI 兼容的服务都行。">
                 <Radio.Group
                   value={draft.aiMode}
                   optionType="button"
                   buttonStyle="solid"
                   onChange={(e) => setDraft({ ...draft, aiMode: e.target.value as Settings['aiMode'] })}
                   options={[
-                    { value: 'cli', label: '本机 Claude Code' },
+                    { value: 'cli', label: '本机命令行' },
                     { value: 'api', label: '调接口' },
                   ]}
                 />
               </Form.Item>
+
+              {draft.aiMode === 'cli' && (
+                <>
+                  <Form.Item label="命令行工具" help="选择调用的 Agent CLI。已支持主流 Agent 命令行工具，或自定义命令行。">
+                    <Radio.Group
+                      value={draft.aiCli ?? 'claude'}
+                      optionType="button"
+                      buttonStyle="solid"
+                      onChange={(e) => setDraft({ ...draft, aiCli: e.target.value as Settings['aiCli'] })}
+                      options={[
+                        { value: 'claude', label: 'Claude Code' },
+                        { value: 'agy', label: 'Antigravity CLI (agy)' },
+                        { value: 'codex', label: 'OpenAI Codex' },
+                        { value: 'gemini', label: 'Gemini CLI' },
+                        { value: 'aider', label: 'Aider' },
+                        { value: 'custom', label: '自定义' },
+                      ]}
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label={draft.aiCli === 'custom' ? '命令或路径' : '命令路径（可选）'}
+                    help={CLI_META[draft.aiCli ?? 'claude']?.help ?? CLI_META.claude.help}
+                  >
+                    <Input
+                      value={draft.aiCliPath ?? ''}
+                      placeholder={CLI_META[draft.aiCli ?? 'claude']?.defaultCmd ?? 'claude'}
+                      aria-label="命令行工具路径"
+                      onChange={(e) => setDraft({ ...draft, aiCliPath: e.target.value })}
+                    />
+                  </Form.Item>
+
+                  {draft.aiCli === 'custom' && (
+                    <Form.Item
+                      label="参数模板"
+                      help='参数模板，用空格分隔。支持 {prompt} 占位符；若未包含 {prompt}，提示词将自动追加在末尾。'
+                    >
+                      <Input
+                        value={draft.aiCliCustomArgs ?? ''}
+                        placeholder='-p "{prompt}" --mode accept-edits --dangerously-skip-permissions'
+                        aria-label="自定义命令行参数"
+                        onChange={(e) => setDraft({ ...draft, aiCliCustomArgs: e.target.value })}
+                      />
+                    </Form.Item>
+                  )}
+                </>
+              )}
 
               {draft.aiMode === 'api' && (
                 <>
@@ -517,7 +574,7 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
                     {/* 快捷地址用 `Tag.CheckableTag` 而不是下拉：这几条是**起点**不是选项，
                         点完还能接着改地址框。下拉会让人以为只能选里头这几个。 */}
                     <Space size={[4, 4]} wrap style={{ marginBottom: 8 }}>
-                      {AI_PRESETS.map((p) => (
+                      {visibleAiPresets(showCodingPlans, draft.aiBaseUrl).map((p) => (
                         <Tag.CheckableTag
                           key={p.label}
                           checked={draft.aiBaseUrl === p.url}
@@ -534,6 +591,30 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
                       placeholder="https://…/v1/chat/completions"
                       onChange={(e) => { setDraft({ ...draft, aiBaseUrl: e.target.value }); setAiTest({ testing: false }); }}
                     />
+                    {/* 高级开关，默认关：火山 Coding Plan / 阿里 Token Plan 是订阅套餐
+                        专属端点。hidden 只过滤这行预置 Tag——已存的地址、手填地址、
+                        请求全都不受影响。
+
+                        整个开关做成一颗小字链接、默认次色——这是个很少用的高阶开关，
+                        不该跟上面那行预置 Tag 抢视觉。开了才换主色 + 下方展开风险说明。
+                        role=switch + aria-checked 让测试和读屏还能把它当一个开关用。 */}
+                    <div style={{ marginTop: 4 }}>
+                      <Typography.Link
+                        type={showCodingPlans ? undefined : 'secondary'}
+                        style={{ fontSize: 12 }}
+                        role="switch"
+                        aria-checked={showCodingPlans}
+                        aria-label="显示订阅套餐节点（Coding Plan / Token Plan）"
+                        onClick={() => { const next = !showCodingPlans; setShowCodingPlansState(next); setShowCodingPlans(next); }}
+                      >
+                        {showCodingPlans ? '已显示订阅套餐节点' : '订阅套餐节点'}
+                      </Typography.Link>
+                      {showCodingPlans && (
+                        <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                          官方文档指明：套餐仅限在 AI 编程工具中交互式使用，在允许范围之外使用套餐的 Base URL 和 API Key 可能被识别为滥用，导致订阅停用或账号 / API Key 封禁。请确认了解风险后再开启。
+                        </Typography.Paragraph>
+                      )}
+                    </div>
                   </Form.Item>
                   <Form.Item label="模型" help="原样发给接口。各家叫法不一样，照它文档里写的填。">
                     <Input

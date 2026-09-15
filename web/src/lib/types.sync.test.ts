@@ -31,7 +31,7 @@ const webSrc = readFileSync('web/src/types.ts', 'utf8');
 const NAMES = [
   'Status', 'Subtask', 'Task', 'InboxItem', 'Settings', 'Proposal',
   'Reminder', 'FocusSession', 'Repeat', 'SmartFilter', 'List', 'Folder', 'Insight', 'TrashItem',
-  'ConflictFile', 'Countdown', 'TaskContext', 'WeekStart', 'RepeatKind',
+  'ConflictFile', 'Countdown', 'TaskContext', 'WeekStart', 'RepeatKind', 'AiCliKind',
 ];
 
 /**

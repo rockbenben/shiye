@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
+import crossSpawn from 'cross-spawn';
 import type { Bus } from './events.js';
 import { agentCwd, agentDataDir, aiSeesSameData, dataDir, readSettings } from './store.js';
 import { configProblem, runViaApi, scopeLine, type Fetcher, type ReviewScope } from './aiApi.js';
@@ -70,8 +71,126 @@ const NOTHING: Record<AgentKind, string> = {
 
 const TEN_MINUTES = 10 * 60 * 1000;
 
-/** 测试用换掉真的 `child_process.spawn`。签名对得上，用到的只有 'error' / 'exit' 两个事件和 kill()。 */
+/** 测试用换掉真的 spawn（默认是 cross-spawn 那个）。签名对得上，用到的只有 'error' / 'exit' 两个事件和 kill()。 */
 export type Spawner = (command: string, args: string[], options: { cwd: string; stdio: 'inherit' }) => ChildProcess;
+
+/** 解析自定义 CLI 参数模板，按空格分词（保留单双引号），并将 {prompt} 替换为实际提示词。未显式写 {prompt} 时追加提示词。 */
+export function parseCustomArgs(template: string, prompt: string): string[] {
+  const trimmed = template.trim();
+  if (!trimmed) return ['-p', prompt];
+
+  const tokens: string[] = [];
+  let current = '';
+  let inDouble = false;
+  let inSingle = false;
+  let hasPrompt = false;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+    } else if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (/\s/.test(ch) && !inDouble && !inSingle) {
+      if (current.length > 0) {
+        if (current.includes('{prompt}')) {
+          hasPrompt = true;
+          current = current.replaceAll('{prompt}', prompt);
+        }
+        tokens.push(current);
+        current = '';
+      }
+    } else {
+      current += ch;
+    }
+  }
+
+  if (current.length > 0) {
+    if (current.includes('{prompt}')) {
+      hasPrompt = true;
+      current = current.replaceAll('{prompt}', prompt);
+    }
+    tokens.push(current);
+  }
+
+  if (!hasPrompt) {
+    tokens.push(prompt);
+  }
+
+  return tokens;
+}
+
+export interface CliInvocation {
+  command: string;
+  args: string[];
+  displayName: string;
+}
+
+/** 根据当前设置解析需要 spawn 的 CLI 命令与参数。 */
+export function resolveCliInvocation(settings: { aiCli?: string; aiCliPath?: string; aiCliCustomArgs?: string }, prompt: string): CliInvocation {
+  const cli = settings.aiCli ?? 'claude';
+  const customPath = (settings.aiCliPath ?? '').trim();
+
+  if (cli === 'agy') {
+    const command = process.env.AGY_CLI || customPath || 'agy';
+    return {
+      command,
+      args: ['-p', prompt, '--mode', 'accept-edits', '--dangerously-skip-permissions'],
+      displayName: 'agy',
+    };
+  }
+
+  if (cli === 'codex') {
+    const command = process.env.CODEX_CLI || customPath || 'codex';
+    return {
+      command,
+      args: ['exec', '--dangerously-bypass-approvals-and-sandbox', prompt],
+      displayName: 'codex',
+    };
+  }
+
+  if (cli === 'gemini') {
+    const command = process.env.GEMINI_CLI || customPath || 'gemini';
+    return {
+      command,
+      args: ['-p', prompt, '-y'],
+      displayName: 'gemini',
+    };
+  }
+
+  if (cli === 'aider') {
+    const command = process.env.AIDER_CLI || customPath || 'aider';
+    return {
+      command,
+      args: ['--message', prompt, '--yes-always'],
+      displayName: 'aider',
+    };
+  }
+
+  if (cli === 'custom') {
+    // 留空就真的退回 'claude'——displayName 也得说 'claude'，不然 ENOENT 时那句
+    // 「确认 CLI 在 PATH 里」指认的并不是实际去 spawn 的东西。
+    const command = customPath || 'claude';
+    return {
+      command,
+      args: parseCustomArgs(settings.aiCliCustomArgs ?? '', prompt),
+      displayName: command,
+    };
+  }
+
+  // 默认 'claude'
+  const command = process.env.CLAUDE_CLI || customPath || 'claude';
+  return {
+    command,
+    args: [
+      '-p', prompt,
+      '--allowedTools', 'Read,Edit,Write,Bash',
+      '--permission-mode', 'acceptEdits',
+      '--output-format', 'json',
+    ],
+    displayName: 'claude',
+  };
+}
 
 /**
  * 单飞 + 超时 + 状态广播的 AI 触发器。拆解和回顾都从这里起。
@@ -80,7 +199,23 @@ export type Spawner = (command: string, args: string[], options: { cwd: string; 
  * 测试建多份互不干扰；生产（`app.ts` 的 `createApp()`）只建一次，全进程也就一份，
  * 这就是「单飞」的全部实现：不是分布式锁，就是一个变量。
  */
-export function createAgentRunner(bus?: Bus, spawnFn: Spawner = spawn, timeoutMs = TEN_MINUTES, fetchFn: Fetcher = fetch) {
+/**
+ * 默认用 cross-spawn 而不是 node:child_process 自带的 spawn——**Windows 上 npm 装的
+ * CLI 全是 `.cmd` shim，自带 spawn 叫不起来**（2026-09 本机实测，Node 24）：
+ *
+ * - `spawn('codex')`：CreateProcess 不做 PATHEXT 补全，直接 ENOENT。`gemini` 同款。
+ * - 给完整 `.cmd` 路径：CVE-2024-27980 之后 Node 20.12+ 直接 EINVAL，强制要求
+ *   `shell: true`。
+ * - `shell: true`：Node 不转义 argv（还有 DEP0190 警告），实测提示词里一个 `&` 就能
+ *   注入任意命令。而提示词里拼了收件箱/任务原文——那不是可信字符串。
+ *
+ * cross-spawn 自己按 PATHEXT 解析出 `.cmd`、自己走 `cmd.exe` 并把每个 argv 按 cmd 的
+ * 规则转义（`%`、`&`、引号），调用签名跟原生 spawn 一样。它本来就在依赖树里
+ * （electron-builder、@capacitor/cli 都依赖它），加的是一条直接依赖。
+ * 注意它的运行时依赖（path-key/shebang-command/shebang-regex/which/isexe）也得进
+ * desktop/electron-builder.yml 的 extraResources，不然打包后 ERR_MODULE_NOT_FOUND。
+ */
+export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Spawner, timeoutMs = TEN_MINUTES, fetchFn: Fetcher = fetch) {
   // 存着 kind 而不只是进程：单飞被拒时要说清「正在跑的是哪件事」——「上一次回顾
   // 还在跑」和「上一次拆解还在跑」，对着一颗刚点的按钮是两种完全不同的解释。
   //
@@ -173,7 +308,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = spawn, timeoutMs
     // 真实事故。
     // 测试注入的假 spawner 不受影响：它压根不读磁盘，而所有服务端测试都会把
     // DATA_DIR 指到临时目录，一刀切会把它们全拦下来。
-    if (spawnFn === spawn && !aiSeesSameData()) {
+    if (spawnFn === crossSpawn && !aiSeesSameData()) {
       const message = `服务在读 ${dataDir()}，而 AI 会去读 ${agentDataDir()}——两边不是同一份数据，不能${WORD[kind]}。把 DATA_DIR 和 AGENT_CWD 指到同一处再试。`;
       emitAgentStatus(bus, { state: 'failed', message });
       return { ok: false, error: message };
@@ -185,26 +320,15 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = spawn, timeoutMs
     // 落地过」。见下面 'exit' 里的注释：这是 C 的一处回归修复。
     const statusAtStart = bus?.lastStatus;
 
+    const s = readSettings();
+    const prompt = scope ? `${PROMPT[kind]}${scopeLine(scope)}` : PROMPT[kind];
+    const invocation = resolveCliInvocation(s, prompt);
+
     let proc: ChildProcess;
     try {
-      // stdio: 'inherit'，不是默认的 'pipe'——`--output-format json` 加上
-      // `--allowedTools` 允许的那几样，一次 8 轮的拆解能产出远超 OS 管道缓冲区
-      // 的输出；'pipe' 没人读的话子进程写满缓冲区就会被阻塞，直到十分钟超时
-      // 杀掉它，而失败时服务本来能报的原因只剩一个退出码。'inherit' 把子进程
-      // 的输出直接接到这个服务自己的控制台——启动器窗口——上，那是这台机器
-      // 唯一常驻的诊断面。
-      proc = spawnFn(process.env.CLAUDE_CLI ?? 'claude', [
-        // 范围**追加**在正本那句后面，不改 `PROMPT` 本身：那两句被 AGENTS.md
-        // 逐字抄了一份，`agentsMd.guard.test.ts` 盯着两边一致。
-        //
-        // **这条路上这句话就是全部的约束力**：AI 是另一个进程、自己去读
-        // `data/tasks/`，服务端筛不了它（调接口那条是真筛过的）。为什么
-        // 没在合并那一步补硬拦截，见 `aiApi.ts` 的 `scopeLine`。
-        '-p', scope ? `${PROMPT[kind]}${scopeLine(scope)}` : PROMPT[kind],
-        '--allowedTools', 'Read,Edit,Write,Bash',
-        '--permission-mode', 'acceptEdits',
-        '--output-format', 'json',
-      ], { cwd: agentCwd(), stdio: 'inherit' });
+      // stdio: 'inherit'，不是默认的 'pipe'——子进程写满管道缓冲区会被阻塞，
+      // 'inherit' 把子进程的输出直接接到这个服务自己的控制台（启动器窗口）上。
+      proc = spawnFn(invocation.command, invocation.args, { cwd: agentCwd(), stdio: 'inherit' });
     } catch (e) {
       const message = `没能启动 AI：${(e as Error).message}`;
       emitAgentStatus(bus, { state: 'failed', message });
@@ -224,17 +348,17 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = spawn, timeoutMs
     }, timeoutMs);
     timer.unref?.();
 
-    // spawn 本身失败（比如 claude 不在 PATH）走 'error' 事件，不是同步抛异常——
+    // spawn 本身失败（比如 cli 工具不在 PATH）走 'error' 事件，不是同步抛异常——
     // Node 的 child_process 文档明确这一点，上面 try/catch 只挡得住参数错误那一类。
     proc.on('error', (e: NodeJS.ErrnoException) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child = null;
-      // 这是「没装 Claude Code」最常见的现场。**得把另一条路说出来**：设置里
+      // 这是「没装对应 CLI」最常见的现场。**得把另一条路说出来**：设置里
       // 改成「调接口」就不需要这个命令行了，而光看这句报错的人不会知道有这个选项。
       const message = e.code === 'ENOENT'
-        ? 'AI 命令行工具没找到，确认 claude 在 PATH 里；或者去设置 → AI 拆解，改成「调接口」'
+        ? `AI 命令行工具没找到，确认 ${invocation.displayName} 在 PATH 里；或者去设置 → AI 拆解，改成「调接口」`
         : `启动 AI 失败：${e.message}`;
       emitAgentStatus(bus, { state: 'failed', message });
       onSettled?.();

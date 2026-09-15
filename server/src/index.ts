@@ -1,6 +1,5 @@
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { config as loadEnv } from 'dotenv';
 import { exec } from 'node:child_process';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -61,15 +60,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
 const webDist = join(repoRoot, 'web', 'dist');
 
-// 不用 `import 'dotenv/config'`：那个副作用只认 process.cwd()，而 `npm run dev -w server`
-// 的 cwd 是 server/，根目录的 .env 就被静默略过了——「开发时改端口不生效」查起来很冤。
-// 钉死到仓库根，生产（cwd=根）和开发（cwd=server/）读的才是同一份。
-//
-// `quiet: true` 不能省：dotenv 17 默认会往 stdout 打一条随机推广语
-// （`◇ injected env ... // tip: ⌁ auth for agents [某个域名]`），而且是**第一行**，
-// 排在本应用自己的中文状态之前。这个窗口是普通用户唯一的状态显示，
-// 启动脚本刚跟他说完「这个窗口开着，网页才能用」，顶上先来一句英文广告。
-loadEnv({ path: join(repoRoot, '.env'), quiet: true });
+// 钉死到仓库根：`npm run dev -w server` 的 cwd 是 server/，让 env-file 自己按
+// cwd 找，根目录的 .env 就被静默略过了——「开发时改端口不生效」查起来很冤。
+// 生产（cwd=根）和开发（cwd=server/）读的是同一份。已存在的环境变量不覆盖，
+// 跟 dotenv 同一条语义（实测 process.loadEnvFile 也是「先到先得」）。
+// 文件缺席要当正常：.env 是可选的（模板在 .env.example），而 loadEnvFile 对
+// 不存在的路径会抛 ENOENT——dotenv 是静默跳过。
+const envPath = join(repoRoot, '.env');
+if (existsSync(envPath)) process.loadEnvFile(envPath);
 
 ensureDataFiles();
 

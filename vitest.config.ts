@@ -74,23 +74,64 @@ export default defineConfig({
           testTimeout: TIMEOUT,
           // 跟 testTimeout 同一条理由：有 projects 时顶层不往下传，每档各写一遍。
           env: { TZ },
-          // **node 这一档全部跑在同一个常驻子进程里。**
+          // ──────────────────────────────────────────────────────────────
+          // ⚠️ **这一档原来钉着一个常驻 worker，现在没钉了。别照着下面那段
+          // 历史去找 `poolOptions`——它在 Vitest 4 上是空转的，已经删掉了。**
+          // ──────────────────────────────────────────────────────────────
           //
-          // CI 连红四次，红的都不是断言：`[vitest-pool]: Worker exited unexpectedly`，
-          // 168/169 个文件通过、零失败用例、日志里没有退出码也没有 OOM 字样。对着
-          // 逐文件用例数比出来是 `events.test.ts`（本机 28 条、CI 只跑到第 9 条），
-          // 而第 10 条是「建 Bus、emit、睡 80ms、订阅、断言」这种连 native 崩溃的
-          // 材料都没有的用例——**所以崩的不是那条测试，是承载它的那个子进程**。
+          // 【历史：为什么当初钉过】CI 连红四次，红的都不是断言：
+          // `[vitest-pool]: Worker exited unexpectedly`，168/169 个文件通过、
+          // 零失败用例、日志里没有退出码也没有 OOM 字样。对着逐文件用例数比出来
+          // 是 `events.test.ts`（本机 28 条、CI 只跑到第 9 条），而第 10 条是
+          // 「建 Bus、emit、睡 80ms、订阅、断言」这种连 native 崩溃的材料都没有的
+          // 用例——**所以崩的不是那条测试，是承载它的那个子进程**。
+          // fork 池默认会在文件之间回收并重建子进程，钉成一个常驻 worker 之后
+          // 从头到尾不再有进程创建/销毁。当时的实测：本机全量 159s → 149s
+          // （node 档 116 个文件基本是纯函数和小文件读写，单个文件的耗时远小于
+          // fork 一个新进程的开销，串行省下的正是这一笔），dom 档不受影响。
           //
-          // fork 池默认会在文件之间回收并重建子进程，`singleFork` 把这一档钉成
-          // 一个常驻进程，从头到尾不再有进程创建/销毁。这是一次带明确假设的实验：
-          // 绿了说明就是进程回收那条竞争；还红说明假设错了，得换个方向查。
+          // 【为什么现在没有】v4 把 `poolOptions` **整个移除**、改成顶层选项
+          // （官方迁移指南："`poolOptions` is removed. All previous `poolOptions`
+          // are now top-level options"）。旧写法**不报错、只是被静默忽略**——
+          // 唯一的声音是每次跑测试开头那句
+          // `DEPRECATED test.poolOptions was removed in Vitest 4`。也就是说上面
+          // 那段结论**空转了一段时间**：这一档不再单独钉 1 个 worker，而是跟 dom 档
+          // 共用顶层那 6 个。**注意不是「按核数铺满」**——`maxWorkers: 6` 那条修复
+          // 写在顶层，一直生效，它管的是另一件事（见下）。
           //
-          // 代价：这一档从并行变串行。**实测没有代价**——本机全量 159s → 149s，
-          // 反而快了：node 档 116 个文件基本是纯函数和小文件读写，单个文件的耗时
-          // 远小于 fork 一个新进程 + 重新建立模块图的开销，串行省下的正是这一笔。
-          // dom 档不受影响（它才是耗时大头），仍然并行。
-          poolOptions: { forks: { singleFork: true } },
+          // ⚠️ **这个文件里有两段独立的并发修复，症状不一样，别混起来。**
+          //
+          //   - 顶层 `maxWorkers: MAX_WORKERS`（文件开头那段长注释）：针对
+          //     「不设就按核数铺满，全量随机红，**红的永远是超时**——`TaskBoard` /
+          //     `OfflineWrite` / `events` 那几条压 15s 线的」。**它一直生效。**
+          //   - 这一档原来的 `singleFork`：针对 CI 上 `Worker exited unexpectedly`
+          //     ——**进程崩溃**，一条测试都没红，只是有文件没跑完。
+          //     **它空转了。**
+          //
+          // 所以判据是：**见到超时先怀疑负载**（尤其是你自己在同时改文件、跑别的
+          // 命令、或跑 `npm test` 那三道 tsc），**见到崩溃才想到这一段**。
+          // 把超时归到 `singleFork` 空转上是错的——我这么错过一次，写在这里免得
+          // 下一个人跟着错。
+          //
+          // 【试过补回来，代价是慢一倍】按官方映射（`singleFork` →
+          // `maxWorkers: 1`）在这一档加回 `maxWorkers: 1`，实测全量
+          // **378s**；不加是 **约 190s**。慢的不是这一档本身，是 v4 的调度模型：
+          // `groupSpecs` 按 `sequence.groupOrder` 分桶，**两个 project 的
+          // maxWorkers 不一样就必须分到不同的桶，而桶与桶之间严格串行**
+          // （`executeTests` 里 `for (const group of taskGroups)` + `await`）。
+          // 于是 node 档串行的时候 dom 档在旁边闲着，两个档不再重叠。
+          // `isolate: false`、`sequence.groupOrder` 几条路都试过，结论一样：
+          // **v4 里「node 档钉 1 个 worker、dom 档并行、两者同时跑」写不出来。**
+          //
+          // 【所以选择不钉】当初钉它是为了躲 fork 池回收子进程那条竞争，而 v4 的
+          // 池子是**整个重写过的**（官方原话："Vitest 4 completely removed
+          // tinypool, rewrote the pool"），那条竞争不一定还在；而慢一倍是每跑
+          // 一次都要付的确定代价。
+          //
+          // ponytail: 这是**没验过的判断**——本机没有 CI 那种 4 核环境，验不了
+          // 「不钉会不会又 `Worker exited unexpectedly`」。真要再钉，就是在这一档
+          // 加一行 `maxWorkers: 1`，代价是上面那个 378s。哪天 CI 上真见到那个报错，
+          // 先回来看这一段，别重新发明 `poolOptions`。
         },
       },
       {

@@ -22,7 +22,12 @@ import { join } from 'node:path';
 // 这条守卫的红绿就取决于本机上一次打包是什么时候，CI 绿、开发机红，而且指着
 // 一个改源码也修不掉的路径。兄弟守卫 `server/src/agentsMd.guard.test.ts` 早就
 // 声明了正确的那一套，照抄。
-const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'release', 'coverage']);
+//
+// **`.workbuddy-ai` 同理**（已进 `.gitignore`）：AI 助手在本机攒的工作记忆，
+// 不跟着仓库走，而且里面是自由散文——随手写一句 `App.tsx:123` 当例子就会让
+// 这条守卫红在一个**根本不是文档**的文件上。两个守卫的名单必须一模一样，
+// 上面那句「照抄」是字面意思：改一处就得改另一处。
+const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'release', 'coverage', '.workbuddy-ai']);
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

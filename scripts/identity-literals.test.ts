@@ -179,17 +179,32 @@ it('错误提示里的数据路径来自 store.ts 的 paths()，而且写成目�
 });
 
 /**
- * 第四对：**Node 的最低版本，写了三份**。
+ * 第四对：**Node 的最低版本，写了五份**。
  *
- * - `package.json` 的 `engines.node`（`npm ci` 真正会拒的那道）
+ * - `package.json` 的 `engines.node`（对外声明的下限）
  * - `.github/workflows/ci.yml` 的 `node-version`（CI 实际跑的那个）
  * - `README.md`「上手」那句「要 Node N 以上」（照着装的人只看这句）
+ * - `scripts/msg/no-node.txt`（**没装 Node** 时双击启动脚本弹的那句）
+ * - `scripts/msg/ended.txt`（服务异常退出时提示「常见原因是 Node 版本太老」那句）
  *
- * 已经飘过：`engines` 是 `>=24.0.0`、CI 跑 24，而 README 写着「要 Node 20.19 以上」。
- * **照 README 装 Node 20 的人，`npm ci` 当场被 engines 拒掉**——而这是新人的第一步。
- * 三份都是手写的，改一处不会有任何地方吭声。
+ * 已经飘过两次：先是 `engines`/CI 是 24 而 README 写着 20.19（于是有了这条守卫）；
+ * 后来 `no-node.txt` 和 `ended.txt` **又**停在 20.19——那两个文件当时不在扫描范围里。
+ * 五份都是手写的，改一处不会有任何地方吭声。
+ *
+ * **关于后果，别照抄一句不准确的话。** 这里原来写着「照 README 装 Node 20 的人，
+ * `npm ci` 当场被 engines 拒掉」——实测不是：`npm ci` 在默认配置下只打一行
+ * `npm warn EBADENGINE` 然后照常装完、退出码 0（隔离目录里用 `engines: >=99.0.0`
+ * 验过）。**npm 不强制根包的 `engines`**，只有 `.npmrc` 里写了 `engine-strict=true`
+ * 才会硬拒，而本仓库没有 `.npmrc`。
+ * 真正会坏的是**跑起来之后**：工具链里最紧的是 `jsdom`（`^22.22.2 || ^24.15.0 || >=26`），
+ * 其次是 `vite`/`rolldown`/`@vitejs/plugin-react`（`^20.19.0 || >=22.12.0`）和
+ * `electron`（`>=22.12.0`）。所以照着 20.19 装的人**装得上、构建得过**，
+ * 但 `npm test` 会被 jsdom 的 engines 顶掉——而他刚看到的那条警告不会告诉他这件事。
+ *
+ * 两个 `msg/*.txt` 比上面三处更要紧：上面三处是给开发者和 CI 看的，
+ * 这两个是**装机第一步**弹给一个还没装 Node 的人看的。
  */
-it('Node 最低版本：package.json / CI / README 三处说的是同一个大版本', () => {
+it('Node 最低版本：package.json / CI / README / 两句启动提示，五处说的是同一个大版本', () => {
   const pkg = JSON.parse(read('package.json')) as { engines?: { node?: string } };
   const want = /(\d+)/.exec(pkg.engines?.node ?? '')?.[1];
   expect(want, 'package.json 里没有 engines.node').toBeTruthy();
@@ -203,6 +218,19 @@ it('Node 最低版本：package.json / CI / README 三处说的是同一个大�
   const said = [...readme.matchAll(/要 Node (\d+)/g)].map((m) => m[1]);
   expect(said.length, 'README 里没找到「要 Node N 以上」那句——改写了就把这条守卫的锚点一起改').toBe(1);
   expect(said[0], 'README 说的 Node 版本跟 engines 对不上——照它装的人第一步就被 npm 拒').toBe(want);
+
+  // 启动脚本弹给用户的那两句。**按「N[.N] 以上」这个形状抓**——两个文件里
+  // 那句的自然写法就是这样，改写了措辞就把锚点一起改（`toBeGreaterThan(0)`
+  // 会先叫一声，不会静默变哑）。
+  // 小数部分可选：README 那句是「要 Node 24 以上」（只写大版本），而这两句
+  // 原来写的是「20.19 以上」（带小版本）——两种都得抓得住，否则把其中一种
+  // 改成另一种写法时，这条断言会**因为抓不到而变哑**（`vers.length` 归零）。
+  for (const file of ['no-node.txt', 'ended.txt']) {
+    const msg = read('scripts', 'msg', file);
+    const vers = [...msg.matchAll(/(\d+)(?:\.\d+)? 以上/g)].map((m) => m[1]);
+    expect(vers.length, `scripts/msg/${file} 里没找到「N[.N] 以上」那句——改写了就把这条守卫的锚点一起改`).toBeGreaterThan(0);
+    for (const v of vers) expect(v, `scripts/msg/${file} 说的 Node 版本跟 engines 对不上`).toBe(want);
+  }
 });
 
 /**

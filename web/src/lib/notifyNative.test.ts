@@ -170,11 +170,16 @@ describe('rescheduleLocalNotifications——编排', () => {
   // 「谁排在前、谁被 32 的窗口切掉」完全由传进来的 tasks 顺序决定——而这一层
   // 拿到的顺序真的不稳，理由在实现里那段注释。真机上的表现是「有时候提醒得到
   // 有时候提醒不到」，这条测试是唯一按得住它的地方。
-  it('输入顺序打乱两次，排出来的一模一样——提醒时刻完全相同时「谁被窗口切掉」不许随输入顺序变', async () => {
-    // 33 条任务、提醒时刻一模一样：排序键分不开它们，只剩输入顺序决定谁进前 32。
-    const same = future('2026-09-04T08:13:00+08:00');
+  it('输入顺序打乱两次，排出来的一模一样——「谁被窗口切掉」不许随输入顺序变', async () => {
+    // 33 条任务、时刻按 id 递增、各差一分钟：排序键（时刻）分得开它们，
+    // 被切掉的永远是最后那一条，而这一层拿到的顺序真的不稳（理由在实现里
+    // 那段注释）。**夹具原来用的是「33 条同一时刻」**——那些现在会被合并成
+    // 一条通知（`planNotifications` 的合并规则），于是这条测试测的就变成了
+    // 「合并对不对」，而它要按住的是「输入顺序不影响定序」。合并那一档在
+    // `notifyPlan.test.ts` 里另有断言。
+    const base = Date.parse('2026-09-04T08:13:00+08:00');
     const many = Array.from({ length: 33 }, (_, i) =>
-      mk({ id: `t${String(i + 1).padStart(2, '0')}`, reminders: [same] }));
+      mk({ id: `t${String(i + 1).padStart(2, '0')}`, reminders: [future(new Date(base + i * 60_000).toISOString())] }));
     // 断言的是真的交给插件的那一批（编号 + 是哪条任务），不是「调了 schedule」。
     const run = async (order: Task[]): Promise<string[]> => {
       let seen: string[] = [];

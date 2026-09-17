@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../types.js';
-import { planNotifications, toNotificationSchema } from './notifyPlan.js';
+import { MERGE_LIST_MAX, planNotifications, toNotificationSchema } from './notifyPlan.js';
 
 // 全量 Task 工厂——跟 App.test.tsx 的 task() 同形状，就地一份。
 function mk(patch: Partial<Task> & { id: string }): Task {
@@ -29,7 +29,7 @@ describe('planNotifications——排哪些', () => {
       mk({ id: 'x', status: 'abandoned', reminders: [r('2026-09-04T08:13:00+08:00')] }),
       mk({ id: 'c', status: 'doing', reminders: [r('2026-09-04T08:13:00+08:00')] }),
     ];
-    expect(planNotifications(tasks, NOW).planned.map((p) => p.taskId)).toEqual(['c']);
+    expect(planNotifications(tasks, NOW).planned.map((p) => p.taskIds)).toEqual([['c']]);
   });
 
   it('只排未来：过去的、恰好等于 now 的都不排——方向跟服务端 isDue（at <= now）相反，防重复响的就是这条', () => {
@@ -74,7 +74,7 @@ describe('planNotifications——排多少（窗口两半都要断言，153 的�
       mk({ id: 'cut2',  reminders: [r('2026-09-08T15:09:00+08:00')] }),
     ];
     const { planned, overflow } = planNotifications(tasks, NOW, 3);
-    expect(planned.map((p) => p.taskId)).toEqual(['first', 'mid', 'late']);  // 排了的这半
+    expect(planned.map((p) => p.taskIds)).toEqual([['first'], ['mid'], ['late']]);  // 排了的这半
     expect(planned.map((p) => p.id)).toEqual([1, 2, 3]);
     expect(overflow).toBe(2);                                                // 没排上的这半
   });
@@ -156,9 +156,95 @@ describe('planNotifications——三半互不串', () => {
       mk({ id: 'm2', reminders: [r('2026-09-02T08:47:00+08:00')] }),
     ];
     const { planned, overflow, missed } = planNotifications(tasks, NOW, 2);
-    expect(planned.map((p) => p.taskId)).toEqual(['f1', 'f2']);
+    expect(planned.map((p) => p.taskIds)).toEqual([['f1'], ['f2']]);
     expect(overflow).toBe(1);
     expect(missed).toBe(2);
+  });
+});
+
+/**
+ * **同一时刻到点的几条合成一条通知。**
+ *
+ * 到点从来不是「一条一条来」的：一批任务本来就都排在九点，那一分钟里手机
+ * 通知栏会一起摔下好几条。那不是提醒，是刷屏——而人此刻要知道的只有
+ * 「有一批事到点了」。
+ *
+ * 桌面那条路是服务端按**一轮扫描**聚合的（`server/src/reminder.ts` 的
+ * `fireReminders`，见 `server/src/reminder.test.ts` 里那一组）；手机这边是
+ * 提前排好的闹钟，只知道各自的时刻，所以按**同一时刻**聚合。两边文案形状
+ * 故意一样。
+ */
+describe('planNotifications——同一时刻的几条合成一条', () => {
+  const AT = '2026-09-04T08:13:00+08:00';
+  const LATER = '2026-09-04T20:41:00+08:00';
+
+  it('三条排在同一刻：只排一条通知，标题报总数、正文列出三个标题', () => {
+    const tasks = [
+      mk({ id: 'a', title: '交房租', reminders: [r(AT)] }),
+      mk({ id: 'b', title: '买猫粮', reminders: [r(AT)] }),
+      mk({ id: 'c', title: '写周报', reminders: [r(AT)] }),
+    ];
+    const { planned } = planNotifications(tasks, NOW);
+    expect(planned).toHaveLength(1);
+    expect(planned[0].title).toBe('3 件事到点了');
+    expect(planned[0].body).toBe('交房租、买猫粮、写周报');
+    expect(planned[0].taskIds).toEqual(['a', 'b', 'c']);
+  });
+
+  it('差一分钟就不合并——那是人自己分开设的两条，并成一条等于把其中一条的时刻吞掉', () => {
+    const tasks = [
+      mk({ id: 'a', reminders: [r(AT)] }),
+      mk({ id: 'b', reminders: [r('2026-09-04T08:14:00+08:00')] }),
+    ];
+    expect(planNotifications(tasks, NOW).planned).toHaveLength(2);
+  });
+
+  it('写法不同但同一刻的两条要合并——比的是解析出来的毫秒值，不是字符串', () => {
+    const tasks = [
+      mk({ id: 'a', reminders: [r('2026-09-04T08:13:00+08:00')] }),
+      mk({ id: 'b', reminders: [r('2026-09-04T00:13:00.000Z')] }),
+    ];
+    const { planned } = planNotifications(tasks, NOW);
+    expect(planned).toHaveLength(1);
+    expect(planned[0].taskIds).toEqual(['a', 'b']);
+  });
+
+  it('同一任务的两个提醒撞在同一刻只算一件事——「这件事该做了」是任务级的判断', () => {
+    const tasks = [mk({ id: 'a', title: '交房租', reminders: [r(AT), r(AT)] })];
+    const { planned } = planNotifications(tasks, NOW);
+    expect(planned).toHaveLength(1);
+    // 不是「1 件事到点了」+ 正文里同一个标题重复两遍。
+    expect(planned[0].title).toBe('交房租');
+    expect(planned[0].taskIds).toEqual(['a']);
+  });
+
+  it('标题超过上限的折成「等 N 件」——只列前几个、一个字不提还有别的，会让人以为就这几件', () => {
+    const tasks = Array.from({ length: MERGE_LIST_MAX + 2 }, (_, i) =>
+      mk({ id: `t${i}`, title: `第${i + 1}件`, reminders: [r(AT)] }));
+    const { body } = planNotifications(tasks, NOW).planned[0];
+    expect(body).toBe(`第1件、第2件、第3件 等 ${MERGE_LIST_MAX + 2} 件`);
+  });
+
+  it('**窗口按合并后的通知条数算**——limit 限的是系统里待定闹钟的个数，合并占一个位置', () => {
+    // 两刻各三条 = 六条提醒，合并后是两条通知。limit 给 2 就该全排上；
+    // 按提醒条数算的话这里会切掉四条，而系统里其实只多占了一个闹钟。
+    const tasks = [
+      ...['a', 'b', 'c'].map((id) => mk({ id, reminders: [r(AT)] })),
+      ...['d', 'e', 'f'].map((id) => mk({ id, reminders: [r(LATER)] })),
+    ];
+    const { planned, overflow } = planNotifications(tasks, NOW, 2);
+    expect(planned).toHaveLength(2);
+    expect(overflow).toBe(0);
+  });
+
+  it('被窗口切掉时 overflow 数的是通知条数，不是提醒条数', () => {
+    const tasks = [
+      ...['a', 'b'].map((id) => mk({ id, reminders: [r(AT)] })),
+      ...['c', 'd'].map((id) => mk({ id, reminders: [r(LATER)] })),
+    ];
+    const { planned, overflow } = planNotifications(tasks, NOW, 1);
+    expect(planned).toHaveLength(1);
+    expect(overflow).toBe(1);
   });
 });
 
@@ -185,7 +271,7 @@ describe('planNotifications——文案（三格：due / notes / 兜底，形状
 describe('toNotificationSchema——插件参数形状', () => {
   it('id/title/body 原样过去，schedule.at 是那个 Date，allowWhileIdle 开着（Doze 下也要响）', () => {
     const at = new Date('2026-09-04T08:13:00+08:00');
-    const s = toNotificationSchema({ id: 7, taskId: 'x', title: '交水电费', body: '该做这件事了', at });
+    const s = toNotificationSchema({ id: 7, taskIds: ['x'], title: '交水电费', body: '该做这件事了', at });
     expect(s.id).toBe(7);
     expect(s.title).toBe('交水电费');
     expect(s.body).toBe('该做这件事了');

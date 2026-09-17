@@ -4,14 +4,16 @@
 // 的 parseProtocolUri()）。
 //
 // **`id` 是 `null` 就是「这条通知不指向某一条任务」**——每日概览说的是一整天，
-// 没有哪一条可以「完成」或者「推迟」。那种通知不带按钮，点它开主窗口。
+// 成批提醒说的是一批，两者都没有哪一条可以「完成」或者「推迟」。那种通知不带
+// 按钮，点它开主窗口。
 export interface NotifyContent { id: string | null; title: string; body: string }
 
 /**
- * 服务端总线上有五种事件（server/src/events.ts）：`reminder`（载荷是整个
- * `Task`）、**`daily-summary`**（每日概览，载荷是 `{ title, body }`）、
- * `data-changed`（每次改动都发，弹通知等于刷屏）、`agent-status`（拆解进度，
- * 网页上已经有）、`ping`（心跳）。前两种该弹原生通知。
+ * 服务端总线上有六种事件（server/src/events.ts）：`reminder`（载荷是整个
+ * `Task`）、**`reminder-batch`**（一轮扫描里同时到点的几条，载荷是
+ * `{ count, title, body, items }`）、**`daily-summary`**（每日概览，载荷是
+ * `{ title, body }`）、`data-changed`（每次改动都发，弹通知等于刷屏）、
+ * `agent-status`（拆解进度，网页上已经有）、`ping`（心跳）。前三种该弹原生通知。
  *
  * **`daily-summary` 是后加的，这儿漏了整整一档。** 这一行原来写死
  * `if (event !== 'reminder') return null`，而服务端那侧的兜底是
@@ -20,18 +22,25 @@ export interface NotifyContent { id: string | null; title: string; body: string 
  * 桌面端丢掉它，服务端以为桌面端弹了。而「桌面端开着」正是这个应用的常态。
  * webhook 那一路照发，所以配了 webhook 的人看不出问题。
  *
+ * **`reminder-batch` 跟 `daily-summary` 走同一条支**：两者都是「文案服务端已经
+ * 拼好、而且不指向某一条任务」的通知——所以 `id` 一律是 `null`（没有可「完成」
+ * 的对象），点通知本体开主窗口。单条那条路（下面）不走这支：它得靠 `id` 定位
+ * 到具体任务，好让 toast 上那两颗按钮有东西可指。
+ *
  * `data/tasks/*.json` 是用户/AI 都能手改的文件，`GET /api/tasks` 不校验里面
  * 的数据（TaskCard.tsx 同款注释）——载荷不是预期形状（不是对象、没有 id、
  * id 不是字符串或是空串、没有 title、title 不是字符串、trim 后是空串）
  * 一律返回 null，不抛，不然一条坏数据能把通知这条路整个炸掉。
  */
 export function toNotification(event: string, data: unknown): NotifyContent | null {
-  if (event !== 'reminder' && event !== 'daily-summary') return null;
+  if (event !== 'reminder' && event !== 'reminder-batch' && event !== 'daily-summary') return null;
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
 
-  // 概览：标题和正文都是服务端拼好的（`dailySummary.ts` 的 `summaryText`），
-  // 这儿只做跟单条提醒同一套的形状校验，不重新拼一遍文案。
-  if (event === 'daily-summary') {
+  // 概览和成批提醒：标题和正文都是服务端拼好的（`dailySummary.ts` 的
+  // `summaryText` / `reminder.ts` 的 `batchText`），这儿只做跟单条提醒同一套的
+  // 形状校验，不重新拼一遍文案——**文案的正本只有服务端那一份**，三个壳
+  // （Electron toast、PowerShell 兜底、webhook）说的是同一句话。
+  if (event === 'daily-summary' || event === 'reminder-batch') {
     const t = (data as { title?: unknown }).title;
     const b = (data as { body?: unknown }).body;
     if (typeof t !== 'string' || t.trim() === '') return null;
@@ -141,10 +150,12 @@ export function buildToastXml(n: NotifyContent, iconFileUrl: string): string {
   const icon = escapeXml(iconFileUrl);
   const title = escapeXml(n.title);
   const body = escapeXml(n.body);
-  // **没有 id 就不出按钮**（每日概览）：两颗按钮的 arguments 里都要塞一个任务
-  // id，而概览说的是一整天。硬塞一个空 id 的话，Windows 照样把按钮画出来，
-  // 点下去走协议、服务端拿一个空 id 什么也找不到——一颗按下去没反应的按钮
-  // 比没有这颗按钮糟得多。
+  // **没有 id 就不出按钮**（每日概览、成批提醒）：两颗按钮的 arguments 里都要塞
+  // 一个任务 id，而概览说的是一整天、成批说的是一批。硬塞一个空 id 的话，
+  // Windows 照样把按钮画出来，点下去走协议、服务端拿一个空 id 什么也找不到
+  // ——一颗按下去没反应的按钮比没有这颗按钮糟得多。成批那条尤其不能塞「第一条
+  // 任务」的 id 去顶：那颗「完成」看起来是在完成这一批，实际只完成了其中一条，
+  // 而人不会知道是哪一条。
   const actions = n.id === null ? '' :
     '<actions>' +
     `<action content="完成" arguments="${escapeXml(actionUri('complete', n.id))}" activationType="protocol"/>` +

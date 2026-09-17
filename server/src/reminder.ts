@@ -200,18 +200,91 @@ async function toast(task: Task): Promise<void> {
   return toastRaw(task.title, body);
 }
 
-async function webhook(url: string, task: Task): Promise<void> {
+/**
+ * webhook 那一路的发送体。三处（单条提醒、成批提醒、每日概览）共用这一份，
+ * 差别只在 payload 和日志前缀。
+ *
+ * **发失败只落一行 warn，不往上抛**：提醒的主路径是横幅和系统通知，一条连不上
+ * 的 webhook 不该让另外两路跟着失败——`fireReminders` 里「发失败也要盖章」是
+ * 同一个立场。
+ */
+async function postJson(url: string, payload: unknown, label: string): Promise<void> {
   if (!url) return;
   try {
     await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(task),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(5000),
     });
   } catch (e) {
-    console.warn('[提醒] webhook 发送失败：', (e as Error).message);
+    console.warn(`[${label}] webhook 发送失败：`, (e as Error).message);
   }
+}
+
+/** 单条提醒那一路 webhook。**发的是整个 `Task`**，不是拼好的文案——接收端
+ *  多半要拿 id 去回写，文案是给人看的、给它没用。这个形状从第一版起没变过，
+ *  成批那条（`reminder-batch`）是另起的一种 payload，别混。 */
+async function webhook(url: string, task: Task): Promise<void> {
+  return postJson(url, task, '提醒');
+}
+
+/** 成批提醒里的一条。**只带 id 和标题**：通知上要念的就是这两样，把整个
+ *  `Task` 塞进来会让「一批」的载荷随任务字段一起膨胀，而三个壳里没有一个用得上
+ *  别的字段。 */
+export interface ReminderBatchItem {
+  id: string;
+  title: string;
+}
+
+/**
+ * 成批提醒的载荷。
+ *
+ * **`title`/`body` 必须在这份载荷里**，不能只发给 toast 和 webhook：桌面端
+ * （`desktop/src/notify.ts` 的 `toNotification`）拿到这条事件之后，用的是载荷里
+ * 拼好的文案，**没有 `title` 它直接返回 null**——桌面端在线时服务端又不弹
+ * PowerShell 兜底，于是「成批提醒」在桌面端会一条都不出现。
+ *
+ * 这不是假想的：第一版就只发了 `{ count, items }`（title/body 只给了 toast 和
+ * webhook），单测全绿——因为桌面端那份测试喂的是手写的载荷，两边都真实、
+ * 都绿，中间那段没被穿过。真实服务端一跑就露了（`scripts/` 里那次冒烟）。
+ * 现在类型上钉住：`ReminderBatch` 带这两个字段，`satisfies` 会在编译期拦住。
+ */
+export interface ReminderBatch {
+  count: number;
+  title: string;
+  body: string;
+  items: ReminderBatchItem[];
+}
+
+/**
+ * 一条通知里最多念几个标题。
+ *
+ * 三个：Windows 的 toast 和手机锁屏都只给一两行，列到第四个开始就只剩省略号；
+ * 而这条通知要说的那件事——「有一批事到点了，去应用里看」——三个标题就够说清了。
+ * 剩下的折成「等 N 件」，让人知道这不是全部（只列三个、一个字不提还有别的，
+ * 会让人以为就这三件）。
+ */
+export const BATCH_LIST_MAX = 3;
+
+/**
+ * 成批提醒念什么。**纯函数**，toast 和 webhook 的文案都从这一份出来，不各拼一遍。
+ *
+ * 标题写「N 件事到点了」而不是「该做了」：后者是单条那一路的说法，一批顶着
+ * 同一句话会让人以为只有一件。
+ *
+ * 形状跟手机那份（`web/src/lib/notifyPlan.ts` 里同一时刻合并出来的那条）**故意
+ * 一样**——同一次到点，桌面和手机说的是同一句话，不会让人以为是两件事。
+ * 那两个 bundle 互相 import 不了（那边进不了 `node:child_process`），各写一份，
+ * 改一处记得看另一处。
+ */
+export function batchText(items: ReminderBatchItem[]): { title: string; body: string } {
+  const shown = items.slice(0, BATCH_LIST_MAX).map((i) => i.title);
+  const rest = items.length - shown.length;
+  return {
+    title: `${items.length} 件事到点了`,
+    body: rest > 0 ? `${shown.join('、')} 等 ${items.length} 件` : shown.join('、'),
+  };
 }
 
 /**
@@ -235,8 +308,15 @@ async function webhook(url: string, task: Task): Promise<void> {
  * **盖章的范围和「响不响」的范围不一样**：到点没盖章的全部盖上（不盖的话每
  * 30 秒重判一次、手机那边的 `missed` 也一直挂着），但只有「刚到点」的那几条
  * 才真的发出去——服务停一晚上再开机不该是十几条通知同时炸，见 `CATCH_UP_MS`。
- * 返回值也只给发出去的那几条：调用方（`index.ts` 的定时器）只拿它记日志，
- * 报一个「发了 12 条」而实际上一条都没弹，比不报还糟。
+ *
+ * 返回值是**这次真的报出去的那几条任务**（不是「发了几条通知」：一轮里多条时
+ * 那几条合成一条通知，见下面）。**`index.ts` 的定时器现在是把它丢掉的**
+ * （`void fireReminders(bus)`），所以它没有在生产路径上被读——留着是因为它是
+ * 「谁真的响了」这份契约唯一的出口，测试全靠它。真要接上去记日志，先想清楚
+ * 一轮 30 秒打一行是不是噪音。
+ *
+ * **一轮里刚到点的几条算一批，一批只发一条通知**（单条时跟从前一字不差），
+ * 见下面那段。
  */
 export async function fireReminders(bus: Bus, now = new Date()): Promise<Task[]> {
   const tasks = readTasks();
@@ -258,7 +338,7 @@ export async function fireReminders(bus: Bus, now = new Date()): Promise<Task[]>
 
   const stamp = now.toISOString();
   const fired = new Set(due.map((t) => t.id));
-  // 同一条任务上两个提醒同时到期只通知一次（下面 due.map 只发一条 bus.emit），
+  // 同一条任务上两个提醒同时到期只通知一次（下面按任务发，一个任务只发一条），
   // 但两条都要盖章——只盖「这条任务上到期的那几个提醒」，没到期的和已经
   // 发过的原样保留。
   writeTasks(tasks.map((t) => (fired.has(t.id)
@@ -273,11 +353,34 @@ export async function fireReminders(bus: Bus, now = new Date()): Promise<Task[]>
   // 桌面端在线时它自己会走 Electron 原生通知（订阅同一个 bus 的 'reminder' 事件）——
   // PowerShell 只在桌面端不在线时当兜底，两条路同时开会让同一条提醒弹两次。
   const desktopOnline = bus.isDesktopOnline(now);
-  for (const t of fresh) {
+
+  // **一轮扫描里到点的几条算一批，一批只发一条通知。**
+  //
+  // 到点从来不是「一条一条来」的：早上设一批提醒、或者服务刚起来补上一小时内
+  // 错过的那些，一轮里常常同时有好几条。逐条发出去的话，Windows 通知中心里
+  // 并排躺 N 条（每条还各起一个 PowerShell 进程）、webhook 收 N 条同一秒的 POST
+  // ——**那不是提醒，是刷屏**，而人真正需要知道的只有「有一批事到点了」。
+  //
+  // 单条那条路一个字没改：它是绝大多数情况，桌面通知上那两颗「完成/推迟」按钮
+  // 也只在这一档有意义（一批没有一个可以「完成」的对象，见 notify.ts 里
+  // `n.id === null` 那段）。
+  if (fresh.length === 1) {
+    const t = fresh[0];
     bus.emit('reminder', t);
     if (settings.toastEnabled && !desktopOnline) await toast(t);
     await webhook(settings.webhookUrl, t);
+    return fresh;
   }
+
+  const items: ReminderBatchItem[] = fresh.map((t) => ({ id: t.id, title: t.title }));
+  const text = batchText(items);
+  // `...text` 不是可选的：桌面端那条路要用载荷里拼好的文案，见 `ReminderBatch` 上那段。
+  bus.emit('reminder-batch', { count: items.length, ...text, items } satisfies ReminderBatch);
+  if (settings.toastEnabled && !desktopOnline) await toastRaw(text.title, text.body);
+  // webhook 也聚合：接收端（自动化、自建脚本）在同一秒收到 N 条 POST，跟人被 N 条
+  // 通知糊一脸是同一件事，而且它从那 N 条里看不出「这是一批」。**单条那一路的
+  // payload 形状不变**（还是整个 Task），这里多出来的 `kind` 只有成批时才有。
+  await postJson(settings.webhookUrl, { kind: 'reminder-batch', ...text, count: items.length, items }, '提醒');
   return fresh;
 }
 
@@ -313,17 +416,8 @@ export async function fireDailySummary(bus: Bus, now = new Date()): Promise<{ ti
 }
 
 /** 概览那一路 webhook。**跟单条提醒的 body 分开**：那边发的是一整个 Task 对象，
- *  这边没有「某一条任务」可发，硬塞一个假的 Task 会让接收端的解析当场歪掉。 */
+ *  这边没有「某一条任务」可发，硬塞一个假的 Task 会让接收端的解析当场歪掉。
+ *  成批提醒（`reminder-batch`）同理，也是自己一种 payload。 */
 async function summaryWebhook(url: string, text: { title: string; body: string }): Promise<void> {
-  if (!url) return;
-  try {
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ kind: 'daily-summary', ...text }),
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch (e) {
-    console.warn('[每日概览] webhook 发送失败：', (e as Error).message);
-  }
+  return postJson(url, { kind: 'daily-summary', ...text }, '每日概览');
 }

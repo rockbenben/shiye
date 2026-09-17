@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
-import { PERSIST_EVERY_MS, dueTasks, fireDailySummary, fireReminders, notifyCommand } from './reminder.js';
+import { BATCH_LIST_MAX, PERSIST_EVERY_MS, batchText, dueTasks, fireDailySummary, fireReminders, notifyCommand } from './reminder.js';
 import { Bus } from './events.js';
 import { DEFAULT_SETTINGS, ensureDataFiles, newTask, readSettings, readTasks, writeSettings, writeTasks, type Task } from './store.js';
 
@@ -199,6 +199,147 @@ describe('fireReminders', () => {
     const titles = readTasks().map((t) => t.title);
     expect(titles).toContain('并发写入的任务');
     spy.mockRestore();
+  });
+});
+
+/**
+ * **一轮扫描里到点的几条算一批，一批只发一条通知。**
+ *
+ * 到点从来不是「一条一条来」的：早上设一批提醒、或者服务刚起来补上一小时内
+ * 错过的那些，一轮里常常同时有好几条。逐条发出去的话，Windows 通知中心里并排
+ * 躺 N 条（每条还各起一个 PowerShell 进程）、webhook 收 N 条同一秒的 POST——
+ * **那不是提醒，是刷屏**，而人真正需要知道的只有「有一批事到点了」。
+ *
+ * 单条那一档**一个字都没改**（下面「只有一条时走的还是老那条路」锁着它）：
+ * 它是绝大多数情况，桌面通知上那两颗「完成/推迟」按钮也只在这一档有意义——
+ * 一批没有一个可以「完成」的对象。
+ */
+describe('fireReminders：一轮里到点的几条合成一条通知', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'todo-remind-batch-'));
+    process.env.DATA_DIR = dir;
+    process.env.DEVICE_CONFIG = join(dir, 'device.json');
+    ensureDataFiles();
+    writeSettings({ ...DEFAULT_SETTINGS, webhookUrl: '', toastEnabled: false });
+    vi.mocked(execFile).mockClear();
+  });
+
+  afterEach(() => {
+    delete process.env.DATA_DIR;
+    delete process.env.DEVICE_CONFIG;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const two = () => [
+    at(JUST_NOW, { id: 't1', title: '交房租' }),
+    at(JUST_NOW, { id: 't2', title: '买猫粮' }),
+  ];
+
+  it('两条同时到点：广播一条 reminder-batch，逐条的 reminder 一条都不发', async () => {
+    writeTasks(two());
+    const bus = new Bus();
+    const single: unknown[] = [];
+    const batch: unknown[] = [];
+    bus.subscribe((e, d) => {
+      if (e === 'reminder') single.push(d);
+      if (e === 'reminder-batch') batch.push(d);
+    });
+
+    const fired = await fireReminders(bus, NOW);
+
+    expect(fired).toHaveLength(2);
+    expect(single, '逐条那一路还在发——桌面端会弹出两条通知，这正是要消掉的东西').toEqual([]);
+    expect(batch).toHaveLength(1);
+    expect(batch[0]).toEqual({
+      count: 2,
+      // 文案必须在这份载荷里，不能只发给 toast 和 webhook：桌面端拿这条事件
+      // 之后用的是载荷里的 title，没有它 toNotification 直接返回 null
+      // ——桌面端在线时服务端又不弹 PowerShell 兜底，成批提醒会一条都不出现。
+      // 第一版漏了这两个字段，单测全绿（desktop 那边喂的是手写载荷，两边都
+      // 真实、中间那段没被穿过），是 scripts 里那次真实冒烟逮出来的。
+      title: '2 件事到点了',
+      body: '交房租、买猫粮',
+      items: [{ id: 't1', title: '交房租' }, { id: 't2', title: '买猫粮' }],
+    });
+    // 盖章照旧、一条不落：响不响是任务级的判断，盖章是数据卫生。
+    expect(readTasks().every((t) => t.reminders[0].firedAt === NOW.toISOString())).toBe(true);
+  });
+
+  it('成批时只起一个 PowerShell 进程，念的是「N 件事到点了」', async () => {
+    writeSettings({ ...DEFAULT_SETTINGS, webhookUrl: '', toastEnabled: true });
+    writeTasks(two());
+
+    await fireReminders(new Bus(), NOW);
+
+    expect(execFile).toHaveBeenCalledTimes(1);
+    // 参数形状：['-NoProfile','-ExecutionPolicy','Bypass','-File',script,'-Title',t,'-Body',b]
+    const args = vi.mocked(execFile).mock.calls[0][1] as string[];
+    expect(args[6]).toBe('2 件事到点了');
+    expect(args[8]).toBe('交房租、买猫粮');
+  });
+
+  it('成批时 webhook 也只发一条，带 kind 让人认得出这是一批', async () => {
+    writeSettings({ ...DEFAULT_SETTINGS, webhookUrl: 'https://example.com/hook', toastEnabled: false });
+    writeTasks(two());
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      calls.push([String(url), init as RequestInit]);
+      return new Response('ok');
+    });
+
+    await fireReminders(new Bus(), NOW);
+
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0][1]?.body))).toMatchObject({
+      kind: 'reminder-batch', count: 2, title: '2 件事到点了', body: '交房租、买猫粮',
+    });
+    spy.mockRestore();
+  });
+
+  it('**只有一条时走的还是老那条路**：reminder 事件 + 整个 Task 当 webhook 载荷', async () => {
+    writeSettings({ ...DEFAULT_SETTINGS, webhookUrl: 'https://example.com/hook', toastEnabled: false });
+    writeTasks([at(JUST_NOW)]);
+    const bus = new Bus();
+    const single: unknown[] = [];
+    const batch: unknown[] = [];
+    bus.subscribe((e, d) => {
+      if (e === 'reminder') single.push(d);
+      if (e === 'reminder-batch') batch.push(d);
+    });
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ok'));
+
+    await fireReminders(bus, NOW);
+
+    expect(single).toHaveLength(1);
+    expect(batch).toEqual([]);
+    // 载荷还是那个 Task（有 title、没有 kind）——接收端照旧解析得动，
+    // 单条那一路对 webhook 使用者是**没有变化**的。
+    const body = JSON.parse(String(vi.mocked(spy).mock.calls[0][1]?.body));
+    expect(body.title).toBe('交房租');
+    expect(body.kind).toBeUndefined();
+    spy.mockRestore();
+  });
+});
+
+describe('batchText', () => {
+  const items = (...titles: string[]) => titles.map((title, i) => ({ id: `t${i}`, title }));
+
+  it('三个以内全列出来', () => {
+    expect(batchText(items('交房租', '买猫粮')))
+      .toEqual({ title: '2 件事到点了', body: '交房租、买猫粮' });
+  });
+
+  it('列几个是上限，不是随手写在循环里的一个字面量', () => {
+    expect(BATCH_LIST_MAX).toBe(3);
+  });
+
+  it('超过上限的折成「等 N 件」——只列前几个、一个字不提还有别的，会让人以为就这几件', () => {
+    const many = items(...Array.from({ length: BATCH_LIST_MAX + 2 }, (_, i) => `第${i + 1}件`));
+    const { body } = batchText(many);
+    expect(body.split('、')).toHaveLength(BATCH_LIST_MAX);
+    expect(body).toContain(`等 ${BATCH_LIST_MAX + 2} 件`);
   });
 });
 

@@ -48,6 +48,31 @@ describe('toNotification：reminder 和 daily-summary 弹', () => {
     expect(toNotification('daily-summary', { title: '   ', body: '· 交房租' })).toBeNull();
   });
 
+  /**
+   * **成批提醒。** 服务端一轮扫描里同时到点的几条会合成一条 `reminder-batch`
+   * （`reminder.ts` 的 `fireReminders`），不再逐条发 `reminder`——逐条发的话
+   * Windows 通知中心里并排躺 N 条，那不是提醒是刷屏。
+   *
+   * 它跟概览走同一条支：**文案服务端已经拼好，而且没有一条可以「完成」的任务**
+   * ——`id` 是 `null`，于是不带按钮、点通知本体开主窗口（main.ts 里
+   * `n.id === null ? openWindow() : openTask(n.id)`）。塞「第一条任务」的 id 去
+   * 顶是不行的：那颗「完成」看着像在完成这一批，实际只完成其中一条。
+   */
+  it('reminder-batch → 没有任务 id，标题和正文用服务端拼好的那两句', () => {
+    expect(toNotification('reminder-batch', {
+      count: 2, title: '2 件事到点了', body: '交房租、买猫粮', items: [{ id: 't1', title: '交房租' }],
+    })).toEqual({ id: null, title: '2 件事到点了', body: '交房租、买猫粮' });
+  });
+
+  it('成批没有标题不弹——跟概览同一条兜底', () => {
+    expect(toNotification('reminder-batch', { count: 2, body: '交房租、买猫粮' })).toBeNull();
+  });
+
+  it('成批的正文可以是空的——形状上不该炸（服务端不会这么发，但坏数据不该弹一条空白横条出来）', () => {
+    expect(toNotification('reminder-batch', { count: 2, title: '2 件事到点了' }))
+      .toEqual({ id: null, title: '2 件事到点了', body: '' });
+  });
+
   // 上限方向：只有正向断言的话，「什么事件都弹」照样能过上面那几条。
   it.each(['data-changed', 'agent-status', 'ping', '未来某个新事件'])('%s 不弹', (e) => {
     expect(toNotification(e, task())).toBeNull();
@@ -70,7 +95,7 @@ describe('总线事件全表：每一种桌面端都表过态', () => {
   // `emit('ping')` 不存在——心跳是 SSE 那一层自己写的（app.ts 的
   // `stream.writeSSE({ event: 'ping' })`），扫不到，手工补进来。
   const EXTRA = ['ping'];
-  const HANDLED = ['reminder', 'daily-summary'];        // 弹原生通知
+  const HANDLED = ['reminder', 'reminder-batch', 'daily-summary'];  // 弹原生通知
   const IGNORED = ['data-changed', 'agent-status', 'ping']; // 明确不弹，理由见 notify.ts 顶部
 
   function busEvents(dir = 'server/src', out = new Set(EXTRA)): Set<string> {
@@ -98,6 +123,7 @@ describe('总线事件全表：每一种桌面端都表过态', () => {
   it('说要弹的真的弹得出来，说不弹的真的不弹', () => {
     for (const e of IGNORED) expect(toNotification(e, task()), e).toBeNull();
     expect(toNotification('reminder', task())).not.toBeNull();
+    expect(toNotification('reminder-batch', { title: '2 件事到点了', body: '交房租、买猫粮' })).not.toBeNull();
     expect(toNotification('daily-summary', { title: '今天 1 件事' })).not.toBeNull();
   });
 });

@@ -6,7 +6,7 @@ import {
   installFullCalendarFakeLayout, fcDragEvent, fcSlotPoint, fcTimeGridDrag,
 } from './test-utils.js';
 import { App, DENSITY_VIEWS } from './App.js';
-import { api } from './api.js';
+import { api, type ReminderBatch } from './api.js';
 import { CLIENT_API_VERSION } from './components/ServerSetup.js';
 import { emptyDraft } from './components/TaskFields.js';
 import { setApiBase } from './lib/apiBase.js';
@@ -24,6 +24,7 @@ import type { ConflictFile, Countdown, Folder, InboxItem, Insight, List, Setting
 // 运行时它是 JSON.parse 出来的，可以是任何字符串，测试要能喂进去没见过的值。
 type ChangeHandler = (file: string) => void;
 type ReminderHandler = (t: Task) => void;
+type ReminderBatchHandler = (b: ReminderBatch) => void;
 
 let currentTasks: Task[] = [];
 let currentInbox: InboxItem[] = [];
@@ -36,7 +37,7 @@ let currentTrash: TrashItem[] = [];
 let currentConflicts: ConflictFile[] = [];
 // onOpen 复审 C2 加的：直接调用它，钉住「SSE 重连会刷新离线记号」这条触发
 // 路径，不用真的搭一个 EventSource 连接。
-const handlers: { onChange?: ChangeHandler; onReminder?: ReminderHandler; onOpen?: () => void;
+const handlers: { onChange?: ChangeHandler; onReminder?: ReminderHandler; onReminderBatch?: ReminderBatchHandler; onOpen?: () => void;
   // AI 状态那一路以前没人接过——「拆解结果那条提示」那族用例要靠它推状态。
   onAgentStatus?: (s: unknown) => void } = {};
 
@@ -139,9 +140,10 @@ vi.mock('./api.js', () => ({
     // 不通过——跟 Attachments.test.tsx/TaskCard.test.tsx 同一份写法。
     attachmentUrl: vi.fn((taskId: string, name: string) => `/api/tasks/${taskId}/attachments/${encodeURIComponent(name)}`),
   },
-  subscribe: (h: { onChange: ChangeHandler; onReminder: ReminderHandler; onAgentStatus: (s: unknown) => void; onOpen: () => void }) => {
+  subscribe: (h: { onChange: ChangeHandler; onReminder: ReminderHandler; onReminderBatch: ReminderBatchHandler; onAgentStatus: (s: unknown) => void; onOpen: () => void }) => {
     handlers.onChange = h.onChange;
     handlers.onReminder = h.onReminder;
+    handlers.onReminderBatch = h.onReminderBatch;
     handlers.onOpen = h.onOpen;
     handlers.onAgentStatus = h.onAgentStatus;
     return () => {};
@@ -264,6 +266,7 @@ beforeEach(() => {
   trashFetchCount = 0;
   delete handlers.onChange;
   delete handlers.onReminder;
+  delete handlers.onReminderBatch;
   delete handlers.onOpen;
   // 每条测试都从「脏集是空的」开始——上一条 mockResolvedValue 出来的汇总不许漏
   // 过来（漏过来的表现是别的 describe 里莫名其妙多出一条「已把 N 条…」的提示，
@@ -511,42 +514,148 @@ describe('App：提醒横幅跟着任务走', () => {
  * 同一条提醒在两个壳里能做的事不一样，没有道理。
  */
 /**
- * 提醒横幅摆不下时摄起来。**不是为了好看**：开着应用出去半天，回来时八个
- * 横幅摔在最上面，看板整个被推出屏幕——而你想看的恰恰是看板。
+ * **同时到点的几条合成一条横幅。**
+ *
+ * 在这之前是「最多摆三条、每条各占一个 Alert、摆不下的报个数」，于是同时到点
+ * 五条时屏幕上摔下三个警告框、三条都得各自去点一下（推走一条还要再点一次），
+ * 下面再挂一行「还有 2 条到点了」。**同时到点本来是一件「一批」的事**，摊成
+ * 五个交互点是把一件事说成五件——而人此刻要做的判断只有一个：「现在就处理
+ * 哪一条，还是全都待会儿再说」。
+ *
+ * 这一组按服务端真实的推送方式喂数据（`onReminderBatch`，见
+ * `server/src/reminder.ts` 的 `fireReminders`），**不是逐条调 `onReminder`**
+ * ——后者是单条那条路，服务端只在恰好一条时走它。
  */
-describe('App：提醒横幅摆不下就收起来', () => {
+describe('App：同时到点的几条合成一条横幅', () => {
   const raiseMany = async (n: number) => {
-    currentTasks = Array.from({ length: n }, (_, i) => task({ id: `t${i}`, title: `提醒${i}` }));
+    currentTasks = Array.from({ length: n }, (_, i) => task({
+      id: `t${i}`,
+      title: `提醒${i}`,
+      // **提醒盖着章**：横幅本来就是服务端发出去之后才推上来的，而 `firedAt`
+      // 正是「哪一条刚响过」的唯一线索——「稍后」要挪的就是它（`snoozePatch`）。
+      // 不带章的话那颗按钮会退回「追加一条」那条兜底
+      // （`lib/reschedule.test.ts` 里单有一格测它），于是「挪到十分钟后」
+      // 那条断言会变成在数「追加对不对」。
+      reminders: [{ at: '2026-08-01T00:00:00.000Z', firedAt: '2026-08-01T00:00:01.000Z' }],
+    }));
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
-    await waitFor(() => expect(handlers.onReminder).toBeDefined());
-    for (const t of currentTasks) act(() => handlers.onReminder!(t));
-    await screen.findByText('该做了：提醒0');
+    await waitFor(() => expect(handlers.onReminderBatch).toBeDefined());
+    act(() => handlers.onReminderBatch!({
+      count: n, items: currentTasks.map((t) => ({ id: t.id, title: t.title })),
+    }));
+    await screen.findByText(`有 ${n} 件事到点了`);
   };
   const banners = () => document.querySelectorAll('.ant-alert-warning');
+  const banner = () => document.querySelector('.ant-alert-warning') as HTMLElement;
 
-  it('三条以内全摆出来，不多一行', async () => {
-    await raiseMany(3);
-    expect(banners()).toHaveLength(3);
-    expect(document.querySelector('.ink-due-more')).toBeNull();
-  });
-
-  it('超过三条：只摆三条，剩下的报个数', async () => {
-    await raiseMany(6);
-    expect(banners()).toHaveLength(3);
-    expect(document.querySelector('.ink-due-more')?.textContent).toContain('还有 3 条到点了');
-  });
-
-  it('**「全部知道了」只把横幅摘掉，不动任务也不动提醒**——跟每条那颗 × 一样', async () => {
-    await raiseMany(6);
-    fireEvent.click(screen.getByRole('button', { name: '全部知道了' }));
-    await waitFor(() => expect(banners()).toHaveLength(0));
-    expect(api.patchTask).not.toHaveBeenCalled();
-    expect(api.patchTasksEach).not.toHaveBeenCalled();
-  });
-
-  it('**那颗按钮不常驻**——三条以内逐条点 × 本来就不费事，而一颗能清掉十几条提醒的按钮误点代价更大', async () => {
+  it('两条就合成一条——不是两条各占一个横幅', async () => {
     await raiseMany(2);
+    expect(banners()).toHaveLength(1);
+  });
+
+  it('**只有一条时还是老样子**——一条横幅、写着「该做了：」、三个动作都在', async () => {
+    // 单条是绝大多数情况，为了「多条时好看」把它顺手改掉，是把最常见的那种
+    // 情况变差。判据落在**没有**聚合横幅那两样东西上（总数那句、批量那颗）。
+    currentTasks = [task({ id: 't1', title: '交房租' })];
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await waitFor(() => expect(handlers.onReminder).toBeDefined());
+    act(() => handlers.onReminder!(currentTasks[0]));
+
+    expect(await screen.findByText('该做了：交房租')).toBeDefined();
+    expect(screen.queryByText(/件事到点了/)).toBeNull();
     expect(screen.queryByRole('button', { name: '全部知道了' })).toBeNull();
+    for (const label of ['完成', '去做', '稍后10分钟']) {
+      expect(btnIn(banner(), label), label).toBeDefined();
+    }
+  });
+
+  it('列出来的每条标题点得动，点了打开那条任务——这是「摆不下只报个数」丢掉的那半', async () => {
+    await raiseMany(3);
+    const title = [...document.querySelectorAll('.ink-due-open')].find((b) => b.textContent === '提醒1');
+    if (!title) throw new Error('聚合横幅里没有「提醒1」这颗标题');
+
+    fireEvent.click(title);
+
+    const panel = await screen.findByRole('complementary');
+    await waitFor(() => expect(within(panel).getByText('提醒1')).toBeDefined());
+  });
+
+  it('超过五条：只列五条，剩下的报个数——但横幅仍然只有一条', async () => {
+    await raiseMany(7);
+    expect(document.querySelectorAll('.ink-due-open')).toHaveLength(5);
+    expect(document.querySelector('.ink-due-more')?.textContent).toContain('等 7 条');
+    expect(banners()).toHaveLength(1);
+  });
+
+  /**
+   * **逐条「完成」这一颗不能因为聚合就没了。**
+   *
+   * 单条那条横幅上有「完成」，而这一摞里的每一条都是同一种事——只是恰好跟
+   * 别人撞在同一刻到点。聚合要是把这条路砍掉，「这几条都做完了」反而比以前
+   * 更费事（得先去列表里把它们找出来），那是拿一个退步换一个进步。
+   *
+   * 走的是跟看板上勾选同一个 `patchOne`：所以撤销提示、连带完成子任务这些
+   * 都在（`lib/undoDone.ts`），不是另开一条只标个状态的窄路。
+   */
+  it('逐条那颗勾还在：点它把这一条标成 done，这一摞里的别的照旧留着', async () => {
+    await raiseMany(3);
+    const doneBtn = (title: string) => [...document.querySelectorAll('.ink-due-check')]
+      .find((b) => b.getAttribute('aria-label') === `把「${title}」标记完成`);
+    expect(doneBtn('提醒1')).toBeDefined();
+
+    fireEvent.click(doneBtn('提醒1')!);
+
+    await waitFor(() => expect(api.patchTask).toHaveBeenCalledWith('t1', { status: 'done' }));
+    // **只摘掉这一条**——别的两条还在等人处理，横幅也还在。
+    await waitFor(() => expect(doneBtn('提醒1')).toBeUndefined());
+    expect(doneBtn('提醒0')).toBeDefined();
+    expect(doneBtn('提醒2')).toBeDefined();
+    expect(banners()).toHaveLength(1);
+  });
+
+  /**
+   * **「全部稍后」一次把这一摞推走。** 这是这一整组改动要解决的那件事本身：
+   * 同时到点五条时，以前要按五次「稍后」，每次还得先在一堆横幅里认出是哪一条。
+   * 而「我现在没空，别一起烦我」本来就是**一个**动作。
+   *
+   * 断言落在「一次批量请求、每条的 patch 各自算」上：五条各发一次单条 PATCH
+   * 是另一条路（各自触发一轮目录监听器、一轮 SSE、一次整页 reload）。
+   */
+  it('「全部稍后 10 分钟」发一次批量请求，每条的提醒各自挪到十分钟后', async () => {
+    await raiseMany(2);
+    vi.mocked(api.patchTasksEach).mockClear();
+
+    fireEvent.click(btnIn(banner(), '全部稍后10分钟'));
+
+    await waitFor(() => expect(api.patchTasksEach).toHaveBeenCalledTimes(1));
+    const [patches] = (api.patchTasksEach as ReturnType<typeof vi.fn>).mock.calls[0] as
+      [Array<{ id: string; patch: { reminders: Array<{ at: string; firedAt: string | null }> } }>];
+    expect(patches.map((p) => p.id)).toEqual(['t0', 't1']);
+    for (const p of patches) {
+      // 每条一条提醒、挪到十分钟后、章清掉——跟单条那颗「稍后」同一个判据
+      // （`lib/reschedule.ts` 的 `snoozePatch`），不是另算一套。
+      expect(p.patch.reminders).toHaveLength(1);
+      const delta = Date.parse(p.patch.reminders[0].at) - Date.now();
+      expect(delta).toBeGreaterThan(9 * 60_000);
+      expect(delta).toBeLessThanOrEqual(10 * 60_000 + 5_000);
+      expect(p.patch.reminders[0].firedAt).toBeNull();
+    }
+    // 横幅跟着收掉：这批已经推走了，留着它们只会挡住看板。
+    await waitFor(() => expect(banners()).toHaveLength(0));
+  });
+
+  it('**「全部知道了」只把横幅摘掉，不动任务也不动提醒**', async () => {
+    await raiseMany(6);
+    // **比增量，不比 `not.toHaveBeenCalled()`。** 这个文件的 mock 在用例之间
+    // 不清零，那句断言实际问的是「整个文件跑到这儿为止有没有人写过」——
+    // 同族里别的用例各发过一次，于是它单独跑绿、跟整个文件一起跑红。
+    const writes = () => (api.patchTasksEach as ReturnType<typeof vi.fn>).mock.calls.length;
+    const before = writes();
+
+    fireEvent.click(screen.getByRole('button', { name: '全部知道了' }));
+
+    await waitFor(() => expect(banners()).toHaveLength(0));
+    expect(writes(), '「全部知道了」发了写——它只该把横幅摘掉').toBe(before);
   });
 });
 

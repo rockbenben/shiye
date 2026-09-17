@@ -665,6 +665,16 @@ export function App() {
     const off = subscribe({
       onChange: (file) => void reload(file),
       onReminder: (t) => setDue((prev) => (prev.includes(t.id) ? prev : [...prev, t.id])),
+      // 一轮里同时到点的那一批：整批一次灌进去，**不是逐条走 onReminder**——
+      // 服务端本来就把它们当一批发出来（`reminder.ts` 的 `fireReminders`），
+      // 逐条发的话三个壳（系统通知、webhook、横幅）都会各炸 N 下。
+      // 仍然按 id 去重：`due` 是「现在还没处理、还欠着一条横幅」的集合，
+      // 同一条任务在同一批里出现两次（手改文件造得出）只该占一个位置。
+      onReminderBatch: (b) => setDue((prev) => {
+        const next = [...prev];
+        for (const i of b.items) if (!next.includes(i.id)) next.push(i.id);
+        return next;
+      }),
       // 'idle' 不代表任何结果，只是「排期没了、没别的状态接着说话」——收起来，
       // 等价于回到没有 agent 状态时的样子，见 server/src/autoExpand.ts 的 cancel()。
       onAgentStatus: (s) => setAgent(s.state === 'idle' ? null : s),
@@ -2605,8 +2615,18 @@ export function App() {
   // **放弃原来漏了**——而它比搁置更该挡：横幅点进去会跳到「全部」，而「全部」
   // 本来就把放弃的排除在外（lib/simpleViews.ts），于是点了之后落到一个页面上
   // 找不到那条任务，正是上面那句话描述的那种糟糕。
-  /** 最多同时摆几条提醒横幅。三条是「一屏看得完、又不至于把看板顶没」那一档。 */
-  const DUE_BANNERS = 3;
+  /**
+   * 聚合横幅里最多列出几条标题。
+   *
+   * 五条：这一摞本来就是「有几件事在等着我」的一眼概览，列到十几行反而把看板
+   * 顶没了——而看板才是他真正要动手的地方。超出的折成「等 N 条」，人知道这不是
+   * 全部（只列五条、一个字不提还有别的，会让人以为就这五件）。
+   *
+   * **跟服务端 `BATCH_LIST_MAX`（3）不是一个数，也不是一回事**：那个限的是
+   * 系统通知正文那一两行（Windows toast、手机锁屏），列到第四个开始就只剩省略号；
+   * 这个是网页上一整块横幅里的列表，一屏放得下更多。
+   */
+  const DUE_LIST_MAX = 5;
 
   const dueTasks = due
     .map((id) => tasks.find((t) => t.id === id))
@@ -2656,6 +2676,40 @@ export function App() {
     dismissDue(t.id);
     // 提示里的数字跟真正推的量读同一个参数，不是另写一个字面量。
     void message.success(`${snoozeLabel(minutes)}后再提醒你`);
+  };
+
+  /**
+   * 聚合横幅上那颗「全部稍后 N 分钟」——**一次把这一摞全推走**。
+   *
+   * 这是这次改动要解决的那件事本身：同时到点五条时，以前要按五次「稍后」
+   * （每次还得先在一堆横幅里认出是哪一条）。而「我现在没空，别一起烦我」
+   * 本来就是**一个**动作，不是一个动作做五遍。
+   *
+   * ## 为什么敢批量「稍后」，却坚决不做批量「完成」
+   *
+   * 「稍后」的代价是**可逆的、且只关于时间**：这几条本来就在等着做，晚十分钟
+   * 再来一次。批量「完成」不是——它会把五条没做的事一起标成做完，而「完成」
+   * 在这个应用里是要连带改重复任务的下一次、连带完成子任务的（`undoDone`），
+   * 一次误点就是一串假数据，撤销提示也只兜得住一条。所以批量那一行只给
+   * 「稍后」和「知道了」；真要逐条结案，去列表上勾，那里勾错一条只错一条。
+   *
+   * ## 为什么用 `patchTasksEach` 而不是五次 `patchTask`
+   *
+   * 五条各发一次写，各自触发一轮目录监听器、一轮 SSE、一次整页 reload。批量
+   * 那条路是一次请求改完（`api.ts` 里 `patchTasksEach` 顶上的注释），跟批量
+   * 标签、批量改期走的是同一条。
+   *
+   * **每条的 patch 各自算**（`snoozePatch` 要按任务找出「刚响过的那一条提醒」
+   * 才能挪对），不是一份共享的 patch 套五遍。
+   */
+  const snoozeAllDue = (minutes: number) => {
+    const all = dueTasks;
+    if (all.length === 0) return;
+    guard(() => api.patchTasksEach(all.map((t) => ({ id: t.id, patch: snoozePatch(t, minutes, now) }))));
+    // 一次把横幅全摘掉：这批已经推走了，留着它们只会挡住看板。**只摘横幅，
+    // 任务和提醒都交给上面那个写**——跟每条那颗 × 是两回事。
+    setDue([]);
+    void message.success(`${all.length} 条都推到 ${snoozeLabel(minutes)}后再提醒你`);
   };
 
   // 顶栏那行小字用的：收件箱里还有多少条没被 AI 读走。这是「AI 队列还有多少
@@ -3170,7 +3224,10 @@ export function App() {
             </div>
           )}
 
-          {dueTasks.slice(0, DUE_BANNERS).map((t) => (
+          {/* **只有一条时才是这个样子**（`dueTasks.length === 1`）：一条横幅、
+              三个动作，跟以前一字不差。绝大多数提醒就是一条，为了「多条时好看」
+              把它也改掉，是把最常见的那种情况变差。两条起走下面那条聚合横幅。 */}
+          {dueTasks.length === 1 && dueTasks.map((t) => (
             <Alert
               key={t.id}
               type="warning"
@@ -3251,19 +3308,109 @@ export function App() {
               onClose={() => dismissDue(t.id)}
             />
           ))}
-          {/* 摆不下的那几条收成一行。**不是为了好看**：开着应用出去半天，
-              回来时八个横幅摔在最上面，看板整个被推出屏幕——而你想看的恰恰是看板。
-              摄到三条（一屏看得完、又不至于把内容顶没），剩下的只报个数。
+          {/* **两条起：这一摞合成一条横幅。**
+              
+              在这之前是「最多摆三条、每条各占一个 Alert、摆不下的报个数」，
+              于是同时到点五条时屏幕上摔下三个警告框、三条都得各自去点一下
+              （每条还要点两次才推得走），下面再挂一行「还有 2 条到点了」。
+              **同时到点本来是一件「一批」的事**，摊成五个交互点是把一件事说成
+              五件——而人此刻要做的判断只有一个：「现在就处理哪一条，还是全都
+              待会儿再说」。
 
-              那颗「全部知道了」**只在真的摆不下时才出现**：三条以内逐条点 ×
-              本来就不费事，而一颗能一下子清掉十几条提醒的按钮常驻在那儿，误点
-              的代价比它省的那几下大。它只把横幅摘掉，**不动任务也不动提醒**
-              ——跟每条那颗 × 一样（`dismissDue`）。 */}
-          {dueTasks.length > DUE_BANNERS && (
-            <div className="ink-due-more" role="status">
-              <span>还有 {dueTasks.length - DUE_BANNERS} 条到点了</span>
-              <Button size="small" onClick={() => setDue([])}>全部知道了</Button>
-            </div>
+              所以这一条给的是那个判断本身：
+
+              - 标题报**总数**，一眼知道积了多少；
+              - 正文列出是哪几件（最多 `DUE_LIST_MAX` 条，超出的折成「等 N 条」）。
+                每条标题点得动，点了打开那条任务——这是单条横幅上那颗「去做」
+                在这一档的对应物。**列出来本身就是价值**：以前摆不下的那几条
+                只报个数，人得先逐条关掉上面三个横幅才看得见它们是什么；
+              - 动作是**批量**的：一颗「全部稍后 N 分钟」加一颗「全部知道了」。
+                「全部稍后」的理由见 `snoozeAllDue` 上面那段（为什么敢批量稍后、
+                却坚决不做批量完成）。
+
+              「全部知道了」这一颗在这儿是**常驻**的，跟以前「只在摆不下时才出现」
+              不一样：以前它清的是「一屏之外那十几条我看不见的」，误点代价大；
+              现在它清的就是眼前这一摞——任务和提醒一个字节都不动，只是这一批
+              不再占着屏幕。右上角那颗 × 是同一件事，两颗都留着是因为这一摞
+              可能有五条、覆盖大半个屏幕，右侧那颗 × 离得远。 */}
+          {dueTasks.length > 1 && (
+            <Alert
+              type="warning"
+              showIcon
+              closable
+              message={`有 ${dueTasks.length} 件事到点了`}
+              description={(
+                <div className="ink-due-list">
+                  {dueTasks.slice(0, DUE_LIST_MAX).map((t) => (
+                    <div key={t.id} className="ink-due-item">
+                      {/* **逐条「完成」这一颗不能因为聚合就没了。**
+                          单条那条横幅上有「完成」，而这一摞里的每一条都是同一
+                          种事——只是恰好跟别人撞在同一刻到点。聚合要是把这条
+                          路砍掉，「五条都做完了」这种情形反而比以前更费事
+                          （得先去列表里把它们找出来），那是拿一个退步换一个
+                          进步。
+                          形状照抄行档那颗勾选圈（`TaskRow` 的
+                          `.ink-trow-check`，包括 `aria-label` 那句一模一样的
+                          说法）：同一个动作在整个应用里该长同一个样子、说同
+                          一句话。**只有批量那一档不做「全部完成」**——理由见
+                          `snoozeAllDue` 上面那段：一颗误点会一次造出一串假
+                          数据，而逐条点错只错一条，还有撤销提示兜着。 */}
+                      <button
+                        type="button"
+                        className="ink-due-check"
+                        aria-label={`把「${t.title}」标记完成`}
+                        onClick={() => {
+                          patchOne(t.id, { status: 'done' });
+                          dismissDue(t.id);
+                        }}
+                      />
+                      {/* 跟单条横幅那颗「去做」同一件事、同一个去处：打开那条
+                          任务（`openTask` 会先切到装得下它的那一屏再开面板），
+                          顺手把这一条从横幅里摘掉——面板已经开着它了，再挂在
+                          列表里是在挡自己。**只摘它一个**，这一摞里的别的照旧
+                          留着等人处理。
+                          用裸 `<button>` 而不是 antd 那颗 link 按钮：跟行档的
+                          `.ink-trow-open`、日历的 `.ink-agenda-title` 同一个
+                          形状，长标题自己折行、不撑宽横幅。 */}
+                      <button
+                        type="button"
+                        className="ink-due-open"
+                        onClick={() => {
+                          openTask(t.id);
+                          dismissDue(t.id);
+                        }}
+                      >{t.title}</button>
+                    </div>
+                  ))}
+                  {dueTasks.length > DUE_LIST_MAX && (
+                    <span className="ink-due-more">等 {dueTasks.length} 条</span>
+                  )}
+                </div>
+              )}
+              action={(
+                <Space size={4}>
+                  {/* 跟单条那颗一样：主按钮是第一档（十分钟），其余收在小箭头里。
+                      分钟数和文案都读 `lib/reschedule.ts` 那一份，不写死。 */}
+                  <Space.Compact size="small">
+                    <Button size="small" onClick={() => snoozeAllDue(SNOOZE_MIN)}>
+                      全部稍后 {snoozeLabel(SNOOZE_MIN)}
+                    </Button>
+                    <Dropdown
+                      trigger={['click']}
+                      menu={{
+                        items: SNOOZE_CHOICES.filter((m) => m !== SNOOZE_MIN)
+                          .map((m) => ({ key: String(m), label: `全部稍后 ${snoozeLabel(m)}` })),
+                        onClick: ({ key }) => snoozeAllDue(Number(key)),
+                      }}
+                    >
+                      <Button size="small" aria-label="换一个推迟时长">⌄</Button>
+                    </Dropdown>
+                  </Space.Compact>
+                  <Button size="small" onClick={() => setDue([])}>全部知道了</Button>
+                </Space>
+              )}
+              onClose={() => setDue([])}
+            />
           )}
 
           {/* 排上了一次自动拆解：倒计时 + 「立即拆解」/「这次不拆」。跟下面的

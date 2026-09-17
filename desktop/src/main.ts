@@ -335,7 +335,9 @@ function subscribeReminders(): void {
     const n = toNotification(event, data);
     if (!n) return;
     showNotification(buildNotificationOptions(n, { fileUrl: ICON_FILE_URL, path: ICON_PATH }))
-      // 概览（`n.id === null`）没有可定位的那一条，开主窗口就是它该做的事。
+      // `n.id === null`（概览、成批提醒）没有可定位的那一条，开主窗口就是它该做的事。
+      // 上报那条路（`reportNotificationFailed`）对这两种照样成立：服务端只读
+      // title/body 去弹兜底 toast，`id` 它压根不看。
       .on('click', () => { if (n.id === null) openWindow(); else openTask(n.id); })
       .on('failed', () => reportNotificationFailed(n));
   });

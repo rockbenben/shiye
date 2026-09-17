@@ -99,7 +99,8 @@ function dispatch(e: SseEvent, onEvent: (event: string, data: unknown) => void):
   try {
     // ping 心跳的 data 是空字符串——'' 不是合法 JSON，但也不该让整条订阅
     // 因为一次心跳就跳过重连以外的处理；当 null 处理，交给 onEvent 决定
-    // （notify.ts 的 toNotification 反正只认 'reminder' 事件）。
+    // （notify.ts 的 toNotification 只认 reminder / reminder-batch /
+    // daily-summary 三种，ping 本来就落在那三种之外）。
     onEvent(e.event, e.data ? JSON.parse(e.data) : null);
   } catch {
     // 坏 JSON 不该把整条订阅炸掉，跳过这一条，下一条继续。

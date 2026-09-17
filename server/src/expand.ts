@@ -2,9 +2,9 @@ import { type ChildProcess } from 'node:child_process';
 import crossSpawn from 'cross-spawn';
 import type { Bus } from './events.js';
 import { agentCwd, agentDataDir, aiSeesSameData, dataDir, readLastOutboxError, readSettings, takeBoardReport } from './store.js';
-import { configProblem, clockLine, runBoardViaApi, runViaApi, scopeLine, type Fetcher, type ReviewScope } from './aiApi.js';
+import { configProblem, clockLine, runBoardViaApi, runViaApi, scopeLine, type AgentScope, type Fetcher, type ReviewScope } from './aiApi.js';
 
-export type { ReviewScope };
+export type { AgentScope, ReviewScope };
 
 export interface AgentStatus {
   // 'scheduled'：autoExpand.ts 排上了一次自动拆解，`at` 是绝对触发时间（ISO），
@@ -40,13 +40,16 @@ export function emitAgentStatus(bus: Bus | undefined, status: AgentStatus): void
 }
 
 /**
- * 这个 runner 能叫起 AI 干的两件事：拆收件箱、回顾已有任务。
+ * 这个 runner 能叫起 AI 干的四件事：拆收件箱、回顾已有任务、汇总看板、拆细一条。
  *
- * **两件事共用下面那把单飞锁，不是各锁各的**：它们读的是同一份 `data/`、写的是
+ * **四件事共用下面那把单飞锁，不是各锁各的**：它们读的是同一份 `data/`、写的是
  * 同一批 `outbox-*.json`，同时起两个 `claude` 对着同一个目录写，等于赌两次
  * `mergeOutbox` 不撞车。慢一件事，不赌。
+ *
+ * `breakdown`（「让 AI 拆细这条」）是四件里唯一**必须带范围**的——它的范围就是
+ * 它要处理的全部内容，没有范围就无从谈起。别的三件不带范围时都是「全量」。
  */
-export type AgentKind = 'expand' | 'review' | 'board';
+export type AgentKind = 'expand' | 'review' | 'board' | 'breakdown';
 
 /**
  * 服务端只指路，不抄规则。规则的正本在 `workflows/expand.md` / `workflows/review.md`
@@ -58,28 +61,36 @@ export type AgentKind = 'expand' | 'review' | 'board';
  * 的」和「手敲跑出来的」是两个结果，而界面上没有任何地方会提示这种分叉。
  */
 /**
- * 服务叫起 AI 时发的那两句话，**这里是正本**。
+ * 服务叫起 AI 时发的那几句话，**这里是正本**。
  *
- * 导出只为一件事：`AGENTS.md` 开头把这两句逐字抄了一遍（AI 靠它们认出「我这次
- * 被叫来拆解还是回顾」），`agentsMd.guard.test.ts` 拿这份去比，两边飘了会红。
+ * 导出只为一件事：`AGENTS.md` 开头把这四句逐字抄了一遍（AI 靠它们认出「我这次
+ * 被叫来拆解、回顾、总览还是拆细」），`agentsMd.guard.test.ts` 拿这份去比，两边飘了会红。
  * 产品代码只在下面 `start()` 里用。
+ *
+ * `breakdown` 那句说的是「指定的那一条」——**具体是哪一条由 `scopeLine` 接在后面**
+ * （见 `aiApi.ts`），不写进这句：这句是四件事各自的固定开头，AGENTS.md 逐字抄的
+ * 就是它，带上会变的部分就没法对账了。
  */
 export const PROMPT: Record<AgentKind, string> = {
   expand: '读 AGENTS.md 和 workflows/expand.md，处理收件箱里还没处理的条目。',
   review: '读 AGENTS.md 和 workflows/review.md，回顾一遍现有任务。',
   board: '读 AGENTS.md 和 workflows/board.md，汇总当前看板状态。',
+  breakdown: '读 AGENTS.md 和 workflows/breakdown.md，把指定的那一条任务拆细。',
 };
 
 
 
 /** 报错和状态里怎么称呼这件事——这些字符串会原样出现在界面上，别把 'expand' 漏出去。 */
-const WORD: Record<AgentKind, string> = { expand: '拆解', review: '回顾', board: '总览' };
+const WORD: Record<AgentKind, string> = { expand: '拆解', review: '回顾', board: '总览', breakdown: '拆细' };
 
 /** 跑完了却什么都没写出来时，各自该说的实话。见下面 'exit' 里那段长注释。 */
 const NOTHING: Record<AgentKind, string> = {
   expand: 'AI 跑完了，但没有写出任何拆解结果（收件箱里可能没有要拆的内容）',
   review: 'AI 跑完了，但没有提出任何建议（现有的任务里可能没什么值得说的）',
   board: 'AI 跑完了，但没有产出任何汇报',
+  // 「没有建议」在这儿多半是好消息，不是坏消息——他点「拆细」是因为觉得这条
+  // 太粗，而 AI 看完认为它已经够具体了。说成「失败」会让他以为白烧了一次额度。
+  breakdown: 'AI 跑完了，但没有提出拆细建议（这条可能已经够具体了）',
 };
 
 const TEN_MINUTES = 10 * 60 * 1000;
@@ -260,7 +271,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
    * 就是一个真的运行时循环依赖。让文件监听器去触发，跟 AI 自己写文件时走的是
    * 同一条路，一个分支都不多。
    */
-  function startApi(kind: AgentKind, scope?: ReviewScope): { ok: true } | { ok: false; error: string } {
+  function startApi(kind: AgentKind, scope?: AgentScope): { ok: true } | { ok: false; error: string } {
     const s = readSettings();
     const cfg = { baseUrl: s.aiBaseUrl, apiKey: s.aiKey, model: s.aiModel };
 
@@ -314,11 +325,21 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
 
   // `kind` 默认 'expand'：`autoExpand.ts` 只会排拆解，它那条调用不必写这个参数。
   // 回顾没有自动触发，只会从路由上带着显式的 'review' 进来。
-  // `scope` 只有回顾用得上（拆解的对象是收件箱，不属于任何清单）。默认 undefined
-  // 就是老行为：扫全部任务。
-  function start(kind: AgentKind = 'expand', scope?: ReviewScope): { ok: true } | { ok: false; error: string } {
+  // `scope` 只有回顾和拆细用得上（拆解的对象是收件箱、总览是全局，两者都不属于
+  // 任何清单/单条任务）。默认 undefined 就是老行为：扫全部任务。
+  // 拆细那条路上 `scope` 是**必须**的——没有它就没有要拆的对象，路由保证一定带上。
+  function start(kind: AgentKind = 'expand', scope?: AgentScope): { ok: true } | { ok: false; error: string } {
     if (child) {
       return { ok: false, error: `上一次${WORD[child.kind]}还在跑，等它跑完或者超时（最多 10 分钟）再试一次` };
+    }
+    // **拆细是四条里唯一必须有范围的**，所以没带范围时**在起进程之前就拒绝**。
+    // 不拦的话两边都是坏的：CLI 那条路白起一个进程烧一次额度，接口那条路发一份
+    // 空任务表、拿回一句「没有拆细建议」——**而那句话是误导**，他读到的是
+    // 「这条可能已经够具体了」，实际是压根没说是哪一条。
+    // 路由那一层已经拦了（`/api/breakdown` 的 `taskId` 必填，缺了 400），
+    // 这里是第二道，防的是绕过路由直接调 `start('breakdown')`。
+    if (kind === 'breakdown' && (scope === undefined || !('taskId' in scope))) {
+      return { ok: false, error: '拆细得指名是哪一条任务——这次没带范围，不跑' };
     }
     // 放在任何分流/失败之前——哪怕下一行就因配置或数据目录不一致而 failed，
     // 那条横幅也得带对 kind（「回顾失败」不是「拆解失败」）。

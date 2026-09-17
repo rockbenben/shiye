@@ -3419,3 +3419,136 @@ describe('PUT /api/settings：AI 那几格改了就把「已经自动试过」�
     expect(seen.some((s) => s.state === 'scheduled'), 'AI 那几格没变，不该重新排期').toBe(false);
   });
 });
+
+
+/**
+ * **`POST /api/breakdown`**——四件事里的第四件，也是唯一**必须带范围**的那一件。
+ *
+ * 这一族盯三件事，三件改错了都不会有任何地方发出声音：
+ *
+ *   1. **跑的是拆细那份提示词**。四条路由的返回值一模一样（`{ ok: true }`），
+ *      漏传 kind 的话默认值会让它安安静静去拆一遍收件箱：接口 200、卡片上什么都
+ *      不出现——跟「AI 真拆了但觉得够具体了」在界面上长得一模一样。
+ *   2. **两道闸门都得拦**：不存在的 id、已经了结的任务。它们不只是「参数错」，
+ *      是「这件事本身不成立」——放过去就是白烧一两分钟和一次额度。
+ *   3. **同一把单飞锁**。
+ */
+describe('POST /api/breakdown', () => {
+  const fakeProc = (): ChildProcess => (new EventEmitter() as unknown as ChildProcess);
+  const promptOf = (spawnFn: unknown, nth = 0): string => {
+    const args = (spawnFn as { mock: { calls: [string, string[], unknown][] } }).mock.calls[nth][1];
+    return args[args.indexOf('-p') + 1];
+  };
+  const post = (body: unknown) => ({
+    method: 'POST' as const,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  /** 一条挂着的任务。id 写死，好让下面断言能点名。 */
+  const seed = (over: Partial<Task> = {}): Task => {
+    const t = { ...newTask({ title: '装修' }), id: 'T1', ...over };
+    writeTasks([t]);
+    return t;
+  };
+
+  it('跑的是拆细那份提示词，而且带着这一条的范围', async () => {
+    seed();
+    const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+    const withRunner = createApp(undefined, spawnFn);
+
+    expect((await withRunner.request('/api/breakdown', post({ taskId: 'T1' }))).status).toBe(200);
+
+    const prompt = promptOf(spawnFn);
+    expect(prompt).toContain('workflows/breakdown.md');
+    expect(prompt).not.toContain('expand.md');
+    expect(prompt).not.toContain('review.md');
+    expect(prompt).not.toContain('board.md');
+    // **不带范围的话那句话是一个没有宾语的指令**——「把指定的那一条任务拆细」，
+    // 而「指定的」是哪一条全靠这句接在后面。
+    expect(prompt).toContain('任务「装修」');
+    expect(prompt).toContain('T1');
+  });
+
+  it('缺 taskId：400 并且不 spawn——这一件事没有「不带就扫全部」的退路', async () => {
+    seed();
+    const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+    const withRunner = createApp(undefined, spawnFn);
+
+    for (const body of [{}, { taskId: 123 }, { taskId: null }]) {
+      const res = await withRunner.request('/api/breakdown', post(body));
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toMatch(/taskId 得是字符串/);
+    }
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **认不出来就明确拒绝，不能悄悄退化成别的东西。** 跟 `/api/review` 那条
+   * 同一个理由：这一趟要花一两分钟和一次额度，一个打错的 id 静默变成全量扫描，
+   * 他拿到的是一份看不出错在哪的账单。
+   */
+  it('id 对不上：400 并且不 spawn', async () => {
+    seed();
+    const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+    const withRunner = createApp(undefined, spawnFn);
+
+    const res = await withRunner.request('/api/breakdown', post({ taskId: '不存在' }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('没有这条任务');
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **已经了结的任务拆不了。** 界面上那一项同样按这条收着（`lib/taskMenu.ts`
+   * 的 `canBreakdown`），这里是第二道：手敲接口的人也该拿到一句人话，
+   * 而不是一次白跑的额度。搁置的意思本来就是「暂时不想看见它」——把它翻出来
+   * 拆细正好跟他的意图相反。
+   */
+  it.each(['done', 'later', 'abandoned'] as const)('已经了结的（%s）拆不了：400 并且不 spawn', async (status) => {
+    seed({ status });
+    const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+    const withRunner = createApp(undefined, spawnFn);
+
+    const res = await withRunner.request('/api/breakdown', post({ taskId: 'T1' }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('已经了结');
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it('todo 和 doing 都拆得了——判据是 isSettled，不是「必须 todo」', async () => {
+    for (const status of ['todo', 'doing'] as const) {
+      seed({ status });
+      const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+      const withRunner = createApp(undefined, spawnFn);
+      expect((await withRunner.request('/api/breakdown', post({ taskId: 'T1' }))).status).toBe(200);
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('单飞：拆细跑着的时候拆解也被 409——四者同一把锁', async () => {
+    seed();
+    const proc = Object.assign(fakeProc(), { kill: vi.fn() });
+    const spawnFn: Spawner = vi.fn(() => proc);
+    const withRunner = createApp(undefined, spawnFn);
+
+    expect((await withRunner.request('/api/breakdown', post({ taskId: 'T1' }))).status).toBe(200);
+    const blocked = await withRunner.request('/api/expand', { method: 'POST' });
+    expect(blocked.status).toBe(409);
+    // 报的是「正在跑的是哪一件」——「上一次拆解还在跑」和「上一次拆细还在跑」
+    // 对着一颗刚点的按钮是两种完全不同的解释。
+    expect(((await blocked.json()) as { error: string }).error).toMatch(/上一次拆细还在跑/);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('状态里的 kind 是 breakdown，前端才挂得对横幅标题', async () => {
+    seed();
+    const bus = new Bus();
+    const seen: Array<{ state: string; kind?: string }> = [];
+    bus.subscribe((e, d) => { if (e === 'agent-status') seen.push(d as { state: string; kind?: string }); });
+    const withRunner = createApp(bus, vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() })) as Spawner);
+
+    await withRunner.request('/api/breakdown', post({ taskId: 'T1' }));
+    expect(seen[0]).toEqual({ state: 'running', kind: 'breakdown' });
+  });
+});

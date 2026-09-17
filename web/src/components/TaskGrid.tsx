@@ -155,6 +155,10 @@ export interface GridWiring {
    * 就挂出「推迟过 N 次」（TaskCard 的 `POSTPONE_MIN`），建议面板也跟着标。
    */
   onSkip?: (id: string) => void;
+  /** 「让 AI 拆细」——叫一次 AI（`POST /api/breakdown`），一两分钟后这条卡上
+   *  会多一条待决建议。**不给就不出这一项**（TaskCard 的 `canBreakdown`）。
+   *  跟 `onSkip` 一样必须转发，不能让它掉在这一层。 */
+  onBreakdown?: (id: string) => void;
   /** 检查事项转子任务。不给就是那颗按钮整个不出现（TaskCard 那边的判断），
    *  于是同一张卡在详情面板里有这颗按钮、在看板上没有。 */
   onPromoteSubtask?: (t: Task, index: number) => void;
@@ -425,7 +429,7 @@ export function TaskGrid({
   sections, now, empty, emptyFiltered, onPatch, onEditTask, onDelete, proposals, lists, allTasks, onDuplicate,
   layout = 'stack', keepEmpty = false, onDropTo, selection, onSelectionChange,
   editRequestId, onEditRequestHandled, onOpenDetail, openDetailId, focusMinutes, breakMinutes, offline,
-  onSkip, onPromoteSubtask, density = 'card', compact,
+  onSkip, onBreakdown, onPromoteSubtask, density = 'card', compact,
   linger = EMPTY_LINGER,
 }: Props): ReactNode {
   // `editingIds` 原本只有一个语义：「这张卡有没保存的草稿，别把它连草稿一起
@@ -618,6 +622,7 @@ export function TaskGrid({
         focusMinutes={focusMinutes}
         breakMinutes={breakMinutes}
         onSkip={onSkip}
+        onBreakdown={onBreakdown}
         onPromoteSubtask={onPromoteSubtask}
         offline={offline}
       />

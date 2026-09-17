@@ -5,7 +5,7 @@ import { POSTPONE_MINUTES, postponePatch, reschedulePatch, RESCHEDULE_KEYS, RESC
 // `from: 'done'`、拖过好几个周期、提醒对齐 due 这几条上悄悄漂开。
 import { skipPatch } from '../../../server/src/repeat.js';
 import { PRI_MENU } from '../components/TaskFields.js';
-import { asArray, CONTEXT_LABEL, CONTEXTS } from './taskView.js';
+import { asArray, CONTEXT_LABEL, CONTEXTS, isSettled } from './taskView.js';
 
 /**
  * 一条任务的「更多操作」菜单——**卡片和紧凑行共用这一份**。
@@ -38,6 +38,16 @@ export interface TaskMenuOpts {
    * 两种失败的代价差得太远。`TaskCard` 显式打开它（它有 `onSkip`）。
    */
   canSkip?: boolean;
+  /**
+   * 调用方处不处理得了 `kind: "breakdown"`（「让 AI 拆细」）。**默认 false**，
+   * 跟 `canSkip` 同一个理由、同一道闸门：`TaskRow` 的 handler 只认
+   * edit/patch/duplicate，其余一律掉进「点了没反应」那一支——摆一项点不动的
+   * 菜单比不摆糟。现在只有 `TaskCard` 显式打开它。
+   *
+   * 这个 opt 只回答「**谁接了**」，不回答「**这一条能不能拆**」——后者由
+   * `taskMenuItems` 自己按 `isSettled` 和 `habit` 判（见下面那一项）。
+   */
+  canBreakdown?: boolean;
   /**
    * 现有标签全集（`allTags(allTasks)`）。空的/不给就不出「打标签」那一组
    * ——一份标签都还没有的时候，那组是个空壳。
@@ -73,6 +83,30 @@ export function taskMenuItems(t: Task, opts: TaskMenuOpts): MenuItem[] {
 
   return [
     { key: 'edit', label: '编辑' },
+    /**
+     * 「让 AI 拆细」——只产一条改 `subtasks` 的建议，挂在这张卡上等他点接受
+     * （`POST /api/breakdown`，工作流在 `workflows/breakdown.md`）。
+     *
+     * **摆在「编辑」正下面**：它改的就是这条任务的内容（子任务），跟「编辑」是
+     * 同一类动作，只是他不自己写、让 AI 先起草。摆到下面那一堆「改期 / 优先级 /
+     * 情境 / 移动到」里会读成又一个字段开关。
+     *
+     * **三条闸门**：`canBreakdown`（谁接了）+ `!isSettled(t)`（这一条能不能拆）
+     * + `!t.habit`（这一条有没有「第一步」）。
+     *
+     * 第二条跟服务端那条路由的判据是同一个语义：已经做完/搁置/放弃的任务拆不了，
+     * 而「搁置」的意思本来就是「暂时不想看见它」——把它翻出来拆细正好跟他的
+     * 意图相反（`workflows/review.md` 里也是这么写的）。界面上挡一道是为了
+     * 「不给一个点了没反应的入口」，服务端挡那一刀是防手敲接口的。
+     *
+     * 第三条跟第二条是同一个理由，但代价更具体：习惯在这套模型里是「每天重复
+     * 的那件事」（`habit: true` 必配每天重复），**没有「第一步」可拆**——
+     * `workflows/breakdown.md` 里明写着遇到 `habit: true` 直接回 `[]`。摆出来
+     * 的结果是一次注定没有产出的 AI 调用（一两分钟 + 一次额度），而回执说的是
+     * 「这条可能已经够具体了」——**对习惯是错的说法**，它不是够具体，是压根
+     * 不该这么拆。跟「跳过本次」那几条同一条立场：宁可没有，不要点了白跑。
+     */
+    ...(opts.canBreakdown && !isSettled(t) && !t.habit ? [{ key: 'ai-breakdown', label: '让 AI 拆细' }] : []),
     // 置顶：一个开关两种文案，不摆两个菜单项——「置顶」和「取消置顶」永远
     // 只有一个是有意义的。
     { key: 'pin', label: t.pinned ? '取消置顶' : '置顶' },
@@ -141,9 +175,9 @@ export function taskMenuItems(t: Task, opts: TaskMenuOpts): MenuItem[] {
 }
 
 /**
- * 菜单点了什么。`patch` 那一类直接就是要发的补丁，别的三类（开编辑态、
- * 创建副本、删除）各组件自己接——卡片是就地展开编辑框，行是把请求转出去，
- * 删除两边都要先弹确认框但文案挂在各自的 modal 上。
+ * 菜单点了什么。`patch` 那一类直接就是要发的补丁，别的几类各组件自己接——
+ * 卡片是就地展开编辑框，行是把请求转出去，删除两边都要先弹确认框但文案挂在
+ * 各自的 modal 上。
  */
 export type TaskMenuAction =
   | { kind: 'patch'; patch: Partial<Task> }
@@ -155,12 +189,19 @@ export type TaskMenuAction =
    * 理由写在那条路由上。`nextDue` 只是给回执用（「跳过了，下次 X」）。
    */
   | { kind: 'skip'; nextDue: string }
+  /**
+   * 让 AI 拆细这条。**不是一个 patch**——它叫一次 AI（`POST /api/breakdown`），
+   * 一两分钟后回来的是挂在这张卡上的一条待决建议，不是当场改任务。理由跟
+   * `skip` 那条一样：它走的是自己的路，不是「本地算好一个补丁发出去」。
+   */
+  | { kind: 'breakdown' }
   | { kind: 'delete' };
 
 export function decodeTaskMenu(key: string, t: Task, now: Date): TaskMenuAction | null {
   if (key === 'edit') return { kind: 'edit' };
   if (key === 'duplicate') return { kind: 'duplicate' };
   if (key === 'delete') return { kind: 'delete' };
+  if (key === 'ai-breakdown') return { kind: 'breakdown' };
   if (key === 'pin') return { kind: 'patch', patch: { pinned: !t.pinned } };
   if (key === 'skip') {
     const patch = t.repeat ? skipPatch(t, now) : null;

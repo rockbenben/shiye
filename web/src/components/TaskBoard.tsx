@@ -62,6 +62,10 @@ interface GroupSectionProps {
    * 见 `cardWiring.guard.test.ts`。
    */
   onSkip?: (id: string) => void;
+  /** 「让 AI 拆细」——叫一次 AI（`POST /api/breakdown`），一两分钟后这条卡上
+   *  会多一条待决建议。**不给就不出这一项**（TaskCard 的 `canBreakdown`）。
+   *  跟 `onSkip` 一样必须转发，不能让它掉在这一层。 */
+  onBreakdown?: (id: string) => void;
   onPromoteSubtask?: (t: Task, index: number) => void;
   /** 转交给每张 TaskCard 再转交给 Attachments——离线记号（task-3-brief），
    *  见 TaskCard.tsx CardProps.offline 的注释。可选、不给就是 TaskCard 自己
@@ -79,7 +83,7 @@ interface GroupSectionProps {
  * 这组任务恰恰不同源（手工建的、或者来源笔记已经被删了），画出来是撒谎。
  * 边注（如果这条任务恰好还留着 aiComment）照常显示：那是任务自己的记录，
  * 跟它现在归不归得进某个分组是两件事。 */
-function GroupSection({ group, now, onPatch, onEditTask, onDelete, onEditingChange, proposals, lists, allTasks, onDuplicate, onSkip, onPromoteSubtask, focusMinutes, breakMinutes, offline, selection, onSelectionChange }: GroupSectionProps) {
+function GroupSection({ group, now, onPatch, onEditTask, onDelete, onEditingChange, proposals, lists, allTasks, onDuplicate, onSkip, onBreakdown, onPromoteSubtask, focusMinutes, breakMinutes, offline, selection, onSelectionChange }: GroupSectionProps) {
   const { source, tasks } = group;
   const gridRef = useRef<HTMLDivElement>(null);
   const columns = useColumns(gridRef, CARD_GAP);
@@ -171,7 +175,7 @@ function GroupSection({ group, now, onPatch, onEditTask, onDelete, onEditingChan
             // 边注渲染在卡片内部（见 TaskCard 的 showNote）——卡片旁边没有
             // 页边可放了。
             <TaskCard
-              t={t} now={now} lists={lists} allTasks={allTasks} onDuplicate={onDuplicate} onSkip={onSkip} onPromoteSubtask={onPromoteSubtask}
+              t={t} now={now} lists={lists} allTasks={allTasks} onDuplicate={onDuplicate} onSkip={onSkip} onBreakdown={onBreakdown} onPromoteSubtask={onPromoteSubtask}
               onPatch={onPatch} onEditTask={onEditTask} onDelete={onDelete}
               onEditingChange={onEditingChange} proposals={proposals}
               focusMinutes={focusMinutes} breakMinutes={breakMinutes} offline={offline} showNote
@@ -227,6 +231,8 @@ interface Props {
    * 见 `cardWiring.guard.test.ts`。
    */
   onSkip?: (id: string) => void;
+  /** 「让 AI 拆细」——跟上面 `onSkip` 同一个理由，必须转发到底。 */
+  onBreakdown?: (id: string) => void;
   onPromoteSubtask?: (t: Task, index: number) => void;
   /** 选中态，经 GroupSection 转交给每张卡。两个都给了才接线，见
    *  TaskGrid.tsx Props.selection——那条规矩这一屏照用。 */
@@ -234,7 +240,7 @@ interface Props {
   onSelectionChange?: (next: SelState) => void;
 }
 
-export function TaskBoard({ tasks, inbox, now, onPatch, onEditTask, onDelete, onDuplicate, onSkip, onPromoteSubtask, proposals, filter, onFilterChange, lists, focusMinutes, breakMinutes, offline, selection, onSelectionChange }: Props) {
+export function TaskBoard({ tasks, inbox, now, onPatch, onEditTask, onDelete, onDuplicate, onSkip, onBreakdown, onPromoteSubtask, proposals, filter, onFilterChange, lists, focusMinutes, breakMinutes, offline, selection, onSelectionChange }: Props) {
   // 正在编辑的任务 id——筛选切换不能把这些卡从树上摘掉，见 TaskCard.tsx 里
   // CardProps 上 onEditingChange 的注释，跟 InboxSidebar 是同一个套路。
   const [editingIds, setEditingIds] = useState<Set<string>>(new Set());
@@ -329,6 +335,7 @@ export function TaskBoard({ tasks, inbox, now, onPatch, onEditTask, onDelete, on
             allTasks={tasks}
             onDuplicate={onDuplicate}
             onSkip={onSkip}
+            onBreakdown={onBreakdown}
             onPromoteSubtask={onPromoteSubtask}
             focusMinutes={focusMinutes}
             breakMinutes={breakMinutes}

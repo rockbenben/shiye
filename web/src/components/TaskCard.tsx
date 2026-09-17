@@ -203,6 +203,15 @@ interface CardProps {
    *  漏接一个不该让那张卡的「跳过本次」点了没反应；退回去的代价只是那一次
    *  会被记成一次拖延，比整个动作失灵轻。 */
   onSkip?: (id: string) => void;
+  /**
+   * 「让 AI 拆细」——叫一次 AI，一两分钟后这条卡上会多一条待决建议（改
+   * `subtasks`），等他点接受。**不给就不出这一项**（`canBreakdown`），跟
+   * `onSkip`/`onDuplicate` 同一个口径：摆一项点不动的菜单比不摆糟。
+   *
+   * 跟 `onSkip` 的差别是它**没有退路**——`skip` 还有一条「退回发 patch」的
+   * 老路可退，这个动作压根不存在本地版本，没接线就是没接线。
+   */
+  onBreakdown?: (id: string) => void;
   /** 编辑态保存专用，不走 guard()——guard 会把失败吞掉只弹一条提示，
    * 编辑框那份「用户刚打的字」不能跟着一起没了，必须让调用方（TaskCard）
    * 自己 await 到结果，失败时把编辑框留着。 */
@@ -304,7 +313,7 @@ interface CardProps {
 }
 
 export function TaskCard({
-  t, now, lists, allTasks, onDuplicate, onPromoteSubtask, onSkip, onPatch, onEditTask, onDelete, onEditingChange, move, proposals, rank, showNote, drag, select,
+  t, now, lists, allTasks, onDuplicate, onPromoteSubtask, onSkip, onBreakdown, onPatch, onEditTask, onDelete, onEditingChange, move, proposals, rank, showNote, drag, select,
   autoEdit, onAutoEdited, focusMinutes = 25, breakMinutes = 0, offline = false, detail = false,
 }: CardProps) {
   const { message, modal } = AntApp.useApp();
@@ -625,13 +634,23 @@ export function TaskCard({
     // `canSkip: !!onSkip`，跟旁边的 `canDuplicate` 同一个口径——**没接线就不出
     // 这一项**。原来写死 `true`，于是没接 `onSkip` 的视图照样出「跳过」，点下去
     // 退回那条普通 patch，被记成一次拖延，而提示语一模一样，分不出来。
-    items: taskMenuItems(t, { lists, now, canDuplicate: !!onDuplicate, canSkip: !!onSkip, tags: tagChoices }),
+    items: taskMenuItems(t, { lists, now, canDuplicate: !!onDuplicate, canSkip: !!onSkip, canBreakdown: !!onBreakdown, tags: tagChoices }),
     onClick: ({ key }: { key: string }) => {
       const action = decodeTaskMenu(key, t, now);
       if (!action) return;
       if (action.kind === 'edit') return startEdit();
       if (action.kind === 'duplicate') return onDuplicate?.(t);
       if (action.kind === 'patch') return onPatch(t.id, action.patch);
+      if (action.kind === 'breakdown') {
+        if (!onBreakdown) return;
+        onBreakdown(t.id);
+        // **点完立刻回一句**：这一趟要一两分钟，而菜单一收起来屏幕上什么都
+        // 不会变——不给回执的话看起来就像点了没反应，他会再点一次（而第二次
+        // 会被单飞锁 409 掉，那条错误更让人以为坏了）。`agent-status` 那条
+        // 横幅说的是**结果**，这条说的是「收到了、在跑」，两件事都要说。
+        void message.info('AI 正在拆细这条，一两分钟后建议会挂在这张卡上');
+        return;
+      }
       if (action.kind === 'skip') {
         // 只走 onSkip 那条专门的路：发普通 patch 的话，服务端字段级
         // 的推迟计数会把这一次记成一次拖延（见那条路由）。原来这儿有一条
@@ -645,6 +664,11 @@ export function TaskCard({
         void message.success(`跳过了，下次 ${formatWhen(action.nextDue)}`);
         return;
       }
+      // **只有 `delete` 才往下走。** 这一句是第二道闸门（第一道是各项自己的
+      // `canXxx`）：以后再加一种 kind，漏接的后果是「点了没反应」，不是
+      // 「弹一个删除确认框、确认一下任务就没了」——`TaskRow` 那边为这件事
+      // 栽过一次，实测复现过（见那个文件里同一条注释）。
+      if (action.kind !== 'delete') return;
       // 删除要先问一句——即便现在有垃圾箱兜底、点错了能在那边
       // 还原回来，这仍然是这张卡上分量最重的一步，不该一个误触
       // 就直接发生。这句顺便指一下「搁置」：多数想删的时刻其实

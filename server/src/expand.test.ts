@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { createAgentRunner, parseCustomArgs, resolveCliInvocation, type Spawner } from './expand.js';
 import { Bus } from './events.js';
-import { aiSeesSameData, writeSettings } from './store.js';
+import { aiSeesSameData, newTask, writeSettings, writeTasks } from './store.js';
 import { DEFAULT_SETTINGS } from './model.js';
 
 /** 假子进程：只实现测试用得到的三样——'error'/'exit' 事件和 kill()。 */
@@ -538,3 +538,133 @@ describe('createAgentRunner：支持多款 CLI', () => {
 });
 
 
+
+
+/**
+ * **「让 AI 拆细这一条」**——四件事里的第四件，也是唯一**必须带范围**的那一件。
+ *
+ * 这一族只管接线：范围那句话进没进提示词、状态里的 `kind` 和措辞对不对。
+ * 提示词里到底带了哪些数据、不带哪些，在 `aiApi.test.ts` 的「拆细带范围」那组。
+ */
+describe('createAgentRunner：拆细', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'expand-breakdown-'));
+    process.env.DATA_DIR = join(dir, 'data');
+    process.env.DEVICE_CONFIG = join(dir, 'device.json');
+    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'cli' });
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.DATA_DIR;
+    delete process.env.DEVICE_CONFIG;
+  });
+
+  /** spawn 那次调用的第二个 argv 就是提示词（claude 那条路的 `-p <prompt>`）。 */
+  const promptOf = (spawnFn: Spawner): string =>
+    (spawnFn as unknown as { mock: { calls: Array<[string, string[]]> } }).mock.calls[0][1][1];
+
+  /**
+   * **不带范围的话，`PROMPT.breakdown` 只是一句空话**——「把指定的那一条任务
+   * 拆细」，而「指定的」是哪一条全靠 `scopeLine` 接在后面。这条钉的就是那一句
+   * 真的接上了：少了它，模型拿到的是一个没有宾语的指令。
+   */
+  it('提示词里接着「只处理这一条」那句话', () => {
+    const spawnFn: Spawner = vi.fn(() => fakeProc());
+    createAgentRunner(undefined, spawnFn).start('breakdown', { taskId: 't1', taskTitle: '装修' });
+    const prompt = promptOf(spawnFn);
+    expect(prompt).toContain('把指定的那一条任务拆细');
+    expect(prompt).toContain('任务「装修」');
+    expect(prompt).toContain('t1');
+  });
+
+  /**
+   * **没带范围时在起进程之前就拒绝。** 不拦的话两边都是坏的：CLI 这条路白起一个
+   * 进程烧一次额度，跑的还是「把指定的那一条任务拆细」这句没有宾语的指令；
+   * 接口那条路更糟——它拿回一句「没有拆细建议」，而他读到的是「这条可能已经
+   * 够具体了」，实际是压根没说是哪一条。
+   *
+   * **两个入口都要拦**：「压根不给」是显然的那种，「给了一个清单范围」才是
+   * 容易漏的那种——形状不对但类型过得去（`AgentScope` 是联合），递进来之后
+   * `scopeLine` 会说出一句「这次只处理清单『工作』」，而拆细压根不认清单。
+   * 路由那一层已经拦了（缺 `taskId` 就 400），这里是第二道。
+   *
+   * 还钉住「拒绝发生在 emit 之前」：先发 `running` 再拒绝的话，屏幕上会闪一条
+   * 假的「AI 拆细中……」。
+   */
+  it('不带范围（或者给的是清单范围）时直接拒绝，一个进程都不起', () => {
+    for (const scope of [undefined, { listId: 'l1', listName: '工作' }] as const) {
+      const bus = new Bus();
+      const seen = statusEvents(bus);
+      const spawnFn: Spawner = vi.fn(() => fakeProc());
+      const r = createAgentRunner(bus, spawnFn).start('breakdown', scope);
+      expect(r.ok).toBe(false);
+      expect((r as { error: string }).error).toMatch(/指名是哪一条任务/);
+      expect(spawnFn).not.toHaveBeenCalled();
+      expect(seen).toEqual([]);
+    }
+  });
+
+  /**
+   * 跑完什么都没写出来时该说的是「没有拆细建议（这条可能已经够具体了）」，
+   * 不是通用的「没有新增任务」——后者会让他以为是自己点错了按钮。
+   */
+  it('跑完什么都没写出来：说「没有提出拆细建议」，不是「没有新增任务」', () => {
+    const proc = fakeProc();
+    const bus = new Bus();
+    const seen = statusEvents(bus);
+    createAgentRunner(bus, () => proc).start('breakdown', { taskId: 't1', taskTitle: '装修' });
+    proc.emitExit(0);
+    expect(seen[1]).toEqual({
+      state: 'skipped', kind: 'breakdown',
+      message: expect.stringMatching(/没有提出拆细建议/),
+    });
+  });
+
+  /** 状态里的 `kind` 决定界面上横幅叫什么——写错了就是「拆解失败」顶着拆细的事。 */
+  it('状态里带的是 kind: breakdown', () => {
+    const proc = fakeProc();
+    const bus = new Bus();
+    const seen = statusEvents(bus);
+    createAgentRunner(bus, () => proc).start('breakdown', { taskId: 't1', taskTitle: '装修' });
+    expect(seen[0]).toEqual({ state: 'running', kind: 'breakdown' });
+    proc.emitExit(1);
+    expect(seen[1]).toMatchObject({ state: 'failed', kind: 'breakdown' });
+  });
+
+  /** 四件事读写的是同一份 `data/`、同一批 outbox 文件，各锁各的等于没锁。 */
+  it('跟别的三件事共用同一把单飞锁，而且报得出「正在跑的是哪一件」', () => {
+    const runner = createAgentRunner(undefined, () => fakeProc());
+    runner.start('breakdown', { taskId: 't1', taskTitle: '装修' });
+    const second = runner.start('review');
+    expect(second.ok).toBe(false);
+    expect((second as { error: string }).error).toMatch(/上一次拆细还在跑/);
+  });
+
+  /** 接口那条路：照样把范围带进 `buildMessages`，而且一个子进程都不起。 */
+  it('接口模式：范围照样进提示词，不 spawn 进程', async () => {
+    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'api', aiBaseUrl: 'https://x.test/v1', aiModel: 'm' });
+    writeTasks([{ ...newTask({ title: '装修' }), id: 't1' }]);
+    const spawnFn: Spawner = vi.fn(() => fakeProc());
+    const bodies: string[] = [];
+    const f = vi.fn(async (_u: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return new Response(JSON.stringify({ choices: [{ message: { content: '[]' } }] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    const bus = new Bus();
+    const seen = statusEvents(bus);
+
+    createAgentRunner(bus, spawnFn, 1000, f).start('breakdown', { taskId: 't1', taskTitle: '装修' });
+    await new Promise((r) => setImmediate(r));
+
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(bodies[0]).toContain('这次只处理任务');
+    expect(bodies[0]).toContain('装修');
+    expect(seen[1]).toEqual({
+      state: 'skipped', kind: 'breakdown',
+      message: expect.stringMatching(/没有提出拆细建议/),
+    });
+  });
+});

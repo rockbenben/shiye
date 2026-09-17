@@ -20,6 +20,7 @@ import { NavShell, NAV_DEFAULT, clampNavWidth } from './components/NavShell.js';
 import { ColGrip, clampWidth } from './components/ColGrip.js';
 import { Sidebar, SKIP_IN_NAV } from './components/Sidebar.js';
 import { isNarrowNow, useIsNarrow, useIsTight } from './lib/narrow.js';
+import { agentWord } from './lib/agentWord.js';
 import { setBaseTitle } from './lib/pageTitle.js';
 import { SettingsModal } from './components/SettingsModal.js';
 import { ShortcutHelp } from './components/ShortcutHelp.js';
@@ -1743,6 +1744,9 @@ export function App() {
     onDuplicate: duplicateTask,
     onPromoteSubtask: promoteToChild,
     onSkip: (id: string) => guard(() => api.skipTask(id)),
+    /** 「让 AI 拆细」——叫一次 AI，一两分钟后建议挂在那张卡上。跟上面几条
+     *  一样只是转交；卡片那边没接到就不出这一项（`canBreakdown`）。 */
+    onBreakdown: (id: string) => guard(() => api.breakdown(id)),
     // 番茄钟一轮的时长——转交给每张 TaskCard，见 TaskCard.tsx CardProps
     // 的注释。「今天」「按来源」两个视图不用 gridWiring，各自的 render 调用
     // 下面单独传一次，见 today/source 两条。
@@ -2154,6 +2158,7 @@ export function App() {
           onDelete={(id) => guard(() => api.deleteTask(id))}
           onDuplicate={duplicateTask}
           onSkip={cardWiring.onSkip}
+          onBreakdown={cardWiring.onBreakdown}
           onPromoteSubtask={cardWiring.onPromoteSubtask}
           onReorder={onReorder}
           focusMinutes={settings?.focusMinutes}
@@ -2503,6 +2508,7 @@ export function App() {
         onDelete={(id) => guard(() => api.deleteTask(id))}
         onDuplicate={duplicateTask}
         onSkip={cardWiring.onSkip}
+        onBreakdown={cardWiring.onBreakdown}
         onPromoteSubtask={cardWiring.onPromoteSubtask}
         focusMinutes={settings?.focusMinutes}
         breakMinutes={settings?.breakMinutes}
@@ -3439,17 +3445,17 @@ export function App() {
               showIcon
               closable
               // 标题按这次跑的是哪件事走——以前写死「拆解」，回顾跑完也顶着
-              // 「AI 拆解完成」，总览更是名实不符。kind 缺省（启动时补合并的
-              // 历史状态、SSE 重连错过 running）回退到拆解的老文案。
+              // 「AI 拆解完成」，总览更是名实不符。**四件事各自的叫法在
+              // lib/agentWord.ts**，不在这儿写三元表达式：加「拆细」那一次
+              // 就是靠那个映射，不然这处嵌套得同时改三个分支、而漏一个只是
+              // 屏幕上出现一个错名字。kind 缺省（启动时补合并的历史状态、
+              // SSE 重连错过 running）按拆解回退。
               message={
                 agent.state === 'failed'
-                  ? `AI ${agent.kind === 'review' ? '回顾' : agent.kind === 'board' ? '总览' : '拆解'}失败`
+                  ? `AI ${agentWord(agent.kind).name}失败`
                   : agent.state === 'skipped'
-                    ? agent.kind === 'review'
-                      ? '没有新的建议'
-                      : agent.kind === 'board' ? '没有产出汇报' : '没有新增任务'
-                    : agent.kind === 'review' ? 'AI 回顾完成'
-                      : agent.kind === 'board' ? 'AI 总览' : 'AI 拆解完成'
+                    ? agentWord(agent.kind).none
+                    : agentWord(agent.kind).ok
               }
               // board 的汇报是多行纯文本，React 默认把 \n 压成空格——pre-wrap
               // 保住换行。white-space 是继承属性，短消息标题不受影响。
@@ -3645,7 +3651,7 @@ export function App() {
                   {/* AI 那边挂着多少东西。原来在顶栏右边，顶栏删掉之后挪到这儿
                               ——三句全是「有才说」，大部分时间这一整块不渲染。 */}
                           <div className="ink-header-status">
-                  {agent?.state === 'running' && <span>AI 拆解中……</span>}
+                  {agent?.state === 'running' && <span>AI {agentWord(agent.kind).running}……</span>}
           {/* 0 的时候整句不渲染，跟侧栏导航「计数为 0 不渲染数字」同一条规矩
                       （Sidebar.tsx 的 `count ? … : null`）：一个常驻的「收件箱 0 条
                       待拆解」是噪音，而且收件箱本来就大部分时间是空的——那才是正常

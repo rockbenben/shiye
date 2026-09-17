@@ -22,7 +22,7 @@ import { createAgentRunner, type Spawner } from './expand.js';
 import { aiKeyFrom, maskKey, testAi, type Fetcher } from './aiApi.js';
 import { parseHhmm } from './dailySummary.js';
 import { skipPatch } from './repeat.js';
-import { checkTaskPatch, sanitizeProposalPatch } from './task.js';
+import { checkTaskPatch, isSettled, sanitizeProposalPatch } from './task.js';
 import { INK_AI, checkFolderPatch, checkListPatch } from './list.js';
 import { checkCountdownPatch } from './countdown.js';
 import {
@@ -1602,6 +1602,30 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   // 它是全局总览，按清单筛反而失了「总览」语义。见 `workflows/board.md`。
   app.post('/api/board', (c) => {
     const result = agentRunner.start('board');
+    return result.ok ? c.json({ ok: true }) : c.json({ error: result.error }, 409);
+  });
+
+  // 「让 AI 拆细这条」——卡片 ⋯ 菜单里那一项。跟上面三条共用单飞锁。
+  //
+  // **它是四条里唯一必须带范围的**：拆解的对象是收件箱、回顾和总览是全局，
+  // 而拆细问的就是「这一条的第一步是什么」——没有这一条，那句话本身不成立。
+  // 所以 `taskId` 不是可选的，缺了直接 400，不做「不带就扫全部」那种退路。
+  //
+  // **认不出来就明确拒绝**，跟 `/api/review` 那条同一个理由：这一趟要花一两分钟
+  // 和一次额度，一个打错的 id 静默退化成别的东西，他拿到的是一份看不出错在哪的
+  // 账单。这里比 review 还多一道：已经了结的（做完/搁置/放弃）也拒——那不是
+  // 「范围不对」，是这件事本身不成立（搁置的意思是「暂时不想看见它」，你把它
+  // 翻出来拆细正好跟他的意图相反，`workflows/review.md` 也是这么写的）。
+  // 界面上那一项同样按这两条闸门收着（`lib/taskMenu.ts` 的 `canBreakdown`），
+  // 这里是第二道：手敲接口的人也该拿到一句人话，而不是一次白跑的额度。
+  app.post('/api/breakdown', async (c) => {
+    const body = await c.req.json().catch(() => ({})) as { taskId?: unknown };
+    if (typeof body.taskId !== 'string') return c.json({ error: 'taskId 得是字符串' }, 400);
+    const task = readTasks().find((t) => t.id === body.taskId);
+    if (!task) return c.json({ error: `没有这条任务：${body.taskId}` }, 400);
+    if (isSettled(task.status)) return c.json({ error: '这条已经了结了（做完、搁置或者放弃），拆不了——先把它恢复成待办' }, 400);
+
+    const result = agentRunner.start('breakdown', { taskId: task.id, taskTitle: task.title });
     return result.ok ? c.json({ ok: true }) : c.json({ error: result.error }, 409);
   });
 

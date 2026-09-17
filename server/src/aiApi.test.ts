@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aiKeyFrom, buildMessages, chat, chatUrl, configProblem, extractJson, maskKey, runBoardViaApi, runViaApi, scopeLine, testAi, type AiConfig } from './aiApi.js';
-import { outboxFiles, writeInbox, writeLists, writeTasks } from './store.js';
+import { outboxFiles, writeInbox, writeLists, writeProposals, writeTasks } from './store.js';
 import type { Task } from './model.js';
 
 /** 一条任务的最小形状。只有 listId 这一格在这个文件里有意义，别的填满是为了过类型。 */
@@ -487,5 +487,176 @@ describe('chat：连不上的时候说人话，不是 undici 那句 fetch failed
   it('超时单独说——那跟「地址写错了」是两回事', async () => {
     const f = vi.fn(async () => { const e = new Error('The operation was aborted'); e.name = 'TimeoutError'; throw e; }) as unknown as typeof fetch;
     expect(await testAi({ baseUrl: 'https://x.test/v1', apiKey: '', model: 'm' }, f, sig())).toMatch(/超时了/);
+  });
+});
+
+/**
+ * 「让 AI 拆细这一条」。**这一支的全部意义就是「只发这一条」**——拆细问的是
+ * 「这件事的第一步是什么」，答案只取决于这一条任务的标题、备注和现有的子任务。
+ * 所以这一族钉的是一对反向的断言：**要的在，不要的不在**。
+ *
+ * 三样东西必须进提示词：这一条任务本身、它的直接子任务（「下一步」可能已经
+ * 以子任务的形式躺在下面了）、它上面挂着的待决建议（AGENTS.md 说「已经挂着
+ * 待决建议的任务直接跳过」）。一样不能少、一样不能多。
+ */
+describe('拆细带范围', () => {
+  const t = (over: Partial<Task>): Task => task(over);
+
+  const setup = (): void => {
+    writeLists([{ id: 'l1', name: '工作', color: '', folderId: null, order: 0, archived: false, filter: null }]);
+    writeTasks([
+      t({ id: 'me', title: '装修', notes: '想把客厅和厨房一起弄' }),
+      // 直接子任务——要带上，不然模型会提一条已经躺在下面的步骤。
+      t({ id: 'kid', title: '量尺寸', parentId: 'me' }),
+      // 孙子——**不带**。拆细看的是「下一步」，不是整棵子树。
+      t({ id: 'grandkid', title: '买卷尺', parentId: 'kid' }),
+      // 不相干的另一条任务——绝不能进。
+      t({ id: 'other', title: '写周报' }),
+    ]);
+  };
+
+  it('带的是拆细那份 workflow，不是回顾那份', () => {
+    setup();
+    const [sys] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(sys.content).toContain(readFileSync('workflows/breakdown.md', 'utf8').slice(0, 200));
+    expect(sys.content).not.toContain(readFileSync('workflows/review.md', 'utf8').slice(0, 200));
+  });
+
+  it('这一条和它的直接子任务都在', () => {
+    setup();
+    const [, user] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(user.content).toContain('装修');
+    expect(user.content).toContain('量尺寸');
+  });
+
+  /**
+   * **别的不相干的任务一条都不进。** 跟回顾那条同一个理由：`updates` 只要给对
+   * id 就能提到任何一条任务身上，而 `mergeOutbox` 不认识范围、拦不住——所以
+   * id 泄漏出去就不只是「模型多看了几眼」，是实打实的能力。
+   */
+  it('范围外的任务连 id 都不出现', () => {
+    setup();
+    const [, user] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(user.content).toContain('"me"');
+    expect(user.content).not.toContain('"other"');
+    expect(user.content).not.toContain('写周报');
+  });
+
+  /** 孙子不带：拆细要的是「下一步」，把整棵子树塞进来是拿一份用不上的东西
+   *  换 token，而且会让模型去拆一个不属于这一条的任务。 */
+  it('孙子不进——只看这一条和它的直接子任务', () => {
+    setup();
+    const [, user] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(user.content).not.toContain('买卷尺');
+    expect(user.content).not.toContain('"grandkid"');
+  });
+
+  /** 范围那句话要说出来（CLI 那条路只有它，API 这条路它和硬筛各是一半）。 */
+  it('范围那句话在里面', () => {
+    setup();
+    const [, user] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(user.content).toContain(scopeLine({ taskId: 'me', taskTitle: '装修' }));
+  });
+
+  /**
+   * **`insights` 不发。** 拆细不产观察（见 `workflows/breakdown.md`），模型
+   * 不需要为了「别重复说过的话」去读一份它这一轮既不会写、也用不上的东西——
+   * 而全量 insights 攒起来是这几段里最贵的一份。
+   */
+  it('不发 insights——拆细不产观察，读了也用不上', () => {
+    setup();
+    const [, user] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(user.content).not.toContain('data/insights/');
+  });
+
+  /** 清单要发：AGENTS.md 说 `listId` 是 AI 写得了的字段之一，对不上就写 null。 */
+  it('清单照发——写不写是一回事，得让它看得见有哪些', () => {
+    setup();
+    const [, user] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(user.content).toContain('data/lists/');
+  });
+
+  /**
+   * **这条任务上挂着的待决建议要发**（AGENTS.md 那条规矩：「已经挂着待决建议
+   * 的任务直接跳过」）——拆细这一条尤其要紧：同一张卡上摆两条「加子任务」的建议，
+   * 他得先分辨哪条是哪条。
+   */
+  it('这条任务上待决的建议发，别条任务上的不发', () => {
+    setup();
+    writeProposals([
+      { id: 'p1', taskId: 'me', patch: { subtasks: [{ text: '旧的建议', done: false }] }, reason: '上一轮提的', createdAt: '2026-08-01T00:00:00.000Z' },
+      { id: 'p2', taskId: 'other', patch: { due: null }, reason: '别条任务上的', createdAt: '2026-08-01T00:00:00.000Z' },
+    ]);
+    const [, user] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(user.content).toContain('上一轮提的');
+    expect(user.content).not.toContain('别条任务上的');
+  });
+
+  /** 他**忽略过**的建议不发——那是在否掉那个意见，读进来只会让模型以为它还挂着。 */
+  it('他忽略过的建议不发', () => {
+    setup();
+    writeProposals([
+      { id: 'p1', taskId: 'me', patch: { subtasks: [{ text: '他不要的那条', done: false }] }, reason: '被忽略的', createdAt: '2026-08-01T00:00:00.000Z', dismissed: true },
+    ]);
+    const [, user] = buildMessages('breakdown', { taskId: 'me', taskTitle: '装修' });
+    expect(user.content).not.toContain('被忽略的');
+  });
+
+  /** 找不到那一条时**不会**把全部任务发出去——`mine` 落成空数组，不是退回全量。
+   *  （路由那一层会先拦掉不存在的 id，这里是第二道。） */
+  it('id 对不上时不会退回全量', () => {
+    setup();
+    const [, user] = buildMessages('breakdown', { taskId: '不存在', taskTitle: '？' });
+    expect(user.content).not.toContain('写周报');
+    expect(user.content).not.toContain('"me"');
+  });
+
+  /**
+   * **压根没带范围时，一样不发全量。** 唯一的合法调用方是 `POST /api/breakdown`，
+   * 它保证 `taskId` 一定在；这一条钉的是「有人绕开路由直接调 `buildMessages`」
+   * 那种情况下也不会把几百条任务递出去——`updates` 里带着 id，模型挑错了建议
+   * 就真提在别的任务上，而这一趟还白花一次全额上下文。
+   *
+   * 跟上面那条是**两个不同的入口**（`{taskId:'不存在'}` vs 完全不给 scope），
+   * 上面那条绿着不代表这条绿。
+   */
+  it('完全不给 scope 时也不退回全量', () => {
+    setup();
+    const [, user] = buildMessages('breakdown');
+    expect(user.content).not.toContain('写周报');
+    expect(user.content).not.toContain('"me"');
+    expect(user.content).not.toContain('量尺寸');
+  });
+});
+
+/**
+ * `scopeLine` 那两半。**它是范围那句话的唯一正本**，两条路（CLI / API）共用，
+ * 而判据是 `'taskId' in scope`——两个形状的必填键互不相交。
+ *
+ * 这条测试钉的是那个判据本身：给 `ReviewScope` 加一个 `taskId` 字段，判据会
+ * 静默反过来，清单范围被说成单条任务的范围，而**没有任何东西会报错**——
+ * 模型只是收到一句错的范围说明。两半各钉一条，加字段那天至少这一条会红。
+ */
+describe('scopeLine：清单范围和单条任务范围各说各的', () => {
+  it('清单范围：说的是清单，不是任务', () => {
+    const s = scopeLine({ listId: 'l1', listName: '035 办事师爷' });
+    expect(s).toContain('清单「035 办事师爷」');
+    expect(s).toContain('listId 为 l1');
+    expect(s).not.toContain('任务「');
+  });
+
+  it('单条任务范围：说的是任务，不是清单', () => {
+    const s = scopeLine({ taskId: 't1', taskTitle: '装修' });
+    expect(s).toContain('任务「装修」');
+    expect(s).toContain('id 为 t1');
+    expect(s).not.toContain('清单「');
+  });
+
+  /** 两句话都带着「别的……一概不看」那半句——那是这段的全部用处。 */
+  it('两句话都说清了「别的都不看」', () => {
+    for (const s of [scopeLine({ listId: 'l1', listName: 'x' }), scopeLine({ taskId: 't1', taskTitle: 'y' })]) {
+      expect(s).toContain('别的');
+      expect(s).toContain('一概不看');
+    }
   });
 });

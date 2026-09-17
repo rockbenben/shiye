@@ -134,9 +134,16 @@ const flat = (s: string) => s.replace(/\s+/g, '');
 /** 这句话是提示词的开头，也是「这儿抄了一句提示词」的路标。 */
 const MARK = flat('读 AGENTS.md 和 workflows/');
 
-/** 仓库里跟着走的 markdown（跳过依赖、构建产物）。 */
+/** 仓库里跟着走的 markdown（跳过依赖、构建产物，以及不进版本库的本地目录）。 */
 function docs(dir = '.', out: string[] = []): string[] {
-  const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'release', 'coverage']);
+  // `.workbuddy-ai` 是 AI 助手在本机攒的工作记忆（已进 `.gitignore`）——它**不跟着
+  // 仓库走**，所以不在这道守卫的管辖范围里。留着扫的坏处是实的：那里面是自由
+  // 散文，随手写一句「读 AGENTS.md 和 workflows/…」就会让 `npm test` 红在一个
+  // **根本不是文档**的文件上，而报错会指着它说「抄的提示词跟 PROMPT 对不上」。
+  //
+  // 判据是「这目录会不会跟着仓库发布」，跟 node_modules 那些同一个标准——
+  // 不是「谁抄了」（那个判据是下面按内容找的，故意不维护文件名单）。
+  const SKIP = new Set(['node_modules', '.git', 'dist', 'build', 'release', 'coverage', '.workbuddy-ai']);
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (SKIP.has(e.name)) continue;
     const p = `${dir}/${e.name}`;

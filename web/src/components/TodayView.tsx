@@ -85,6 +85,10 @@ interface Props {
    * 见 `cardWiring.guard.test.ts`。
    */
   onSkip?: (id: string) => void;
+  /** 「让 AI 拆细」——叫一次 AI（`POST /api/breakdown`），一两分钟后这条卡上
+   *  会多一条待决建议。**不给就不出这一项**（TaskCard 的 `canBreakdown`）。
+   *  跟 `onSkip` 一样必须转发，不能让它掉在这一层。 */
+  onBreakdown?: (id: string) => void;
   onPromoteSubtask?: (t: Task, index: number) => void;
   /** 转交给每张 TaskCard 再转交给 Attachments——离线记号（task-3-brief），
    *  见 TaskCard.tsx CardProps.offline 的注释。可选、不给就是 TaskCard 自己
@@ -178,7 +182,7 @@ function SortableTodayRow({
 /** 默认空集提到模块层：写成默认参数每次渲染都是新对象，白白让依赖比较判成「变了」。 */
 const EMPTY_LINGER: Set<string> = new Set();
 
-export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder, onDuplicate, onSkip, onPromoteSubtask, proposals, lists, focusMinutes, breakMinutes, offline, onOpenDetail, openDetailId, density = 'card', selection, onSelectionChange, onDeferOverdue, linger = EMPTY_LINGER, weekStart = 1 }: Props) {
+export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder, onDuplicate, onSkip, onBreakdown, onPromoteSubtask, proposals, lists, focusMinutes, breakMinutes, offline, onOpenDetail, openDetailId, density = 'card', selection, onSelectionChange, onDeferOverdue, linger = EMPTY_LINGER, weekStart = 1 }: Props) {
   const { message } = AntApp.useApp();
   // 正在编辑的任务 id：编辑到一半如果因为改了截止时间等原因掉出了「今天」的
   // 成员资格，筛选重算不该把编辑框连带草稿一起卸载掉——跟 TaskBoard 的
@@ -583,6 +587,7 @@ export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder
                                   allTasks={tasks}
                                   onDuplicate={onDuplicate}
                                   onSkip={onSkip}
+                                  onBreakdown={onBreakdown}
                                   onPromoteSubtask={onPromoteSubtask}
                                   onPatch={onPatch}
                                   onEditTask={onEditTask}

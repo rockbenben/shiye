@@ -188,3 +188,70 @@ describe('taskMenuItems：跳过本次要看调用方接不接得住', () => {
     expect(decodeTaskMenu('skip', 每周(), new Date(2026, 8, 3, 9))).toMatchObject({ kind: 'skip' });
   });
 });
+
+
+/**
+ * **「让 AI 拆细」**——卡片 ⋯ 菜单里那一项。
+ *
+ * 两道闸门，跟「跳过本次」那组是同一套形状：`canBreakdown`（**谁接了**）
+ * 和 `!isSettled`（**这一条能不能拆**）。两个都松不得——
+ *
+ * - 漏了 `canBreakdown`：`TaskRow` 的 handler 不认这个 kind，点了没反应。
+ * - 漏了 `isSettled`：给一条已经做完/搁置/放弃的任务摆一项，点下去服务端
+ *   400（那条路由的判据是同一个语义），而他看到的是一句「已经了结了，拆不了」
+ *   ——菜单里本就不该有这一项。
+ */
+describe('taskMenuItems：让 AI 拆细', () => {
+  const items = (over = {}, opts = {}) =>
+    taskMenuItems(task({ id: 't1', ...over }), { lists: [], now: NOW(), ...opts });
+  const labels = (over = {}, opts = {}) => JSON.stringify(items(over, opts));
+
+  it('不给 canBreakdown：不摆——摆了就是点了没反应的那一项', () => {
+    expect(labels()).not.toContain('让 AI 拆细');
+  });
+
+  it('canBreakdown: true：照常摆', () => {
+    expect(labels({}, { canBreakdown: true })).toContain('让 AI 拆细');
+  });
+
+  it.each(['done', 'later', 'abandoned'] as const)('已经了结的（%s）不摆——那不是「参数错」，是这件事不成立', (status) => {
+    expect(labels({ status }, { canBreakdown: true })).not.toContain('让 AI 拆细');
+  });
+
+  it.each(['todo', 'doing'] as const)('还挂着的（%s）摆——判据是 isSettled，不是「必须 todo」', (status) => {
+    expect(labels({ status }, { canBreakdown: true })).toContain('让 AI 拆细');
+  });
+
+  /**
+   * **习惯不摆。** 习惯在这套模型里是「每天重复的那件事」（`habit: true` 必配
+   * 每天重复），没有「第一步」可拆——`workflows/breakdown.md` 里明写着遇到
+   * `habit: true` 直接回 `[]`。
+   *
+   * 摆出来就是一次注定没有产出的 AI 调用（一两分钟 + 一次额度），而回执说的是
+   * 「这条可能已经够具体了」——**对习惯是错的说法**：它不是够具体，是压根不该
+   * 这么拆。跟「跳过本次」那几条同一条立场：宁可没有，不要点了白跑。
+   */
+  it('习惯不摆——习惯没有「第一步」，点了注定白跑一次额度', () => {
+    expect(labels({ habit: true }, { canBreakdown: true })).not.toContain('让 AI 拆细');
+  });
+
+  it('非习惯照常摆——上面那条不是把整个功能关掉了', () => {
+    expect(labels({ habit: false }, { canBreakdown: true })).toContain('让 AI 拆细');
+  });
+
+  /**
+   * **摆在「编辑」正下面。** 它改的就是这条任务的内容（子任务），跟「编辑」是
+   * 同一类动作，只是他不自己写、让 AI 先起草。摆到「改期 / 优先级 / 情境 /
+   * 移动到」那一堆里会读成又一个字段开关。
+   */
+  it('紧跟在「编辑」后面，不埋进那些字段开关里', () => {
+    const ks = keysOf(items({}, { canBreakdown: true }));
+    expect(ks.indexOf('ai-breakdown')).toBe(ks.indexOf('edit') + 1);
+  });
+
+  /** 摆出来的时候，解码要真的给出 breakdown 这个 kind——不然上面那几条成了
+   *  「挡住一个本来也不存在的东西」。 */
+  it('前提：这个 key 确实解码得出 kind: breakdown', () => {
+    expect(decodeTaskMenu('ai-breakdown', task({ id: 't1' }), NOW())).toEqual({ kind: 'breakdown' });
+  });
+});

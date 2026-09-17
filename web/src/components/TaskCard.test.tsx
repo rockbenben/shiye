@@ -49,7 +49,7 @@ const byText = (text: string) => screen.getAllByRole('button').find((b) => b.tex
 // 顺的那个叫它。
 function setup(
   over: Partial<Task> = {},
-  extra: { lists?: List[]; offline?: boolean; allTasks?: Task[]; onEditTask?: (id: string, patch: Partial<Task>) => Promise<void>; onSkip?: (id: string) => void } = {},
+  extra: { lists?: List[]; offline?: boolean; allTasks?: Task[]; onEditTask?: (id: string, patch: Partial<Task>) => Promise<void>; onSkip?: (id: string) => void; onBreakdown?: (id: string) => void } = {},
 ) {
   const onDelete = vi.fn();
   const onPatch = vi.fn();
@@ -58,7 +58,7 @@ function setup(
       <TaskCard
         t={task(over)} now={NOW} lists={extra.lists ?? []} offline={extra.offline} allTasks={extra.allTasks}
         onPatch={onPatch} onEditTask={extra.onEditTask ?? (async () => {})} onDelete={onDelete} onEditingChange={() => {}}
-        onSkip={extra.onSkip}
+        onSkip={extra.onSkip} onBreakdown={extra.onBreakdown}
       />
     </AntApp>,
   );
@@ -70,9 +70,13 @@ const showCard = setup;
  *  字符串，套不进去——这里另开一个只给「打标签」那组用的小工具。 */
 async function pickMenuLabel(label: string) {
   fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === '⋯')!);
+  // 两边都去空白再比——理由跟 `test-utils.tsx` 的 `pickCardMenu` 一字不差：
+  // 标签自己可能带空格，只去掉 DOM 那边的话，带空格的标签永远比不中，
+  // 而报出来的错是「菜单里没有『…』」，看着像菜单没渲染出来。
+  const want = label.replace(/\s/g, '');
   const item = await waitFor(() => {
     const hit = [...document.querySelectorAll('.ant-dropdown-menu-item')]
-      .find((e) => e.textContent?.replace(/\s/g, '') === label);
+      .find((e) => e.textContent?.replace(/\s/g, '') === want);
     if (!hit) throw new Error(`菜单里没有「${label}」`);
     return hit;
   });
@@ -477,6 +481,51 @@ describe('TaskCard：跳过本次', () => {
     setup(repeating(), { onSkip: () => {} });
     await pickCardMenu('跳过本次');
     expect(await screen.findByText(/跳过了，下次/)).toBeTruthy();
+  });
+});
+
+/**
+ * 「让 AI 拆细」——卡片 ⋯ 里的第四件 AI 活（正本 `lib/taskMenu.ts`）。
+ *
+ * **这里只测接线**：菜单里点得到、点了走 `onBreakdown`、**不发 patch**。
+ * 「这一项什么时候摆出来」（已了结的不摆、没接线的入口不摆）在
+ * `lib/taskMenu.test.ts`；「提示词带没带范围」在 `server/src/aiApi.test.ts`。
+ *
+ * 它值得单开一条，是因为**这一跳原来没人盯**：`cardWiring.guard.test.ts` 只验
+ * 「字段传下去了」，`taskMenu.test.ts` 只验「摆出来了、解码得出 `kind:
+ * 'breakdown'`」——中间那句 `onBreakdown(t.id)` 漏掉的话，三处全绿，而按钮
+ * 点下去**什么都不发生**。
+ */
+describe('TaskCard：让 AI 拆细', () => {
+  const menuLabels = async () => {
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent === '⋯')!);
+    const items = await waitFor(() => {
+      const l = [...document.querySelectorAll('.ant-dropdown-menu-item')].map((e) => e.textContent);
+      if (l.length < 5) throw new Error('菜单还没展开');
+      return l;
+    });
+    return items.map((s) => s?.replace(/\s/g, ''));
+  };
+
+  it('接了 onBreakdown：菜单里有这一项，点了走它，**不发 patch**', async () => {
+    const onBreakdown = vi.fn();
+    const { onPatch } = setup({}, { onBreakdown });
+    await pickCardMenu('让 AI 拆细');
+    expect(onBreakdown).toHaveBeenCalledWith('t1');
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
+  /** 拆细要跑一两分钟，而结果落在卡片上、不是弹窗里——不给回执他会以为没点上。 */
+  it('点完说一句「正在拆细、建议会挂在这张卡上」', async () => {
+    setup({}, { onBreakdown: () => {} });
+    await pickCardMenu('让 AI 拆细');
+    expect(await screen.findByText(/正在拆细这条/)).toBeTruthy();
+  });
+
+  /** 没接线的入口不摆这一项——跟「跳过本次」同一条立场：宁可没有，不要点了没反应。 */
+  it('没接 onBreakdown：菜单里没有这一项', async () => {
+    setup();
+    expect(await menuLabels()).not.toContain('让AI拆细');
   });
 });
 

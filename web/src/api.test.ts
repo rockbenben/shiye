@@ -81,7 +81,7 @@ describe('subscribe', () => {
     globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
     try {
       const onOpen = vi.fn();
-      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onAgentStatus: () => {}, onOpen });
+      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onReminderBatch: () => {}, onAgentStatus: () => {}, onOpen });
 
       FakeEventSource.instances[0].emit('open');
       expect(onOpen).toHaveBeenCalledTimes(1);
@@ -97,10 +97,36 @@ describe('subscribe', () => {
     globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
     try {
       const onAgentStatus = vi.fn();
-      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onAgentStatus, onOpen: () => {} });
+      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onReminderBatch: () => {}, onAgentStatus, onOpen: () => {} });
 
       FakeEventSource.instances[0].emit('agent-status', { data: JSON.stringify({ state: 'failed', message: 'AI 命令行工具没找到' }) });
       expect(onAgentStatus).toHaveBeenCalledWith({ state: 'failed', message: 'AI 命令行工具没找到' });
+
+      off();
+    } finally {
+      globalThis.EventSource = real;
+    }
+  });
+
+  /**
+   * **`reminder-batch` 是后加的一路，得有人钉着它接上了。**
+   *
+   * 服务端一轮扫描里同时到点的几条会合成一条 `reminder-batch`
+   * （`server/src/reminder.ts` 的 `fireReminders`）——这一路要是没接上，
+   * 表现是**同时到点的那几条在网页上一条横幅都不出现**：单条那条路（`reminder`）
+   * 好好的，所以「一条提醒」的用例全绿，只有「好几条一起来」时才空。这个仓库
+   * 栽过二十八次的正是这种形状——接线点漏一处不报错，只是静默失灵。
+   */
+  it('reminder-batch 事件解析出那一批，转给 onReminderBatch', () => {
+    const real = globalThis.EventSource;
+    globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+    try {
+      const onReminderBatch = vi.fn();
+      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onReminderBatch, onAgentStatus: () => {}, onOpen: () => {} });
+
+      const payload = { count: 2, items: [{ id: 't1', title: '交房租' }, { id: 't2', title: '买猫粮' }] };
+      FakeEventSource.instances[0].emit('reminder-batch', { data: JSON.stringify(payload) });
+      expect(onReminderBatch).toHaveBeenCalledWith(payload);
 
       off();
     } finally {
@@ -302,7 +328,7 @@ describe('base 前缀（task-1-brief：Android 外壳第一批）', () => {
       expect(getApiBase()).toBe('');
       vi.stubGlobal('EventSource', FakeEventSourceForBase);
 
-      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onAgentStatus: () => {}, onOpen: () => {} });
+      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onReminderBatch: () => {}, onAgentStatus: () => {}, onOpen: () => {} });
 
       expect(FakeEventSourceForBase.instances[0].url).toBe('/api/events');
       off();
@@ -312,7 +338,7 @@ describe('base 前缀（task-1-brief：Android 外壳第一批）', () => {
       setApiBase('http://192.168.1.5:30035');
       vi.stubGlobal('EventSource', FakeEventSourceForBase);
 
-      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onAgentStatus: () => {}, onOpen: () => {} });
+      const off = subscribe({ onChange: () => {}, onReminder: () => {}, onReminderBatch: () => {}, onAgentStatus: () => {}, onOpen: () => {} });
 
       expect(FakeEventSourceForBase.instances[0].url).toBe('http://192.168.1.5:30035/api/events');
       off();

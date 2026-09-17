@@ -19,6 +19,23 @@ export interface ReviewScope {
 }
 
 /**
+ * 「这次只拆细这一条」。**跟 `ReviewScope` 是两件事，不是它的一个特例**——
+ * 那边收窄的是「看哪一批任务」（一份清单，一个项目），这边收窄的是「只处理
+ * 这一条」。产出的形状也不一样：拆细只提 `subtasks` 一个字段，不产 `insights`。
+ *
+ * 形状不同就写两个接口，不合成一个「一堆可选字段」的袋子——那种袋子里
+ * 「两个都填了」和「一个都没填」都是能表达出来的状态，而两种都没有意义。
+ */
+export interface BreakdownScope {
+  taskId: string;
+  /** 任务标题。只用来把话说清楚（提示词里），判据一律用 `taskId`。 */
+  taskTitle: string;
+}
+
+/** 叫起 AI 时收窄到的范围。不给就是全量。 */
+export type AgentScope = ReviewScope | BreakdownScope;
+
+/**
  * 范围那句话**只写这一份**，CLI 和 API 两条路共用。
  *
  * 两边各写一句的话，措辞迟早分叉：一边说「只看」一边说「优先看」，而模型对这两个
@@ -27,8 +44,8 @@ export interface ReviewScope {
  *
  * ## 这句话的约束力，两条路上不一样
  *
- * **调接口那条是硬的**：下面 `buildMessages` 真的按 `listId` 把任务筛掉了，模型
- * 压根看不见别的清单，连它们的 id 都不知道，想提也提不出来。
+ * **调接口那条是硬的**：下面 `buildMessages` 真的按 `listId`（或 `taskId`）把任务
+ * 筛掉了，模型压根看不见别的清单，连它们的 id 都不知道，想提也提不出来。
  *
  * **CLI 那条是软的**：AI 是另一个进程，自己去读 `data/tasks/`，服务端筛不了它。
  * 这句话就是全部的约束——模型不听话时，一次「只回顾这份清单」照样可能带回别的
@@ -41,8 +58,19 @@ export interface ReviewScope {
  * 里 `startApi` 那段注释专门讲过为什么不直接调 `mergeOutbox`）。而越界的后果只是
  * 「一条提在别的项目任务上的建议，他自己点不点」——不改数据、可以忽略。
  * 代价和后果不匹配，所以先不做；真开始碍事了，从这里往合并那条路传范围。
+ *
+ * ## 判据是 `'taskId' in scope`
+ *
+ * 两个形状的必填键互不相交，TypeScript 收得窄，不需要额外的标签字段。
+ * **代价写在这儿：给 `ReviewScope` 加字段时别加 `taskId`**——加了这个判据会静默
+ * 反过来（清单范围被说成单条任务的范围），而表现只是「模型收到一句错的范围说明」，
+ * 没有任何东西会报错。`aiApi.test.ts` 里有一条盯着这句话两半都对。
  */
-export function scopeLine(scope: ReviewScope): string {
+export function scopeLine(scope: AgentScope): string {
+  if ('taskId' in scope) {
+    return `这次只处理任务「${scope.taskTitle}」（id 为 ${scope.taskId}）这一条，`
+      + '别的任务这次一概不看，也不要对它们提建议或观察。';
+  }
   return `这次只回顾清单「${scope.listName}」（listId 为 ${scope.listId}）里的任务，`
     + '别的清单和不属于任何清单的这次一概不看，也不要对它们提建议或观察。';
 }
@@ -190,8 +218,11 @@ export const clockLine = (): string => {
  * ponytail: 任务上千条时这个提示词会很长（很贵）。真碰上了再按时间窗裁，
  * 并且要在界面上说清楚裁了什么。
  */
-export function buildMessages(kind: AgentKind, scope?: ReviewScope): Array<{ role: 'system' | 'user'; content: string }> {
-  const workflow = kind === 'expand' ? 'workflows/expand.md' : kind === 'board' ? 'workflows/board.md' : 'workflows/review.md';
+export function buildMessages(kind: AgentKind, scope?: AgentScope): Array<{ role: 'system' | 'user'; content: string }> {
+  const workflow = kind === 'expand' ? 'workflows/expand.md'
+    : kind === 'board' ? 'workflows/board.md'
+      : kind === 'breakdown' ? 'workflows/breakdown.md'
+        : 'workflows/review.md';
   // board 的 HANDOFF 跟 expand/review 不一样：它不写 outbox，要的是一段汇报文本。
   // 必须把「不写文件」说死：board.md 的 Step 3 默认让命令行路把汇报写进
   // `data/.board-report.md`，接口路模型也读得到那一段，不压住它就可能照着写，
@@ -216,14 +247,45 @@ export function buildMessages(kind: AgentKind, scope?: ReviewScope): Array<{ rol
     // proposals/insights——它是只读总览，不需要那些。不收 scope：board 是全局总览。
     parts.push(j('data/tasks/', readTasks()));
     parts.push('', j('data/inbox/ 里 processed: false 的条目', readInbox().filter((x) => !x.processed)));
+  } else if (kind === 'breakdown') {
+    // **这一支的全部意义就是「只发这一条」**：拆细问的是「这件事的第一步是什么」，
+    // 答案只取决于这一条任务的标题、备注和现有的子任务——把另外几百条塞进来，
+    // 既贵又会让模型开始做跨任务的判断（那是回顾的活儿，不是拆细的）。
+    //
+    // 直接子任务（`parentId` 指着它的那些）**要带上**：一条项目型的任务，它的
+    // 「下一步」可能已经以子任务的形式躺在下面了，不带的话模型会提一条已经存在
+    // 的步骤；而且哪些步骤已经carved off 了，正是「还差哪一步」的前提。
+    const tasks = readTasks();
+    const id = scope && 'taskId' in scope ? scope.taskId : null;
+    // `id === null`（**压根没带范围**）跟「带了个查不到的 id」一样落成空数组，
+    // 不退回全量。唯一的合法调用方是 `POST /api/breakdown`，它保证 `taskId` 一定
+    // 在（`app.ts` 那条路由上写着「不做『不带就扫全部』那种退路」）；真走到这儿
+    // 说明有人绕开路由直接调了——这时候把全部任务发出去，等于给模型一次
+    // 「随便挑一条改」的机会（`updates` 里带着 id，挑错了建议就真提在别的任务上），
+    // 而拆细恰恰是四条里唯一「没有宾语就不成立」的那一件。
+    const mine = id === null ? [] : tasks.filter((t) => t.id === id || t.parentId === id);
+    if (scope && 'taskId' in scope) {
+      parts.push(scopeLine(scope), '', '（下面这份 data/tasks/ 已经按这个范围筛过了——只有这一条，加上它现有的子任务。）', '');
+    }
+    parts.push(j('data/tasks/（这一条，以及它现有的子任务）', mine));
+    parts.push('', j('data/lists/', readLists()));
+    // proposals 照发：AGENTS.md 说「已经挂着待决建议的任务直接跳过」，而拆细这一条
+    // 尤其要紧——同一张卡上摆两条「加子任务」的建议，他得先分辨哪条是哪条。
+    // **insights 不发**：拆细不产观察（见 workflows/breakdown.md），模型不需要
+    // 为了「别重复说过的话」去读一份它这一轮既不会写、也用不上的东西。
+    const proposals = readProposals().filter((p) => !p.dismissed && mine.some((t) => t.id === p.taskId));
+    parts.push('', j(`data/proposals/（这条任务上你以前提过、他还没处理的建议）${proposals.length === 0 ? '（无）' : ''}`, proposals));
   } else {
     // **范围既要说、也要真的筛掉。** 只说不筛，那几百条不相干的任务照样进提示词，
     // 省钱那一半就没了；只筛不说，模型看到的是一份「全部任务」，会拿一份残缺的
     // 数据去下「你手上只有三件事」这种跨任务判断。
     const tasks = readTasks();
-    const mine = scope ? tasks.filter((t) => t.listId === scope.listId) : tasks;
-    if (scope) {
-      parts.push(scopeLine(scope), '', `（下面这份 data/tasks/ 已经按这个范围筛过了、全部 ${tasks.length} 条里的 ${mine.length} 条；proposals 和 insights 同样按这个范围筛过了。）`, '');
+    // 收窄到清单范围。`AgentScope` 是联合，这里先按判据取出来——`buildMessages`
+    // 是唯一一处真的按范围筛数据的地方（CLI 那条路筛不了，见 `scopeLine` 那段）。
+    const list = scope && 'listId' in scope ? scope : null;
+    const mine = list ? tasks.filter((t) => t.listId === list.listId) : tasks;
+    if (list) {
+      parts.push(scopeLine(list), '', `（下面这份 data/tasks/ 已经按这个范围筛过了、全部 ${tasks.length} 条里的 ${mine.length} 条；proposals 和 insights 同样按这个范围筛过了。）`, '');
       // proposals/insights 也要跟着收窄——它们跟任务一样，按 scope.listId 关联的
       // taskId 筛。AGENTS.md「跑之前先读 data/proposals/」那节说「已经挂着待决
       // 建议的任务直接跳过」，dismissed 的更要跳过——全量塞进去的话，模型既可能
@@ -309,7 +371,7 @@ export async function chat(cfg: AiConfig, messages: ReturnType<typeof buildMessa
  * 回 `false` 表示模型明确说「没什么可产出」（空数组）——那是 `skipped`，不是
  * 失败，跟 CLI 那条路「跑完了但没写出任何文件」是同一件事，界面上不该标红。
  */
-export async function runViaApi(kind: AgentKind, cfg: AiConfig, fetchFn: Fetcher, signal: AbortSignal, scope?: ReviewScope): Promise<boolean> {
+export async function runViaApi(kind: AgentKind, cfg: AiConfig, fetchFn: Fetcher, signal: AbortSignal, scope?: AgentScope): Promise<boolean> {
   const entries = extractJson(await chat(cfg, buildMessages(kind, scope), fetchFn, signal));
   if (entries.length === 0) return false;
   writeOutboxFile(entries);

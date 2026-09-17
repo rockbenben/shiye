@@ -267,6 +267,19 @@ export const api = {
   // 服务端通过 agent-status message 广播，网页上跟拆解/回顾反馈同一个出口。
   // 跟 expand/review 共用单飞锁，所以同样可能 409。
   board: () => route(() => req<{ ok: true }>('/api/board', { method: 'POST' }), offlineUnsupported('看板总览')),
+  /**
+   * 「让 AI 拆细这条」——卡片 ⋯ 菜单里那一项。跟上面三条共用单飞锁，同样可能 409。
+   *
+   * **`taskId` 是必填的**，服务端缺了就 400：这一件事问的就是「这一条的第一步是
+   * 什么」，没有这一条那句话不成立，没有「不带就扫全部」的退路。服务端还会在
+   * 任务不存在、或者已经了结（做完/搁置/放弃）时 400——界面上那一项同样按这两条
+   * 收着（`lib/taskMenu.ts` 的 `canBreakdown`），两道闸门防的是两拨人：他是手滑，
+   * 手敲接口的是不知道自己点错了什么。
+   */
+  breakdown: (taskId: string) => route(
+    () => req<{ ok: true }>('/api/breakdown', { method: 'POST', body: body({ taskId }) }),
+    offlineUnsupported('让 AI 拆细这条'),
+  ),
 
   /**
    * 设置页 AI 那三格旁边的「测试连接」。**传的是此刻框里那份**，不是存着的那份
@@ -348,20 +361,40 @@ export interface AgentStatus {
   message?: string;
   /** 只有 state === 'scheduled' 时才有意义：排定的绝对触发时间（ISO）。 */
   at?: string;
-  /** 这条状态是拆解/回顾/总览哪一件跑出来的；scheduled/idle 和启动时补合并
+  /** 这条状态是拆解/回顾/总览/拆细哪一件跑出来的；scheduled/idle 和启动时补合并
    *  的历史状态不带，缺省按拆解的通用文案回退。跟 server/src/expand.ts 对齐。 */
-  kind?: 'expand' | 'review' | 'board';
+  kind?: 'expand' | 'review' | 'board' | 'breakdown';
 }
 
 /** 服务端 data-changed 事件里的 file。跟 server/src/events.ts 的 WATCHED 对齐。 */
 export type DataFile = 'inbox' | 'tasks' | 'settings' | 'proposals' | 'lists' | 'folders' | 'insights' | 'countdowns' | 'trash';
+
+/**
+ * `reminder-batch` 事件的载荷：**一轮扫描里同时到点的几条**。
+ *
+ * **载荷里确实有 `title`/`body`**（服务端 `server/src/reminder.ts` 的
+ * `ReminderBatch` 拼好的，桌面端 `toNotification` 没有 `title` 会直接返回 null）。
+ * 这里故意**不声明**这两个字段，不是因为载荷里没有：横幅的文案是 `App.tsx` 自己
+ * 按当前的条数拼的，条数会随人一条条处理而变，用服务端那一刻的快照反而会写死一个
+ * 过时的数——声明了就会有人顺手拿去用。这里只声明真正会读的那两个字段。
+ *
+ * 别把这份声明当成载荷的全貌：要改服务端那两个字段之前，先看
+ * `desktop/src/notify.ts`，那边靠它活着。
+ */
+export interface ReminderBatch {
+  count: number;
+  items: Array<{ id: string; title: string }>;
+}
 
 export interface SseHandlers {
   // 收 DataFile | string 而不是只收 DataFile：事件里的 file 是 JSON.parse 出来的，
   // 运行时可以是任何字符串。把这个事实写进类型，逼调用方处理未知值，而不是
   // 以为编译器替它挡住了——这条洞正是因为原来的类型只标四种、看着像能拦住。
   onChange: (file: DataFile | string) => void;
+  /** 单条到点。 */
   onReminder: (task: Task) => void;
+  /** 一轮里同时到点的那一批（两条起）。**单条走 `onReminder`**，两条起才走这里。 */
+  onReminderBatch: (batch: ReminderBatch) => void;
   onAgentStatus: (status: AgentStatus) => void;
   onOpen: () => void;
 }
@@ -373,11 +406,12 @@ export interface SseHandlers {
  * 写明的正常流程，不是边缘情况，所以每次连上（含首次连接）都触发一次全量 reload，
  * 补齐这段空窗。首次挂载因此会多一次重复请求，无害。
  */
-export function subscribe({ onChange, onReminder, onAgentStatus, onOpen }: SseHandlers): () => void {
+export function subscribe({ onChange, onReminder, onReminderBatch, onAgentStatus, onOpen }: SseHandlers): () => void {
   const es = new EventSource(`${getApiBase()}/api/events`);
   es.addEventListener('open', onOpen);
   es.addEventListener('data-changed', (e) => onChange(JSON.parse((e as MessageEvent<string>).data).file));
   es.addEventListener('reminder', (e) => onReminder(JSON.parse((e as MessageEvent<string>).data) as Task));
+  es.addEventListener('reminder-batch', (e) => onReminderBatch(JSON.parse((e as MessageEvent<string>).data) as ReminderBatch));
   es.addEventListener('agent-status', (e) => onAgentStatus(JSON.parse((e as MessageEvent<string>).data) as AgentStatus));
   return () => es.close();
 }

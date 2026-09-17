@@ -46,15 +46,20 @@ export function NoMotion({ children }: PropsWithChildren) {
  * 用别的名字的测试就要来改一次这里，而这个联合存在的意义正是「写错一个固定项的
  * 名字当场红」——两者不能兼得，数据驱动的那几项在各自的测试里自己点。
  */
-export async function pickCardMenu(label: '编辑' | '删除' | '今天' | '明天' | '下周' | '去掉截止时间' | '置顶' | '取消置顶' | '创建副本' | '跳过本次', opts: { scope?: HTMLElement; nth?: number } = {}) {
+export async function pickCardMenu(label: '编辑' | '删除' | '今天' | '明天' | '下周' | '去掉截止时间' | '置顶' | '取消置顶' | '创建副本' | '跳过本次' | '让 AI 拆细', opts: { scope?: HTMLElement; nth?: number } = {}) {
   const { scope = document.body, nth = 0 } = opts;
   const triggers = [...scope.querySelectorAll('button')].filter((b) => b.textContent === '⋯');
   if (!triggers[nth]) throw new Error(`范围内只有 ${triggers.length} 颗 ⋯，取不到第 ${nth + 1} 颗`);
   fireEvent.click(triggers[nth]);
   // 菜单挂在 body 末尾的浮层里，不在 scope 里面，所以从 document 找。
+  // **两边都去空白再比**：DOM 那边是因为 antd 会给按钮插空格，`label` 那边是
+  // 因为标签本身可能带空格（「让 AI 拆细」里就有两个）——只去掉一边的话，
+  // 带空格的标签永远比不中，而报出来的错是「菜单里没有『让 AI 拆细』」，
+  // 看着像菜单没渲染出来，实际是比对方式错了。
+  const want = label.replace(/\s/g, '');
   const item = await waitFor(() => {
     const hit = [...document.querySelectorAll('.ant-dropdown-menu-item')]
-      .find((e) => e.textContent?.replace(/\s/g, '') === label);
+      .find((e) => e.textContent?.replace(/\s/g, '') === want);
     if (!hit) throw new Error(`菜单里没有「${label}」`);
     return hit;
   });

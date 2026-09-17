@@ -66,6 +66,99 @@ describe('HabitStats', () => {
     show([done('喝水', 18), live('喝水')]);
     expect(screen.getByLabelText('本月打卡表：1 / 19 天')).toBeTruthy();
   });
+
+  /**
+   * **这一族盯的是「这张表长得像月历，就得真的是月历」。**
+   *
+   * 这里原来是 `display: flex; flex-wrap: wrap` + 固定 23px 格子，于是
+   * 「一行几天」完全由容器宽度决定——实测同一批 30 天在 1440px 下排成
+   * 11/11/8、1024px 下 16/14、390px 手机上 12/12/6。格子里印着 1..31，
+   * 没有人会不按周去读它，而每一行的第一个格子在不同宽度下指向不同的日期。
+   *
+   * 列数写死在 CSS 里（`repeat(7, 23px)`），jsdom 算不出布局，所以这一族
+   * **测不了「渲染出来是几列」**——它测的是那一层能被测到的约定：1 号之前
+   * 补几格、补出来的东西不带 `.ink-hstat-cell`（否则「一个月 31 格」那条
+   * 断言会跟着变），以及顶上那行星期标签按 `weekStart` 轮转。
+   * 真正「七列」这件事靠 `theme.css` 那一条 + 人眼，别把它当成有守卫。
+   */
+  describe('月历的七列（1 号之前补空格 + 星期标签）', () => {
+    /** 2026-08-01 是周六。 */
+    it('周一开头时，1 号之前补 5 格（8/1 是周六）', () => {
+      const { container } = show([done('喝水', 18), live('喝水')]);
+      expect(container.querySelectorAll('.ink-hstat-blank')).toHaveLength(5);
+    });
+
+    it('**补的格子不算进「一天一格」**——否则「一个月 31 格」那条会随月份飘', () => {
+      const { container } = show([done('喝水', 18), live('喝水')]);
+      expect(container.querySelectorAll('.ink-hstat-cell')).toHaveLength(31);
+      // 补的那几格不能带 cell 那个类
+      for (const b of container.querySelectorAll('.ink-hstat-blank')) {
+        expect(b.className).not.toContain('ink-hstat-cell');
+      }
+    });
+
+    it('星期标签按 weekStart 轮转，周一开头时是「一二三四五六日」', () => {
+      const { container } = show([done('喝水', 18), live('喝水')]);
+      const wd = [...container.querySelectorAll('.ink-hstat-wd')].map((e) => e.textContent);
+      expect(wd).toEqual(['一', '二', '三', '四', '五', '六', '日']);
+    });
+
+    it('**改成周日开头，标签和空格一起挪**——两处用同一个数，不然整张表错位一天', () => {
+      const { container } = render(
+        <HabitStats tasks={[done('喝水', 18), live('喝水')]} now={NOW} onOpen={vi.fn()} weekStart={0} />,
+      );
+      expect([...container.querySelectorAll('.ink-hstat-wd')].map((e) => e.textContent))
+        .toEqual(['日', '一', '二', '三', '四', '五', '六']);
+      // 周日起头，8/1（周六）之前是 6 格
+      expect(container.querySelectorAll('.ink-hstat-blank')).toHaveLength(6);
+    });
+
+  it('星期标签对读屏是噪音——它在 `role="img"` 那张表里已经有一句整话', () => {
+    const { container } = show([done('喝水', 18), live('喝水')]);
+    for (const e of container.querySelectorAll('.ink-hstat-wd, .ink-hstat-blank')) {
+      expect(e.getAttribute('aria-hidden'), e.textContent ?? '').toBe('true');
+    }
+  });
+
+  /**
+   * **分母是 0 的那一栏整个不出现。**
+   *
+   * 实测（手机宽度那一轮）发现的形状：今天刚建一个「每周一、五」的习惯，
+   * 而今天不是打卡日——`monthElapsed` 算出来 0，屏幕上成了「本月 0 / 0 天」，
+   * 一个读起来像坏掉的分数。
+   *
+   * `habitStats.ts` 里那段注释其实**已经点名过这个形状**（它是在讲
+   * 「坏 createdAt 不能直接进 Math.min」时说的：「月度分母跟着变成 0，
+   * 界面上是「本月 0 / 0 天」」）——那条把 NaN 那条路堵死了，但合法路径上
+   * 的同一个显示还在。这里补上。
+   */
+  describe('分母是 0 时（本月还没有打卡日）', () => {
+    /** NOW 是 2026-08-19，周三。 */
+    const WEEK_MON_FRI: Repeat = { ...DAILY, every: 'week', weekdays: [1, 5] };
+    const bornToday = (p: Partial<Task>) => task({ ...p, createdAt: iso(2026, 8, 19) });
+
+    it('每周一、五的习惯今天（周三）刚建 → 那一栏不渲染，不留一个「0 / 0」', () => {
+      show([bornToday({ id: 'w', title: '练背', habit: true, repeat: WEEK_MON_FRI, status: 'todo' })]);
+      expect(screen.queryByText(/本月/)).toBeNull();
+    });
+
+    it('读屏听到的也不是「0 / 0 天」，而是说清为什么没有', () => {
+      show([bornToday({ id: 'w', title: '练背', habit: true, repeat: WEEK_MON_FRI, status: 'todo' })]);
+      expect(screen.getByLabelText('本月打卡表：这个月还没有打卡日')).toBeTruthy();
+    });
+
+    it('**对照：分母不是 0 就照常显示**——别把这一栏整个删了', () => {
+      show([done('喝水', 18), live('喝水')]);
+      expect(screen.getByText(/本月/)).toBeTruthy();
+      expect(screen.getByLabelText('本月打卡表：1 / 19 天')).toBeTruthy();
+    });
+
+    it('每天的习惯今天刚建 → 分母是 1，照常显示（不是所有「刚建」都藏）', () => {
+      show([bornToday({ id: 'd', title: '喝水', habit: true, repeat: DAILY, status: 'todo' })]);
+      expect(screen.getByText(/本月/)).toBeTruthy();
+    });
+  });
+});
 });
 
 describe('HabitStats：年度热力图', () => {

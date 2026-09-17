@@ -5,7 +5,7 @@ import { dueChip } from '../lib/dueChip.js';
 import { describeRepeat } from './RepeatFields.js';
 import { blockingAncestor, childProgress, parentOf } from '../lib/hierarchy.js';
 import { listLabel } from '../lib/listIcon.js';
-import { allTags, formatWhen, isSettled, isTaskOverdue, displayReminderAt, notStarted, CONTEXT_LABEL } from '../lib/taskView.js';
+import { allTags, formatWhen, isSettled, isTaskOverdue, displayReminderAt, notStarted, waitingText, CONTEXT_LABEL } from '../lib/taskView.js';
 import { PRI_LABEL } from './TaskFields.js';
 import { decodeTaskMenu, taskMenuItems } from '../lib/taskMenu.js';
 import { isInteractiveTarget } from '../lib/keymap.js';
@@ -485,7 +485,11 @@ export function TaskRow({
               `compact`（看板那一列 217px）也照常显示：这两个都是单字形，宽度上
               跟 ●／🔔／⚑ 一档，让路的是标签和子项数那种成串的东西。 */}
           {t.waitingFor && (
-            <span className="ink-trow-waiting" role="img" aria-label={`在等：${t.waitingFor}`}>⏳</span>
+            // `waitingText` 而不是原来那句手写的「在等：」——同一个「等」会跟
+            // 自由文本里自带的那个撞上（「在等：等诊所回电话」）。全角冒号是
+            // 这一处特有的（可见内容只有一个字形，这句话是替代它的），所以
+            // 传进去，而不是让两边共用一套分隔。
+            <span className="ink-trow-waiting" role="img" aria-label={waitingText(t.waitingFor, '：')}>⏳</span>
           )}
           {t.repeat && (
             <span className="ink-trow-repeat" role="img" aria-label={`重复：${describeRepeat(t.repeat)}`}>🔁</span>

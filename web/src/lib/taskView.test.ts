@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyMove, bubbleOverdue, countByStatus, countStale, filterTasks, formatWhen, groupBySource, isInTodayView, moveTo,
-  isOverdue, isReminderOverdue, isStatus, overdueLabel, sortByUrgency, sortTodayOrder, isSettled, normalizeTaskArrays, STATUSES, STATUS_LABEL, STATUS_FILTERS, STATUS_FILTER_LABEL, displayReminderAt, waitingQuietLabel, parkedQuietLabel, notStarted, isTaskOverdue } from './taskView.js';
+  isOverdue, isReminderOverdue, isStatus, overdueLabel, sortByUrgency, sortTodayOrder, isSettled, normalizeTaskArrays, STATUSES, STATUS_LABEL, STATUS_FILTERS, STATUS_FILTER_LABEL, displayReminderAt, waitingQuietLabel, waitingText, parkedQuietLabel, notStarted, isTaskOverdue } from './taskView.js';
 import type { InboxItem, Task, Status } from '../types.js';
 
 const NOW = new Date('2026-08-10T12:00:00.000Z');
@@ -863,6 +863,51 @@ describe('waitingQuietLabel', () => {
 
   it('updatedAt 解析不了就不说，不抛也不印 NaN', () => {
     expect(waitingQuietLabel(task({ waitingFor: '张老师', updatedAt: '前天' }), NOW)).toBeNull();
+  });
+});
+
+/**
+ * 「在等谁」那一格印什么。
+ *
+ * 这一格是自由文本，而中文里最自然的写法就是「等诊所回电话」——原来卡片上
+ * 硬编码 `在等 {值}`，于是渲染出「在等 等诊所回电话」，同一个「等」挨着出现
+ * 两次。这一组盯的就是那个重复不再回来。
+ */
+describe('waitingText', () => {
+  it('他自己写了「等…」就整条用原话，不再补一个「在等」', () => {
+    expect(waitingText('等诊所回电话')).toBe('等诊所回电话');
+    expect(waitingText('等待物业答复')).toBe('等待物业答复');
+  });
+
+  it('没写「等」才补前缀', () => {
+    expect(waitingText('张老师')).toBe('在等 张老师');
+    expect(waitingText('对方回款')).toBe('在等 对方回款');
+  });
+
+  it('**「在等 等诊所回电话」这个形状再也出不来**——那是这条函数存在的全部理由', () => {
+    for (const w of ['等诊所回电话', '等待回复', '等 物业', '  等回话  ']) {
+      expect(waitingText(w), w).not.toMatch(/^在等\s*等/);
+    }
+  });
+
+  it('首尾空白先去掉再判——「 等回复」跟「等回复」是同一句话', () => {
+    expect(waitingText('  等回复  ')).toBe('等回复');
+    expect(waitingText('  张老师  ')).toBe('在等 张老师');
+  });
+
+  it('空串 → 空串，不印一个光秃秃的「在等 」', () => {
+    expect(waitingText('')).toBe('');
+    expect(waitingText('   ')).toBe('');
+  });
+
+  it('分隔符可以换：行档那个只有 ⏳ 一个字形的记号用全角冒号（它替代可见内容，冒号分得更开）', () => {
+    expect(waitingText('张老师', '：')).toBe('在等：张老师');
+    // **但重复的「等」还是不该出现**，换了分隔符也一样。
+    expect(waitingText('等诊所回电话', '：')).toBe('等诊所回电话');
+  });
+
+  it('「等于…」不补「在等」——那本来也不是「在等待」', () => {
+    expect(waitingText('等于老板确认')).toBe('等于老板确认');
   });
 });
 

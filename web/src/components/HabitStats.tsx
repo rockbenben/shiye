@@ -43,10 +43,26 @@ const weekdayOf = (key: string): number => {
   return new Date(y, m - 1, d).getDay();
 };
 
+/**
+ * 月历第一行、1 号之前要空几格。
+ *
+ * **必须跟 `weekStart` 同一个坐标系**，不然空出来的格数和上面那行星期标签
+ * 对不上——设置里改成周日开始，标签挪了、空格没挪，整张表就错位一天。
+ */
+const monthOffset = (firstKey: string, weekStart: WeekStart): number =>
+  (weekdayOf(firstKey) - weekStart + 7) % 7;
+
+/** 月历顶上那行星期标签，按 `weekStart` 轮转（不给就是周一起）。 */
+const weekdayLabels = (weekStart: WeekStart): string[] =>
+  Array.from({ length: 7 }, (_, i) => '日一二三四五六'[(weekStart + i) % 7]);
+
 export function HabitStats({ tasks, now, onOpen, onCheckIn, weekStart }: Props) {
   // `weekStart` 传下去：每周那种习惯的「本周 N/M」和「连续几周」按它划周界，
   // 跟日历那七列、专注统计的「本周」必须是同一个数。
   const habits = habitStats(tasks, now, weekStart);
+  // 月历那七列和顶上那行标签共用这一个数。`habitStats` 内部也落同一个默认值，
+  // 这里再写一次不是重复：**这一份是给渲染用的**，那边那份管的是划周界。
+  const ws: WeekStart = weekStart ?? 1;
   // 哪几个习惯展开了年度热力图。**默认全收起**——滴答清单那边也是点「更多」
   // 才进年度热力页：一张 365 格的图乘上五个习惯，会把「这个月怎么样」这个
   // 主问题挤到屏幕外面去。
@@ -106,10 +122,34 @@ export function HabitStats({ tasks, now, onOpen, onCheckIn, weekStart }: Props) 
             {/* 分母是「本月这个习惯能打卡的天数」：既不算还没到的，也不算建它
                 之前的。整月天数会让月初第二天显示「1 / 30」，而「本月已过去几天」
                 会让今天新建的习惯显示「0 / 26」——两句读起来都是「你欠了一堆」。
-                判据在 habitStats.ts 的 `monthElapsed` 上。 */}
-            <span>本月 <b>{h.monthDone}</b> / {h.monthElapsed} 天</span>
+                判据在 habitStats.ts 的 `monthElapsed` 上。
+
+                **分母是 0 时整栏不渲染**（手机宽度实测发现的）：那是「今天刚建了
+                一个每周几次的习惯、而今天不是打卡日」——分子分母一起算成 0，
+                屏幕上就成了「本月 0 / 0 天」，一个读起来像坏掉的分数。上面那句
+                注释防的是「0 / 26」这种**欠账感**，没防住「0 / 0」这种**不成句**。
+                跟 `workload.ts` 那条「一条都没估过时整句不出」同一条规矩：
+                没有话可说的一栏不渲染，而不是渲染一个 0 让它自己解释自己。 */}
+            {h.monthElapsed > 0 && <span>本月 <b>{h.monthDone}</b> / {h.monthElapsed} 天</span>}
           </div>
-          <div className="ink-hstat-grid" role="img" aria-label={`本月打卡表：${h.monthDone} / ${h.monthElapsed} 天`}>
+          {/* 可访问名跟上面那一栏说同一件事：分母是 0 时不能念「0 / 0 天」——
+              读屏听到的会跟屏幕上的那句话一样费解。 */}
+          <div
+            className="ink-hstat-grid"
+            role="img"
+            aria-label={h.monthElapsed > 0
+              ? `本月打卡表：${h.monthDone} / ${h.monthElapsed} 天`
+              : '本月打卡表：这个月还没有打卡日'}
+          >
+            {/* 星期几那一行。**没有它七列也不可读**——「第一列是周一」得靠这行字。
+                跟下面的格子同宽同间距，才能对得上。 */}
+            {weekdayLabels(ws).map((w, i) => (
+              <span key={`wd${i}`} className="ink-hstat-wd" aria-hidden="true">{w}</span>
+            ))}
+            {/* 1 号之前那几格。空着，不画边框——画了就成了「那几天漏打卡」。 */}
+            {Array.from({ length: monthOffset(h.days[0].key, ws) }, (_, i) => (
+              <span key={`blank${i}`} className="ink-hstat-blank" aria-hidden="true" />
+            ))}
             {h.days.map((d) => (
               <span
                 key={d.key}

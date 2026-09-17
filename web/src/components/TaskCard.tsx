@@ -3,7 +3,7 @@ import { App as AntApp, Button, Card, Checkbox, ConfigProvider, DatePicker, Drop
 import dayjs from 'dayjs';
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
 import type { List, Status, Task, Subtask } from '../types.js';
-import { allTags, formatWhen, isStatus, isTaskOverdue, overdueLabel, displayReminderAt, asArray, waitingQuietLabel, parkedQuietLabel, notStarted, CONTEXT_LABEL, STATUS_LABEL } from '../lib/taskView.js';
+import { allTags, formatWhen, isStatus, isTaskOverdue, overdueLabel, displayReminderAt, asArray, waitingQuietLabel, waitingText, parkedQuietLabel, notStarted, CONTEXT_LABEL, STATUS_LABEL } from '../lib/taskView.js';
 import { dueText, whenText } from '../lib/dueChip.js';
 import { canBeHabit } from '../lib/habit.js';
 import { formatMinutes, taskFocusMinutes } from '../lib/focusStats.js';
@@ -1012,6 +1012,16 @@ export function TaskCard({
                   aria-label={`优先级：${PRI_LABEL[t.priority as 1 | 2 | 3]}`}
                 >⚑</span>
               )}
+              {/* 置顶要看得见——一条排在最前面的卡，人得知道它是「被按上去的」
+                  还是「本来就该在这儿」，不然下次想让它别在最前面时不知道去点哪。
+                  一个字形，不是一整块标签。
+                  **它原来在下面那排动作按钮里**（跟状态角标并排），搬上来的理由
+                  见那一处的注释：那排是 `wrap` 的，多一个元素就会在窄卡上折行、
+                  把 `⋯` 甩到第二行。这里跟 ⚑ 并排，是「这张卡是什么」这一类
+                  记号该待的地方。 */}
+              {!detail && t.pinned && (
+                <span className="ink-pin-mark" role="img" aria-label="已置顶" title="已置顶">📌</span>
+              )}
               {/* 点标题收起回行档（final-review「行档展开收不回去」）。整行
                   可点展开成这张查看态的卡（TaskGrid.tsx/TodayView.tsx 的
                   onOpen={() => setEditing(t.id, true)}），但收起没有对称的
@@ -1188,7 +1198,7 @@ export function TaskCard({
                 `waitingQuietLabel`。 */}
             {t.waitingFor && (
               <span className="ink-waiting-mark">
-                ⏳ 在等 {t.waitingFor}
+                ⏳ {waitingText(t.waitingFor)}
                 {waitingQuietLabel(t, now) && <span className="ink-waiting-quiet"> · {waitingQuietLabel(t, now)}</span>}
               </span>
             )}
@@ -1443,10 +1453,14 @@ export function TaskCard({
               )}
             </span>
           )}
-          {/* 置顶要看得见——一条排在最前面的卡，人得知道它是「被按上去的」
-              还是「本来就该在这儿」，不然下次想让它别在最前面时不知道去点哪。
-              一个字形，不是一整块标签：它跟状态角标并排，那儿本来就窄。 */}
-          {!draft && t.pinned && <span className="ink-pin-mark" title="已置顶">📌</span>}
+          {/* 置顶的记号**搬到了标题行**（原来在这儿，跟状态角标并排）。
+              理由不是审美，是实测：这一行是个 `wrap` 的 Space，置顶的卡比别的
+              卡多一个元素，于是窄卡上（1440px 下「未归类」「清单」这些屏是
+              3 列、每张卡约 343px）**这一行会折成两行，`⋯` 被单独甩到第二行**
+              ——而它旁边那张没置顶的卡是一行。同一屏里一半卡折、一半不折，
+              看着像渲染坏了。
+              搬到标题行跟优先级旗 ⚑ 作伴，那儿本来就是「这张卡是什么」这一类
+              记号待的地方；这一行剩下的六项全是动作，元素个数不再随任务属性变。 */}
           {draft ? (
             <>
               {/* color="default"：全站约定，你自己按的按钮不用 type="primary"

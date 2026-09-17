@@ -1994,7 +1994,22 @@ body {
 }
 
 .ink-review-run-hint {
-  flex: 1 1 12rem;
+  /* **基准值要大于「按钮剩下的那点空间」，才会折行。**
+     原来写的是 `flex: 1 1 12rem`，配的注释说「窄到 12rem 以下就整条折到下一
+     行」——不会。`flex-shrink` 默认是 1，空间不够时它先把这一段压到 12rem
+     以下，而不是折行；`flex-wrap` 只在「放不下**初始**尺寸」时才换行，而收缩
+     是换行之前发生的事。实测 1440px 下：容器被 `--measure`（38em ≈ 456px）
+     卡住，两颗按钮 130+84 加 10 的间隙吃掉 224px，这句只拿到 222px、折成四行，
+     而同一行右边空着。
+     第一版改成了 `flex: 1 0 12rem`（只加不收缩）——**仍然不够**：192px 的
+     基准值在 222px 里放得下，于是照旧不折行、照旧 222px。实测确认过才发现的。
+     现在的 24rem 是刻意大于那 222px 的：它一定放不下，于是整条落到下一行、
+     吃满 456px（两行说完）。`min-width` 兜的是真正窄的屏——`flex-shrink: 1`
+     配一个 192px 的地板，手机上不会撑破容器，也不会缩成一条缝。
+     跟 `vitest.config.ts` 里那个 `poolOptions` 是同一类错：注释里的心智模型
+     和实际行为不符，而它读起来很有道理，所以一直没人去验。 */
+  flex: 1 1 24rem;
+  min-width: 12rem;
 }
 
 /* 设置弹层里的命令提示块。回顾**现在有按钮了**（回顾那一屏底部），这一块留着是
@@ -3124,7 +3139,14 @@ body {
    定义。跟「卡住的项目」共用同一个小标题样式（.ink-review-stalled-h）——
    它俩是同一类东西：从任务本身现算的结构性事实，不是 AI 写的观察。
    **一个群青都没有**，理由同上。 */
-.ink-review-todo {
+/* **三节共用一条形状规则。** 这一周该过一遍的 / 卡住的项目 / 一拖再拖 / 这一周
+   的进出，全都是「本地算出来的结构性事实」那一档：收在 --measure 里、底下一
+   条横线收边。分成四条各写一遍，改一次间距就得记得改四处——而漏改一处的表现
+   是这几节之间忽宽忽窄，不会让任何测试变红。 */
+.ink-review-todo,
+.ink-review-stalled,
+.ink-review-postponed,
+.ink-review-pace {
   max-width: var(--measure);
   margin-bottom: 18px;
   padding-bottom: 14px;
@@ -3154,13 +3176,8 @@ body {
    **一个群青都没有**——群青是配给给 AI 产出的内容的（theme.css 顶部），而这
    一段是从任务本身现算出来的结构性事实，不是谁写的观察。它排在 AI 那几条
    观察前面：结构性的问题先说，AI 的看法后说。 */
-.ink-review-stalled {
-  max-width: var(--measure);
-  margin-bottom: 18px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--rule);
-}
-
+/* 这一节的形状（收在 --measure 里、底下一横线）跟「这一周该过一遍的」共用，
+   写在上面那条分组规则里，不在这儿重复一遍。 */
 .ink-review-stalled-h {
   margin: 0 0 4px;
   font-size: 13px;
@@ -3169,14 +3186,16 @@ body {
 }
 
 /* 「为什么它算卡住」那句。次要文字色，跟 .ink-review-kind 那一档同分量，
-   但不借群青。 */
+   但不借群青。「一拖再拖」和「这一周的进出」里那两句口径说明也用它——三处
+   是同一个角色：给上面那句话补一个「凭什么」或者「不含什么」。 */
 .ink-review-stalled-why {
   margin: 0 0 8px;
   font-size: 12px;
   color: var(--dim);
 }
 
-.ink-review-stalled-list {
+.ink-review-stalled-list,
+.ink-review-postponed-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -3185,10 +3204,34 @@ body {
    `margin-left: auto` 推到右边——复用那个类不是图省事：它在 AI 观察那条里
    扮演的正是同一个角色（一行末尾那颗安静的次要动作），为这一处再挑一遍字号
    和透明度只会多一份会跟它漂移的值。24px 点击下限那两条也一并继承了。 */
-.ink-review-stalled-list > li {
+.ink-review-stalled-list > li,
+.ink-review-postponed-list > li {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* 「推了 8 次」。**这一组的信息量全在这个数上**（`postponedToReview` 就是按它
+   排序的），所以它不能只活在 `title` 里。次要文字色、不借群青——它是从任务
+   本身数出来的事实，跟旁边那句解释同分量。
+   **不加 `margin-left: auto`**：那一行里 `.ink-review-dismiss` 已经带着一个，
+   再来一个会把空白平分两半、把这个数推到行中央去。让它紧挨着标题读作
+   「交房租，推了 8 次……看过了」，比让它孤零零飘在中间清楚。 */
+.ink-review-postponed-count {
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* 「完成 8 条 · 新进来 5 条 · 净 +3 条」——这一屏唯一一处报「还债」的数字。
+   字号比正文（13px）小一档、比解释句（12px）大一档，因为它既是数据也是那句
+   话本身；`font-variant-numeric` 让三个数字等宽对齐，扫一眼时它们才排成一条
+   线而不是锯齿。**不上群青**：本地算的，不是 AI 写的。 */
+.ink-review-pace-text {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink-you);
+  font-variant-numeric: tabular-nums;
 }
 
 .ink-review-list { list-style: none; margin: 0; padding: 0; max-width: var(--measure); }
@@ -4900,15 +4943,27 @@ details[open] > .ink-more-summary::before { content: '▾ '; }
 /* 「每年」那个勾选。min-height 24px，同 .ink-cal-pref——本来 19px。 */
 .ink-cd-yearly { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; font-size: 12px; color: var(--dim); cursor: pointer; }
 
-/* 宽了就分列：一列至少 300px。窄屏自然退回单列，不用媒体查询。 */
+/* 宽了就分列：一列至少 380px。窄屏自然退回单列，不用媒体查询。
+   **300px 那个下限不够**：一行里除了名字还有「还有 N 天」、日期、「每年」、
+   编辑、删除和五个 10px 的间隙，实测这些固定部分加起来约 290px——300px 的列
+   只剩 10px 给名字，于是整行折成四行（见下面 `.ink-cd-row` 那条）。380px 是
+   量出来的：1440px 下 3 列 ×429px，名字还有 139px 可显示。 */
 .ink-cd-list {
   margin: 0; padding: 0; list-style: none;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
   gap: 0 24px;
 }
+/* **不折行。** 原来是 `flex-wrap: wrap`，而这一行里挤着名字 + 还有几天 + 日期
+   + 每年 + 编辑 + 删除 + 五个 10px 间隙。分列之后每列只有三百来像素，固定部分
+   就占掉约 290px，于是 `wrap` 每次都会触发，把 ✎ 和 × 甩到下一行、跟它所属的
+   那一条脱开。实测（1440 / 1024 / 768 / 390 四个宽度，每一行都中招）：
+   1440px 下四列 316px，每行的子元素占了**四个**不同的纵向位置、行高 71px。
+   名字那一格本来就是按「会让位」设计的（`flex: 1 1 auto` + `min-width: 0` +
+   `nowrap` + `text-overflow: ellipsis`），是 `wrap` 让它没法让位——先折行，
+   轮不到收缩。改成 nowrap 之后名字按省略号收，六个元素永远在同一行上。 */
 .ink-cd-row {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 10px;
   padding: 6px 0; border-bottom: 1px solid var(--rule);
 }
 .ink-cd-name { flex: 1 1 auto; min-width: 0; color: var(--ink-you); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4987,9 +5042,29 @@ details[open] > .ink-more-summary::before { content: '▾ '; }
 .ink-hstat-nums { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 10px; font-size: 12px; color: var(--dim); }
 .ink-hstat-nums b { color: var(--ink-you); font-weight: 600; }
 
-/* 月度打卡表：一个月三十一个方格，`flex-wrap` 自己折行，不写死一周七列——
-   这张表读的是「这个月密不密」，不是「星期几」，对齐到周反而要补一堆空格。 */
-.ink-hstat-grid { display: flex; flex-wrap: wrap; gap: 3px; }
+/* 月度打卡表：**七列，一周一行**，1 号之前补空格（组件那边按 `weekStart` 算）。
+   这里原来是 `display: flex; flex-wrap: wrap`，注释写的理由是「这张表读的是
+   这个月密不密，不是星期几，对齐到周反而要补一堆空格」——**那句话的前提不成立**：
+   格子里印着 1..31，它长得就是一张月历，没有人会不按周去读它。而 `flex-wrap`
+   让「一行几天」由容器宽度决定，实测同一批 30 天：
+
+     1440px → 11 / 11 / 8      1024px → 16 / 14
+      768px → 11 / 11 / 8       390px → 12 / 12 / 6
+
+   同一个月的同一份数据，换个窗口宽度就换一个形状——「密不密」这个读法本身也
+   跟着塌了，而且每一行的第一个格子在不同宽度下指向不同的日期。写死七列之后
+   形状不再随宽度变，还多出来一件原来读不出的事：**你总在周几漏**。
+   代价是最多六格空白，那几格不画边框（画了就成了「那几天漏打卡」）。 */
+.ink-hstat-grid { display: grid; grid-template-columns: repeat(7, 23px); gap: 3px; }
+/* 星期几那一行。**没有它，七列也是不可读的**——知道「第一列是周一」得靠这行字，
+   否则七列和十一列一样，都是一堆没标注的格子。跟 `.ink-hstat-cell` 同宽同间距，
+   才能跟下面的格子对齐。 */
+.ink-hstat-wd {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 23px; height: 14px; font-size: 11px; color: var(--dim);
+}
+/* 1 号之前那几格：占位，不画边框。 */
+.ink-hstat-blank { width: 23px; height: 23px; }
 .ink-hstat-year { margin-top: 8px; }
 /* 一天一格。字号 11px（全站下限，原来是 10px：一个月三十一格，量测夹具
    一屏就数出三十几处越线，全在这里）；格子跟着从 22px 长到 23px，两位数
@@ -5716,14 +5791,72 @@ details[open] > .ink-more-summary::before { content: '▾ '; }
   color: var(--dim);
 }
 
-/* 摆不下的那几条提醒收成的一行（App.tsx 的 dueTasks 截断）。跟它上面那几条
-   Alert 同一档间距，视觉上属于同一摞；不上群青——提醒是任务自己的时间事实，
-   不是 AI 产出。 */
-.ink-due-more {
+/* 两条起的那条聚合提醒横幅里的任务清单（App.tsx 的 dueTasks 聚合）。
+   一行一条，标题点得动（打开那条任务）。不上群青——提醒是任务自己的时间
+   事实，不是 AI 产出。 */
+.ink-due-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ink-due-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 列表里那颗勾选圈。**形状照抄行档那颗 `.ink-trow-check`**（24px 圆、1.5px
+   边、未完成时里面是空的）——同一个动作在整个应用里该长同一个样子。没有
+   `-done` 那一档：这一摞里的条目按定义都还没完成（完成的会被 `isSettled`
+   过滤掉，整条从横幅上消失）。 */
+.ink-due-check {
+  box-sizing: border-box;
+  border: 1.5px solid var(--rule);
+  cursor: pointer;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  color: var(--sheet);
+  background: 0 0;
+  border-radius: 50%;
+  flex: none;
+  justify-content: center;
+  align-items: center;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+}
+
+.ink-due-check:hover {
+  border-color: var(--ink-you);
+}
+
+/* 列表里那颗标题按钮。形状跟行档的 .ink-trow-open、日历的 .ink-agenda-title
+   同一档（裸 button、24px 点击目标、长标题自己折行不撑宽容器）——任务标题是
+   人写的，一个长 URL 就够把这条横幅顶出屏幕。 */
+.ink-due-open {
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink-you);
+  text-align: left;
+  background: 0 0;
+  border: 0;
+  min-height: 24px;
+  padding: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ink-due-open:hover {
+  text-decoration: underline;
+}
+
+/* 没列出来的那几条折成的一行（App.tsx 的 DUE_LIST_MAX 截断）。 */
+.ink-due-more {
   font-size: 12px;
   color: var(--dim);
 }

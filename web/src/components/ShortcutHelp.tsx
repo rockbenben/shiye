@@ -41,7 +41,11 @@ export const SHORTCUTS: ShortcutRow[] = [
   { scope: 'page', kind: 'compose', keys: 'C', what: '新任务表单（标题里能直接写时间/标签）' },
   { scope: 'page', kind: 'search', keys: '/', what: '跳到搜索框' },
   { scope: 'page', kind: 'palette', keys: 'Ctrl + K', what: '命令面板（Mac 是 ⌘ + K）' },
-  { scope: 'page', kind: 'view', keys: '1 – 9', what: '切到导航上第 1～9 个去处' },
+  // 范围用「～」，跟同一行右边那句「第 1～9 个去处」以及别处的范围写法
+  // （设置里的「10～3600 秒」「1～180 分钟」）一致。原来写的是 `1 – 9`
+  // （en dash + 空格），于是**同一行里两种范围写法并排**——两个都对，但
+  // 摆在一起会让人疑心它们说的是两件事。全站范围一律用「～」。
+  { scope: 'page', kind: 'view', keys: '1～9', what: '切到导航上第 1～9 个去处' },
   { scope: 'page', kind: 'edit', keys: 'E', what: '编辑选中的那一条（只选中一条时）' },
   { scope: 'page', kind: 'done', keys: 'D', what: '把选中的几条标成已完成' },
   { scope: 'page', kind: 'due', keys: 'T / M / W', what: '把选中的几条改到今天 / 明天 / 下周' },

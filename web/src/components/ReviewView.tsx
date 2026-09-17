@@ -3,7 +3,8 @@ import { Button } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
 import type { Insight, InboxItem, SmartFilter, Task } from '../types.js';
 import { isSettled, REVIEWED_QUIET_DAYS } from '../lib/taskView.js';
-import { stalledToReview, weeklyReview } from '../lib/weeklyReview.js';
+import { postponedToReview, stalledToReview, weeklyReview } from '../lib/weeklyReview.js';
+import { THROUGHPUT_DAYS, throughput, throughputLabel } from '../lib/throughput.js';
 
 const KIND_LABEL: Record<Insight['kind'], string> = {
   pattern: '反复出现',
@@ -105,6 +106,32 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
   const todo = weeklyReview(tasks, inbox, now);
 
   /**
+   * **一拖再拖的那几条**——改过 `POSTPONE_MIN` 次以上期、还挂着的。
+   *
+   * 跟「卡住的项目」同形同档：本地算、不上群青、一颗「看过了」。判据（含
+   * 「为什么门槛跟推荐面板共用一个常量、候选池却故意不共用」）全在
+   * `lib/weeklyReview.ts` 的 `postponedToReview`，这边只负责摆出来。
+   *
+   * 跟上面那行数字**共用同一个出口**——不然会出现「清单上写 3 条、底下只列出
+   * 1 条」，那比不显示这份清单更糟（`weeklyReview.ts` 顶部那段）。
+   */
+  const postponed = postponedToReview(tasks, now);
+
+  /**
+   * **这一周的进出**——完成了多少、新进来多少、差多少。
+   *
+   * 这一屏里唯一一个回答「我是在追上，还是在落后」的东西，也是唯一一个**不
+   * 是债**的数字：上面每一节说的都是「你还欠多少」，而只报债不报还债的清单，
+   * 久了就整份不再被当真（这一屏存在的全部意义就是被当真）。判据与口径说明
+   * 全在 `lib/throughput.ts`，这边只负责渲染。
+   *
+   * **一个群青都不上**，跟「卡住的项目」「这一周该过一遍的」同一档：它是从
+   * `completedAt`/`createdAt` 现算出来的结构性事实，不是 AI 写的观察，所以也
+   * 不用等「让 AI 回顾一遍」、不花一次额度。
+   */
+  const paceText = throughputLabel(throughput(tasks, now));
+
+  /**
    * **「让 AI 回顾一遍」这颗按钮。**
    *
    * 原来这儿是一句指路：「在这个文件夹里敲 `/review`」。那句话漏掉了两样人根本
@@ -177,7 +204,12 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
   // 出现在这里」只描述了状态、没给出口，真正的做法写在页面底部那条脚注里
   // （App.tsx 的 .ink-review-nudge），而那条脚注在这个视图上已经不再渲染
   // ——两句话说同一件事、又各说一半。
-  if (open.length === 0 && stalled.length === 0 && todo.length === 0) {
+  //
+  // **`paceText` 也是判据的一部分**：一个这周完成了 8 条、新进来 5 条、手上
+  // 一条待办都不剩的人，打开这一屏看到的是一句「还没有回顾」——那句话说的是
+  // 「AI 还没产出过观察」，他读到的却是「这里什么都没有」，而他刚刚明明做完
+  // 了八件事。有进出数据就不是空状态，走下面那条路把那句话显示出来。
+  if (open.length === 0 && stalled.length === 0 && todo.length === 0 && postponed.length === 0 && paceText === '') {
     return (
       <>
         {/* 空状态只说「这一屏将来会有什么」，「怎么让它有」交给下面那颗按钮——
@@ -193,6 +225,46 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
   }
 
   const titleOf = (id: string) => tasks.find((t) => t.id === id)?.title;
+
+  /**
+   * 「这一周的进出」这一节。`paceText` 是空串时整节不渲染——两个数都是 0 时
+   * 说「完成 0 条、新进来 0 条」是对一个这周没碰过这个应用的人每天说的一句
+   * 废话（跟 `workload.ts`「一条都没估过时整句不出」同一条规矩）。
+   *
+   * **放在最前面**：它回答的是「这一周过得怎么样」，下面几节回答的是「有什么
+   * 要我决定的」——先给坐标，再看清单。它也是这一屏唯一一处会说「你干得不错」
+   * 的地方，摆在一串债后面就成了安慰，摆在前头才是前提。
+   *
+   * 窗口是滚动 7 天不是日历周，理由是「周一早上只有一个小时的样本」，
+   * 见 `lib/throughput.ts` 顶部。文案里不写「这一周」多少天，只写「这一周」
+   * ——`THROUGHPUT_DAYS` 一改（比如收成 14 天），那句话就跟着变成假的，而
+   * 这个标题里没有数字，所以它不会飘。天数写进 `title` 里，那是现算的。
+   */
+  const paceBlock = paceText === '' ? null : (
+    <section className="ink-review-pace" aria-labelledby="ink-review-pace-h">
+      <h2
+        className="ink-review-stalled-h"
+        id="ink-review-pace-h"
+        title={`最近 ${THROUGHPUT_DAYS} 天的进出，不是自然周——周一早上那种窗口只有一个小时的样本。`}
+      >
+        这一周的进出
+      </h2>
+      {/* 鼠标停在数字上才解释符号的方向：写进正文里是每天都要读一句定义，
+          而正负号本身已经说清了大半（`throughputLabel` 专门保留它）。 */}
+      <p
+        className="ink-review-pace-text"
+        title="完成数减去新进来的数：正数说明积压变少了，负数说明变多了。"
+      >
+        {paceText}
+      </p>
+      {/* **口径必须写在界面上。** 删除是软删除，任务进了 `data/trash/`、不在
+          `data/tasks/` 里，所以「新进来」不含「建了又删掉」的那些——`net`
+          因此偏向乐观。这一条不修（读 `trash/` 能补准，但那份数据在前端是按需
+          拉的、可能滞后），改成把这句说出来：**宁可让人知道这个数不含什么，
+          也不要让它看起来比实际准**（`lib/throughput.ts` 顶部那段）。 */}
+      <p className="ink-review-stalled-why">不含已经删掉的——那些进了回收站，这里数不到。</p>
+    </section>
+  );
 
   const todoBlock = todo.length === 0 ? null : (
     <section className="ink-review-todo" aria-labelledby="ink-review-todo-h">
@@ -246,6 +318,54 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
   );
 
   /**
+   * 「一拖再拖」这一节。跟 `stalledBlock` 一字不差的形状：一句解释为什么算、
+   * 一串能点开的标题、每行末尾一颗「看过了」。
+   *
+   * **为什么这一节非有不可**：`postponeCount` 早就在数了，推荐面板那组
+   * （`lib/suggest.ts` 的 `postponed`）也早把这几条摆出来了——**缺的从来不是
+   * 「没有地方看」，是「没有地方做那个决定」**。那个面板长在「今天」里、给的
+   * 唯一动作是「加到今天」，而那正是他做过八次的那个动作。一条被推了八次的
+   * 任务，缺的不是再推回今天，是「还要不要它」。这个决定（搁置 / 放弃）在
+   * 卡片 ⋯ 里，这一节只负责把判断摆到他面前。
+   */
+  const postponedBlock = postponed.length === 0 ? null : (
+    <section className="ink-review-postponed" aria-labelledby="ink-review-postponed-h">
+      <h2 className="ink-review-stalled-h" id="ink-review-postponed-h">一拖再拖 {postponed.length}</h2>
+      {/* 说清「再推一次不是答案」——不然这一节看起来就是同一份「今天该做什么」
+          清单的第三个版本，而它会跟推荐面板那组长得一模一样。 */}
+      <p className="ink-review-stalled-why">
+        改过好几次期、还在原地。缺的不是再推一次——是决定它还要不要：要就拆小到能动手，不要就搁置或者放弃掉（在卡片的 ⋯ 里）。
+      </p>
+      <ul className="ink-review-postponed-list" role="list">
+        {postponed.map((t) => (
+          <li key={t.id}>
+            <button type="button" className="ink-review-link" onClick={() => onOpen(t.id)}>
+              {t.title}
+            </button>
+            {/* 推迟次数是这一组的信息量所在（`postponedToReview` 就是按它排的
+                序），所以摆在按钮旁边；「看过了」那颗跟「卡住的项目」共用——
+                同一个动作、同一段 `title` 解释，不另写一份。
+                **措辞跟卡片上那个记号逐字一致（「推迟过 N 次」）**：原来这儿写
+                的是「推了 N 次」，同一件事在同一屏里两种说法——他在这行看到
+                「推了 2 次」，点进卡片变成「推迟过 2 次」，会以为说的是两件事。
+                卡片那两处（`TaskCard` 的 `ink-overdue-mark`、建议面板的
+                `ink-suggest-when`）才是正本，改措辞该从那儿改起。 */}
+            <span className="ink-review-postponed-count">推迟过 {t.postponeCount} 次</span>
+            <button
+              type="button"
+              className="ink-review-dismiss"
+              title={`给它盖个「看过了」的章，${REVIEWED_QUIET_DAYS} 天内这一屏不再问你。它本身一个字都不会变。`}
+              onClick={() => onReviewed(t.id)}
+            >
+              看过了
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+
+  /**
    * **「怎么再跑一遍」这句话，这一屏自己常驻。**
    *
    * 它原来只长在空状态里，于是「回顾上摆着东西的时候，怎么再跑一次」这个出口
@@ -257,12 +377,14 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
    * 已经**永远为假**了：脚注只在有过期任务时出现，而有过期任务就意味着清单
    * 里有「N 条已经过期」那一行，这一屏就不是空的。
    */
-  if (open.length === 0) return <>{todoBlock}{stalledBlock}{runBlock}</>;
+  if (open.length === 0) return <>{paceBlock}{todoBlock}{stalledBlock}{postponedBlock}{runBlock}</>;
 
   return (
     <>
+    {paceBlock}
     {todoBlock}
     {stalledBlock}
+    {postponedBlock}
     <ul className="ink-review-list" role="list">
       {open.map((i) => (
         <li className="ink-review-item" key={i.id}>

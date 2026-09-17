@@ -3,6 +3,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { ReviewView } from './ReviewView.js';
 import { task } from '../test-utils.js';
 import { REVIEWED_QUIET_DAYS } from '../lib/taskView.js';
+import { POSTPONE_MIN } from '../lib/suggest.js';
+import { THROUGHPUT_DAYS } from '../lib/throughput.js';
 import type { Insight, Task } from '../types.js';
 
 /** 「这一周该过一遍的」要一个 now；这一族既有用例不关心具体是哪天。 */
@@ -361,5 +363,208 @@ describe('ReviewView：卡住的项目上那颗「看过了」', () => {
     show([parent(), kid]);
     const b = screen.getByRole('button', { name: '看过了' });
     expect(b.getAttribute('title')).toContain(`${REVIEWED_QUIET_DAYS} 天`);
+  });
+});
+
+/**
+ * **「这一周的进出」**——完成了多少、新进来多少、差多少。
+ *
+ * 这一屏里唯一一个回答「我是在追上，还是在落后」的东西，也是唯一一个**不是
+ * 债**的数字：上面每一节说的都是「你还欠多少」，而只报债不报还债的清单久了
+ * 就整份不再被当真。判据与口径全在 `lib/throughput.ts`（那边另有测试），
+ * 这一族测的是这一屏怎么把它摆出来。
+ */
+describe('ReviewView：这一周的进出', () => {
+  const NOW = new Date('2026-08-25T12:00:00.000Z');
+  const daysAgo = (n: number) => new Date(NOW.getTime() - n * 24 * 3600 * 1000).toISOString();
+
+  const show = (tasks: Task[]) => render(
+    <ReviewView
+      insights={[]} tasks={tasks} inbox={[]} now={NOW}
+      onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()}
+      onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />,
+  );
+  const section = () => document.querySelector('.ink-review-pace') as HTMLElement | null;
+
+  it('有进出就把三个数说出来', () => {
+    show([
+      task({ id: 'a', completedAt: daysAgo(1) }),
+      task({ id: 'b', completedAt: daysAgo(2) }),
+      task({ id: 'c', createdAt: daysAgo(3) }),
+    ]);
+    const text = section()?.textContent ?? '';
+    expect(text).toContain('完成 2 条');
+    expect(text).toContain('新进来 1 条');
+    expect(text).toContain('净 +1 条');
+  });
+
+  /**
+   * **两个数都是 0 时整节不渲染。** 说「完成 0 条、新进来 0 条」是对一个这周
+   * 没碰过这个应用的人每天说的一句废话（跟 `workload.ts`「一条都没估过时整句
+   * 不出」同一条规矩）。调用方判的就是 `throughputLabel` 返回的空串。
+   */
+  it('两个数都是 0 时整节不出现——不报一句每天都要看的废话', () => {
+    show([task({ id: 'a' })]);
+    expect(section()).toBeNull();
+    expect(screen.queryByRole('heading', { name: '这一周的进出' })).toBeNull();
+  });
+
+  /**
+   * **「这周一条都没做完」正是这一节最该说出来的那种情况**，不能被「0 就是
+   * 没有」的判据顺手吞掉——只有两个数**都**是 0 才是空。
+   */
+  it('只有完成是 0 时照样报——「完成 0 条 · 新进来 5 条」正是该说的', () => {
+    show([task({ id: 'a', createdAt: daysAgo(1) })]);
+    expect(section()?.textContent).toContain('完成 0 条');
+  });
+
+  /**
+   * **口径必须写在界面上。** 删除是软删除，任务进了 `data/trash/`、不在
+   * `data/tasks/` 里，所以「新进来」不含「建了又删掉」的那些——`net` 因此
+   * 偏向乐观。这一条不修（读 `trash/` 能补准，但那份数据在前端是按需拉的、
+   * 可能滞后），改成把这句说出来。
+   */
+  it('**说清这个数不含什么**——宁可让人知道口径，也不要让它看起来比实际准', () => {
+    show([task({ id: 'a', completedAt: daysAgo(1) })]);
+    expect(section()?.textContent).toContain('不含已经删掉的');
+  });
+
+  /**
+   * **不上群青。** 群青是配给给 AI 产出的内容的（`theme.css` 顶部），而这一节
+   * 是从 `completedAt`/`createdAt` 现算出来的结构性事实。类名一改，字还在、
+   * 颜色静默变成群青，别的断言都不会红——所以单独盯一条。
+   */
+  it('数字不上群青——它是本地算的事实，不是 AI 写的观察', () => {
+    show([task({ id: 'a', completedAt: daysAgo(1) })]);
+    const p = document.querySelector('.ink-review-pace-text') as HTMLElement;
+    expect(p.textContent).toContain('完成 1 条');
+    expect(p.classList.contains('ink-review-text')).toBe(false);
+  });
+
+  /**
+   * **它排在最前面**：先给坐标（这一周过得怎么样），再看清单（有什么要我决定
+   * 的）。摆在一串债后面就成了安慰，摆在前头才是前提。
+   */
+  it('排在最前面——先给坐标，再看清单', () => {
+    show([task({ id: 'a', completedAt: daysAgo(1), due: daysAgo(3) })]);
+    const heads = [...document.querySelectorAll('.ink-review-stalled-h')].map((h) => h.textContent);
+    expect(heads[0]).toContain('这一周的进出');
+    // 「N 条已经过期」那一行确实在（不然这条测的是个空屏）。
+    expect(document.querySelector('.ink-review-todo')).not.toBeNull();
+  });
+
+  /**
+   * **只有进出、别的什么都没有时，不说「还没有回顾」。** 那句话说的是「AI 还
+   * 没产出过观察」，他读到的却是「这里什么都没有」——而他刚刚明明做完了八件
+   * 事。有进出数据就不是空状态。
+   */
+  it('只有进出数据时不说「还没有回顾」——那句话会读成「你什么都没干」', () => {
+    show([task({ id: 'a', status: 'done', completedAt: daysAgo(1) })]);
+    expect(screen.queryByText(/还没有回顾/)).toBeNull();
+    expect(section()?.textContent).toContain('完成 1 条');
+  });
+
+  /** 窗口长度写在 `title` 里现算，不写进标题——标题里没有数字，所以
+   *  `THROUGHPUT_DAYS` 改成 14 也不会让那句话变成假的。 */
+  it('标题里没有天数，天数在 title 上现算', () => {
+    show([task({ id: 'a', completedAt: daysAgo(1) })]);
+    const h = screen.getByRole('heading', { name: '这一周的进出' });
+    expect(h.textContent).toBe('这一周的进出');
+    expect(h.getAttribute('title')).toContain(String(THROUGHPUT_DAYS));
+  });
+});
+
+/**
+ * **「一拖再拖」**——改过好几次期还在原地的。
+ *
+ * `postponeCount` 早就在数了，推荐面板那组也早把这几条摆出来了；**缺的从来
+ * 不是「没有地方看」，是「没有地方做那个决定」**——那个面板给的唯一动作是
+ * 「加到今天」，而那正是他做过八次的那个动作。这一节要的是「还要不要它」。
+ * 判据在 `lib/weeklyReview.ts` 的 `postponedToReview`（那边另有测试）。
+ */
+describe('ReviewView：一拖再拖', () => {
+  const show = (tasks: Task[], onReviewed = vi.fn()) => {
+    render(<ReviewView
+      insights={[]} tasks={tasks} inbox={[]} now={NOW_REVIEW}
+      onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()}
+      onReviewed={onReviewed} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    return onReviewed;
+  };
+  const section = () => document.querySelector('.ink-review-postponed') as HTMLElement | null;
+
+  it('列出那几条，标题上带条数', () => {
+    show([task({ id: 'a', title: '交房租', postponeCount: POSTPONE_MIN + 6 })]);
+    expect(screen.getByRole('heading', { name: /一拖再拖/ }).textContent).toContain('1');
+    expect(screen.getByRole('button', { name: '交房租' })).toBeTruthy();
+  });
+
+  it('门槛以下的不进——差一次就是差一次', () => {
+    show([task({ id: 'a', title: '交房租', postponeCount: POSTPONE_MIN - 1 })]);
+    expect(section()).toBeNull();
+  });
+
+  /** **次数要看得见。** 这一组的信息量全在那个数字上（判据就是按它排的序），
+   *  只活在 `title` 里等于没有。 */
+  it('每一条旁边写着推了多少次', () => {
+    show([task({ id: 'a', title: '交房租', postponeCount: POSTPONE_MIN + 6 })]);
+    expect(document.querySelector('.ink-review-postponed-count')?.textContent)
+      .toContain(String(POSTPONE_MIN + 6));
+  });
+
+  /** **说清「再推一次不是答案」**——不然这一节看起来就是同一份「今天该做
+   *  什么」清单的第三个版本，而它会跟推荐面板那组长得一模一样。 */
+  it('说清缺的不是再推一次，是决定它还要不要', () => {
+    show([task({ id: 'a', postponeCount: POSTPONE_MIN })]);
+    const why = document.querySelector('.ink-review-postponed .ink-review-stalled-why')?.textContent ?? '';
+    expect(why).toContain('再推一次');
+    expect(why).toContain('搁置');
+    expect(why).toContain('放弃');
+  });
+
+  it('点标题打开那条任务', () => {
+    const onOpen = vi.fn();
+    render(<ReviewView
+      insights={[]} tasks={[task({ id: 'a', title: '交房租', postponeCount: POSTPONE_MIN })]}
+      inbox={[]} now={NOW_REVIEW} onDismiss={vi.fn()} onOpen={onOpen} onGo={vi.fn()}
+      onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    fireEvent.click(screen.getByRole('button', { name: '交房租' }));
+    expect(onOpen).toHaveBeenCalledWith('a');
+  });
+
+  it('每一条旁边都有一颗「看过了」，点了把那条的 id 交出去', () => {
+    const onReviewed = show([task({ id: 'a', title: '交房租', postponeCount: POSTPONE_MIN })]);
+    fireEvent.click(screen.getByRole('button', { name: '看过了' }));
+    expect(onReviewed).toHaveBeenCalledWith('a');
+  });
+
+  it('盖过章的那一条整个不显示，这一节跟着消失', () => {
+    show([task({ id: 'a', title: '交房租', postponeCount: POSTPONE_MIN, reviewedAt: NOW_REVIEW.toISOString() })]);
+    expect(screen.queryByRole('heading', { name: /一拖再拖/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: '交房租' })).toBeNull();
+  });
+
+  /**
+   * **跟「知道了」分得清。** 那一颗是给 AI 观察用的（点了写 `dismissedAt`，
+   * 意思是「这条观察我不认」）；这一颗承认事实、只是为它做了决定。跟「卡住的
+   * 项目」那一段是同一条规矩。
+   */
+  it('这一段里没有「知道了」——那颗是给 AI 观察的，不是给事实的', () => {
+    show([task({ id: 'a', postponeCount: POSTPONE_MIN })]);
+    expect(within(section()!).queryByRole('button', { name: '知道了' })).toBeNull();
+  });
+
+  /** 清单上那一行**不做成按钮**，跟「卡住的项目」同一个理由：下面那一段就
+   *  列着它们，而这一节要的那个决定在卡片的 ⋯ 里，跳走反而离答案更远。 */
+  it('清单上那一行不做成按钮——答案就在下面那一段里', () => {
+    show([task({ id: 'a', postponeCount: POSTPONE_MIN })]);
+    expect(screen.queryByRole('button', { name: /条改过/ })).toBeNull();
+    expect(document.querySelector('.ink-review-todo-flat')?.textContent).toContain('一直没动');
+  });
+
+  /** **只有这一节有内容时，也不该显示空状态那句话。** 空状态判据漏了这一节
+   *  的话，屏上会同时出现「还没有回顾」和一条列着的任务。 */
+  it('只有这一节有内容时，不说「还没有回顾」', () => {
+    show([task({ id: 'a', postponeCount: POSTPONE_MIN })]);
+    expect(screen.queryByText(/还没有回顾/)).toBeNull();
   });
 });

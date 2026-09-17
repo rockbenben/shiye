@@ -1,9 +1,11 @@
 import type { InboxItem, SmartFilter, Task } from '../types.js';
 import {
-  countStale, parkedQuietLabel, waitingQuietLabel, recentlyReviewed,
+  countStale, isSettled, parkedQuietLabel, waitingQuietLabel, recentlyReviewed,
   PARKED_QUIET_DAYS, WAITING_QUIET_DAYS,
 } from './taskView.js';
 import { stalledProjects } from './hierarchy.js';
+// 只借那个门槛常量，不借它的候选池——理由写在 `postponedToReview` 上面那段。
+import { POSTPONE_MIN } from './suggest.js';
 
 /**
  * 「这一周该过一遍的」——GTD 每周回顾的那份清单，一次看完。
@@ -30,7 +32,7 @@ import { stalledProjects } from './hierarchy.js';
  */
 export interface ReviewRow {
   /** 稳定的 key，也是调用方决定「点了跳去哪」的依据。 */
-  key: 'inbox' | 'overdue' | 'stalled' | 'waiting' | 'parked';
+  key: 'inbox' | 'overdue' | 'stalled' | 'waiting' | 'parked' | 'postponed';
   /** 这一行说的那句话，数字已经拼进去了。 */
   text: string;
   count: number;
@@ -70,6 +72,45 @@ export function stalledToReview(tasks: Task[], now: Date): Task[] {
   return stalledProjects(tasks).filter((t) => !recentlyReviewed(t, now));
 }
 
+/**
+ * **这一屏该拿出来问的「一拖再拖」**——改过 `POSTPONE_MIN` 次以上期的，减去他
+ * 最近已经看过的。次数多的排前面：这一组的信息量全在那个数字上。
+ *
+ * ## 它跟「推荐任务」面板里那一组是什么关系
+ *
+ * 那一组（`lib/suggest.ts` 的 `postponed`）**已经把这几条摆出来了**，所以这一
+ * 节存在的理由不是「没有地方看」——是**没有地方做那个决定**。那个面板长在
+ * 「今天」里，它给的唯一动作是「加到今天」：**而那正是他做过八次的那个动作**。
+ * 一条被推了八次的任务，缺的从来不是「再推回今天」，是「还要不要它」。
+ * 那个面板自己也知道这一点，它的注释里写着「想做的**未必**是「加到今天」——
+ * 也可能是打开它改小、或者干脆放弃」，只是它的形状装不下另一个动作。
+ *
+ * 这一屏装得下：它问的就是「这一周有什么需要我做个决定的」，而这一类的决定
+ * 是**搁置**（暂时不做）或者**放弃**（决定不做），两个都在卡片 ⋯ 里。
+ * 这一节只负责把判断摆出来，一颗「看过了」就够——**不去替他做那个决定**，
+ * 跟「卡住的项目」一字不差的立场。
+ *
+ * ## 门槛共用，候选池不共用
+ *
+ * 门槛（`POSTPONE_MIN`）**跟推荐面板那组是同一个常量**，不在这儿另写一个 2
+ * ——那个常量的注释专门讲过「两处各写一个，将来调门槛只会改到一处」。
+ *
+ * 但候选池**不一样，是有意的**：那边是 `isCandidate`（今天列表之外、还能动
+ * 的），这边是「只要还挂着就算」。因为一条天天被他推迟的任务**很可能就赖在
+ * 「今天」里**——那正是它一直被推迟的表现，而它恰恰是这一节最该问的那一条。
+ * 照搬那个池子会把最典型的那种漏掉。
+ */
+export function postponedToReview(tasks: Task[], now: Date): Task[] {
+  return tasks
+    .filter((t) => !isSettled(t))
+    // `typeof` 那一道：`data/tasks/` 是手改得到的文件，缺字段的老数据里
+    // `postponeCount` 是 undefined，而 `undefined >= 2` 恰好是 false——不写
+    // 也能跑。写出来是因为这里要的是「数过、而且够多」，不是「不比 2 小」。
+    .filter((t) => typeof t.postponeCount === 'number' && t.postponeCount >= POSTPONE_MIN)
+    .filter((t) => !recentlyReviewed(t, now))
+    .sort((a, b) => b.postponeCount - a.postponeCount);
+}
+
 export function weeklyReview(tasks: Task[], inbox: InboxItem[], now: Date): ReviewRow[] {
   const rows: ReviewRow[] = [];
 
@@ -91,7 +132,20 @@ export function weeklyReview(tasks: Task[], inbox: InboxItem[], now: Date): Revi
     rows.push({ key: 'stalled', count: stalled, go: null, text: `${stalled} 个项目卡住了，一个能动的下一步都没有` });
   }
 
-  // ④ 在等别人、久没动静的——该催了吗。
+  // ④ 一拖再拖——改过好几次期还在原地的。**不跳去处**，跟上面那条同一个理由：
+  //    下面那一段就列着它们，而且这一节要的那个决定（搁置 / 放弃）在卡片里，
+  //    跳去一个筛选过的列表反而离答案更远。门槛从常量拿，不在这儿另写一个 2。
+  const postponed = postponedToReview(tasks, now).length;
+  if (postponed > 0) {
+    rows.push({
+      key: 'postponed',
+      count: postponed,
+      go: null,
+      text: `${postponed} 条改过 ${POSTPONE_MIN} 次以上期，一直没动`,
+    });
+  }
+
+  // ⑤ 在等别人、久没动静的——该催了吗。
   const waiting = tasks.filter((t) => waitingQuietLabel(t, now) !== null).length;
   if (waiting > 0) {
     rows.push({
@@ -104,7 +158,7 @@ export function weeklyReview(tasks: Task[], inbox: InboxItem[], now: Date): Revi
     });
   }
 
-  // ⑤ 搁很久的（将来也许）——还要吗。
+  // ⑥ 搁很久的（将来也许）——还要吗。
   const parked = tasks.filter((t) => parkedQuietLabel(t, now) !== null).length;
   if (parked > 0) {
     rows.push({

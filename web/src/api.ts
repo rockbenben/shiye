@@ -169,6 +169,9 @@ export const api = {
   // 它塞进 state，界面显示的是假数据但看起来完全正常，用户改一下再保存
   // 还会把假数据整份 PUT 回服务端、覆盖掉桌面真实的 webhookUrl 之类。
   settings: () => route(() => req<Settings>('/api/settings'), offlineUnsupported('读取设置')),
+  /** 导出专用：这条回明文 `aiKey`（普通 `settings` 永远打码）。备份要带得动
+   *  密钥，换机才不用重填——代价见服务端 `LAN_WARNING`。 */
+  settingsExport: () => route(() => req<Settings>('/api/settings/export'), offlineUnsupported('导出数据')),
   saveSettings: (s: Settings) => route(
     () => req<Settings>('/api/settings', { method: 'PUT', body: body(s) }),
     offlineUnsupported('保存设置'),
@@ -313,6 +316,23 @@ export const api = {
   purgeAllTrash: () => route(
     () => req<{ purged: number }>('/api/trash', { method: 'DELETE' }),
     offlineUnsupported('清空垃圾箱'),
+  ),
+
+  /**
+   * 「导入数据」：把一份「导出数据」的九键 JSON 整表换回服务端（见
+   * server/src/import.ts、app.ts 的 POST /api/import）。服务端先校验，
+   * 校验不过 400 且 `data/` 一字节不碰——错误文本本身就是给用户看的中文、
+   * 点名到 `表[序号]`，调用方原样上屏即可，别在这儿换措辞。成功回执里的
+   * `backupFile` 是替换前自动留下的那份回滚备份（落 data/imports/），
+   * 带错了备份可以再把它导回去。
+   *
+   * **离线不做**：整表替换是能一次抹掉全部数据的写操作，手机上那份
+   * 本地缓存只是「上次在线看到的快照」，拿它当事实去换桌面那份，
+   * 换回去的就是过期的——比不导更糟。走 `offlineUnsupported` 说清楚。
+   */
+  importData: (payload: unknown) => route(
+    () => req<{ ok: true; counts: Record<string, number>; backupFile: string }>('/api/import', { method: 'POST', body: body(payload) }),
+    offlineUnsupported('导入数据'),
   ),
 
   // 只读，不解决——见 server/src/conflicts.ts 顶部的注释。离线时本来就没有

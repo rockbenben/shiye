@@ -23,11 +23,22 @@ const proposals: Proposal[] = [{
 const testAi = vi.fn(async (_cfg: { baseUrl: string; model: string; apiKey: string }) =>
   ({ ok: true }) as { ok: true } | { ok: false; error: string });
 
+/**
+ * 「导入数据」确认框里点「替换」调的就是它。跟 `testAi` 同一个套法——桩放在
+ * `vi.mock` 外面，每条用例自己决定它回什么（成功回执 / 那句 表[序号] 的 400）。
+ */
+const importData = vi.fn(async (_payload: unknown) =>
+  ({ ok: true as const, counts: {} as Record<string, number>, backupFile: '数据-导入前-20260926-120000.json' }));
+
 vi.mock('../api.js', () => ({
   api: {
     inbox: vi.fn(async () => inbox),
     tasks: vi.fn(async () => tasks),
     settings: vi.fn(async () => settings),
+    // 导出走的是这条掀开明文 `aiKey` 的专用路径——桩故意给一把「真」密钥，
+    // 下面的用例断言导出文件里躺的就是它（普通 `settings` 桩保持打码形状，
+    // 两份不一样才测得出导出用的是哪条）。
+    settingsExport: vi.fn(async () => ({ ...settings, aiKey: 'sk-plain-roundtrip' })),
     proposals: vi.fn(async () => proposals),
     // **`data/` 下的其余四张表也要有桩。** 这份桩原来只有四个方法，跟当时
     // 「导出只导四样」的实现是对称的——补齐实现之后，缺桩会让 `Promise.all`
@@ -38,6 +49,9 @@ vi.mock('../api.js', () => ({
     insights: vi.fn(async () => []),
     trash: vi.fn(async () => []),
     testAi: (cfg: { baseUrl: string; model: string; apiKey: string }) => testAi(cfg),
+    // **导入的桩也要有。** 跟上面 lists/folders 那条同一个陷阱：实现里接了
+    // `api.importData` 而这里没给桩，点「替换」就抛在 `is not a function` 上。
+    importData: (payload: unknown) => importData(payload),
   },
 }));
 
@@ -121,7 +135,9 @@ describe('SettingsModal：导出数据', () => {
 
     expect(parsed.inbox).toEqual(inbox);
     expect(parsed.tasks).toEqual(tasks);
-    expect(parsed.settings).toEqual(settings);
+    // 设置取自 /api/settings/export（明文密钥那条），不是打码的普通 GET——
+    // 换机场景里星号串会被新机存成「真值」，等于密钥没搬家。
+    expect(parsed.settings).toEqual({ ...settings, aiKey: 'sk-plain-roundtrip' });
     // 提议也要在里面：这颗按钮声称是「把 data/ 下的现状打包」，漏一份就是假话。
     expect(parsed.proposals).toEqual(proposals);
 
@@ -721,5 +737,104 @@ describe('设置 → AI 拆解：测试连接', () => {
 
     fireEvent.click(screen.getByText('DeepSeek'));
     expect(screen.queryByText(/连接成功/)).toBeNull();
+  });
+});
+
+/**
+ * 「导入数据」：选一份「导出数据」的九键 JSON，确认框先报每张表的条数、
+ * 说清整表替换/附件不恢复/回滚备份三件事，点「替换」才发请求。
+ * 这里的文件挑选走真实 `<input type="file">`（`fireEvent.change` 塞 File），
+ * 跟导出那条点真实按钮、跑真实 `exportData()` 是同一个思路。
+ */
+describe('SettingsModal：导入数据', () => {
+  /** 一份形状齐全的九键备份：八张表加 settings，条数就用顶部那几份夹具。 */
+  const nineKey = (over: Record<string, unknown> = {}) => JSON.stringify({
+    inbox, tasks, settings, proposals,
+    lists: [], folders: [], countdowns: [], insights: [], trash: [], ...over,
+  });
+
+  const pickFile = (content: string) => {
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File([content], 'b.json')] } });
+  };
+
+  /** antd 给两个汉字的按钮插空格（「替 换」），按文字找先去空白——本文件惯例。
+   *  找不到返回 undefined，不抛——第二条用例断的正是「没有这颗」。 */
+  const replaceBtn = () =>
+    screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '替换');
+
+  beforeEach(() => {
+    importData.mockReset();
+    importData.mockResolvedValue({ ok: true, counts: {}, backupFile: '数据-导入前-20260926-120000.json' });
+  });
+
+  /** 确认框画在「数据与服务」分区里：切走分区它必须一起被收掉，而不是
+   *  「看不见但还开着」——下次切回来冒出来一份不知道什么时候的旧确认。 */
+  it('开着确认框切去别的分区再切回：旧确认框不残留', async () => {
+    render(
+      <AntApp>
+        <SettingsModal {...NAV} open value={settings} onClose={noop} onSave={async () => {}} />
+      </AntApp>,
+    );
+    goto('数据与服务');
+    pickFile(nineKey());
+    await waitFor(() => expect(screen.getByText(/任务 1 条/)).toBeTruthy());
+    goto('功能模块');
+    goto('数据与服务');
+    expect(screen.queryByText(/任务 1 条/)).toBeNull();
+    expect(importData).not.toHaveBeenCalled();
+  });
+
+  it('合法备份 → 确认框先报条数、点「替换」把整份 payload 交出去', async () => {
+    render(
+      <AntApp>
+        <SettingsModal {...NAV} open value={settings} onClose={noop} onSave={async () => {}} />
+      </AntApp>,
+    );
+    goto('数据与服务');
+    pickFile(nineKey());
+
+    // 条数：任务夹具正好 1 条；三句警告里的附件那句也要在。
+    await waitFor(() => expect(screen.getByText(/任务 1 条/)).toBeTruthy());
+    expect(screen.getByText(/收件箱 1 条/)).toBeTruthy();
+    expect(screen.getByText(/附件文件不会被恢复/)).toBeTruthy();
+
+    fireEvent.click(replaceBtn()!);
+    await waitFor(() => expect(importData).toHaveBeenCalledTimes(1));
+    expect(importData.mock.calls[0][0]).toEqual(expect.objectContaining({ tasks, inbox, settings }));
+  });
+
+  it('坏 JSON：一句「不是合法的 JSON」，不发任何导入请求', async () => {
+    render(
+      <AntApp>
+        <SettingsModal {...NAV} open value={settings} onClose={noop} onSave={async () => {}} />
+      </AntApp>,
+    );
+    goto('数据与服务');
+    pickFile('{这根本不是 JSON');
+
+    // 断言写法照 App.test.tsx / OfflineWrite.test.tsx 的先例：message.error 渲染到
+    // DOM 上挂 `.ant-message-error`，文字本身也在 body 里。
+    await waitFor(() => expect(document.querySelector('.ant-message-error')).toBeTruthy());
+    expect(screen.getByText(/不是合法的 JSON/)).toBeTruthy();
+    expect(importData).not.toHaveBeenCalled();
+    // 也没走到确认框——屏幕上没有那颗「替换」。
+    expect(replaceBtn()).toBeUndefined();
+  });
+
+  it('服务端 400：那句点名 表[序号] 的中文原样上屏，不换措辞', async () => {
+    importData.mockRejectedValue(new Error('tasks[0] 的 status「进行中」不是五档之一'));
+    render(
+      <AntApp>
+        <SettingsModal {...NAV} open value={settings} onClose={noop} onSave={async () => {}} />
+      </AntApp>,
+    );
+    goto('数据与服务');
+    pickFile(nineKey());
+    await waitFor(() => expect(screen.getByText(/任务 1 条/)).toBeTruthy());
+
+    fireEvent.click(replaceBtn()!);
+    await waitFor(() => expect(document.querySelector('.ant-message-error')).toBeTruthy());
+    expect(screen.getByText(/tasks\[0\]/)).toBeTruthy();
   });
 });

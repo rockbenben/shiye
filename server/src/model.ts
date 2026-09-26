@@ -487,7 +487,7 @@ export interface Settings {
   autoExpand: boolean;
   autoExpandDelaySec: number;
   /** 番茄钟一轮的时长，分钟。规格原话「时长可配，默认 25 分钟」。校验（夹到
-   *  一个合理范围，不是拒绝）在 app.ts 的 clampFocusMinutes，跟
+   *  一个合理范围，不是拒绝）在 settings.ts 的 clampFocusMinutes，跟
    *  autoExpandDelaySec 是同一条道理。 */
   focusMinutes: number;
   /**

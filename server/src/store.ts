@@ -274,6 +274,22 @@ export const readSettings = (): Settings => ({ ...DEFAULT_SETTINGS, ...readJson<
 export const writeSettings = (v: Settings): void => writeAtomic(deviceConfigPath(), v);
 
 /**
+ * 整表导入前的回滚备份：`data/imports/import-backup-<时间戳>.json`。
+ * 形状与「导出数据」完全一致（九个键），所以**它就是一份可以原样再导回去的备份**。
+ * 这个目录由导入功能自己维护，AI 拆解/回顾不碰（AGENTS.md 文件表有它一行）。
+ */
+export function writeImportBackup(json: string): string {
+  const dir = join(dataDir(), 'imports');
+  mkdirSync(dir, { recursive: true });
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const name = `import-backup-${stamp}.json`;
+  writeFileSync(join(dir, name), json);
+  return name;
+}
+
+/**
  * 匹配 `data/outbox-<unique>.json` 的文件名——不是固定的一个名字，是一类。
  * 两个 AI 进程（网页点的那次、终端里 `/expand` 的那次）同时写，原来的固定文件名
  * `outbox.json` 会互相覆盖；各写各的、文件名各不相同，谁都不会丢。

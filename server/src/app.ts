@@ -7,20 +7,21 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import {
-  DEFAULT_SETTINGS, newTask, nowIso, paths,
+  newTask, nowIso, paths,
   readCountdowns, readFolders, readInbox, readInsights, readLists, readProposals, readSettings, readTasks, readTrash,
   writeCountdowns, writeFolders, writeInbox, writeInsights, writeLists, writeProposals, writeSettings, writeTasks, writeTrash,
-  type Countdown, type Folder, type InboxItem, type List, type Settings, type Task,
+  type Countdown, type Folder, type InboxItem, type List, type Task,
 } from './store.js';
 import type { Bus } from './events.js';
-import { isSafeId, writeConflictCopy } from './entityStore.js';
+import { caseClashIn, isSafeId, writeConflictCopy } from './entityStore.js';
 import { checkPushEntries, decidePush, type PushEntry, type PushKind, type PushKindResult } from './push.js';
+import { applyImport, checkKeysAndIds, checkShapes, type ImportPayload } from './import.js';
 import { listAllConflicts, listAllBroken } from './conflicts.js';
 import { toastRaw } from './reminder.js';
 import { createAutoExpand } from './autoExpand.js';
 import { createAgentRunner, type Spawner } from './expand.js';
 import { aiKeyFrom, maskKey, testAi, type Fetcher } from './aiApi.js';
-import { parseHhmm } from './dailySummary.js';
+import { sanitizeSettings } from './settings.js';
 import { skipPatch } from './repeat.js';
 import { checkTaskPatch, isSettled, sanitizeProposalPatch } from './task.js';
 import { INK_AI, checkFolderPatch, checkListPatch } from './list.js';
@@ -34,12 +35,6 @@ import {
   AttachmentValidationError, MAX_ATTACHMENT_BYTES, listAttachments,
   removeAllAttachments, removeAttachment, resolveAttachment, saveAttachment,
 } from './attachments.js';
-
-const MIN_AUTO_EXPAND_DELAY_SEC = 10;
-const MAX_AUTO_EXPAND_DELAY_SEC = 3600;
-const MIN_FOCUS_MINUTES = 1;
-const MAX_FOCUS_MINUTES = 180;
-const MAX_BREAK_MINUTES = 60;
 
 /**
  * `/api/health` 里带的接口版本号——手机上 Capacitor 打包的那份 `web/` 是装 APK
@@ -101,43 +96,6 @@ const corsForMobile = cors({ origin: ALLOWED_ORIGINS });
 function corsForAllowedOrigins(c: Context, next: () => Promise<void>) {
   const origin = c.req.header('origin');
   return origin && ALLOWED_ORIGINS.includes(origin) ? corsForMobile(c, next) : next();
-}
-
-/**
- * `autoExpandDelaySec` 校验：越界就夹回 [10, 3600]，不是拒掉整个请求。
- *
- * 跟这条路由里别的字段（`webhookUrl`/`toastEnabled`）是同一种脾气——类型不对
- * 就落回默认值，不 400。零或负数会让去抖形同虚设（design 文档原话），必须挡；
- * 但挡的方式选夹紧不选拒绝：这是本地单人小工具的设置页，用户在数字输入框里
- * 手滑打出 5 或者 99999，体验应该是「自动帮你收回到能用的范围」，不是弹一个
- * 400 让他猜错在哪、还要重填一遍其它字段。真正需要硬拒绝的是「不可信来源写坏
- * 数据」，而这条路由本来就只有本机用户自己在用（服务钉死 127.0.0.1，见
- * index.ts C1 的注释）。
- */
-function clampAutoExpandDelaySec(v: unknown): number {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULT_SETTINGS.autoExpandDelaySec;
-  return Math.min(MAX_AUTO_EXPAND_DELAY_SEC, Math.max(MIN_AUTO_EXPAND_DELAY_SEC, v));
-}
-
-/**
- * `focusMinutes` 校验：同一个脾气——夹到 [1, 180]，不是拒掉整个请求。
- * 零或负数会让番茄钟形同虚设（倒计时立刻结束，或者根本没有时长可言），跟
- * `autoExpandDelaySec` 那条注释是同一个道理，必须挡；上限 180 分钟（3 小时）
- * 单纯是个宽松的兜底，不让手滑打出的天文数字进设置页。
- */
-function clampFocusMinutes(v: unknown): number {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULT_SETTINGS.focusMinutes;
-  return Math.min(MAX_FOCUS_MINUTES, Math.max(MIN_FOCUS_MINUTES, v));
-}
-
-/**
- * `breakMinutes` 校验：同一个脾气，夹到 [0, 60]。**下限是 0 不是 1**——
- * 0 有明确含义「不休息」，是加这个字段之前的行为，得留得住；上限 60 分钟，
- * 歇得比专注还久就不是休息了，是换了件事做。
- */
-function clampBreakMinutes(v: unknown): number {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULT_SETTINGS.breakMinutes;
-  return Math.min(MAX_BREAK_MINUTES, Math.max(0, v));
 }
 
 /** 请求体解析失败一律当 null，由各路由自己决定回 400 还是用默认值。 */
@@ -221,21 +179,6 @@ function whichEntryIsBad(v: unknown, kind: PushKind): string {
 }
 
 /**
- * 「只差大小写」的 id 判据，两条推送共用。盘上有 `foo` 时推上来一个 `Foo`：
- * `byId.has('Foo')` 是 false，会被当成新建——而 Windows 上那是同一个文件，`foo`
- * 那条会被静默换掉（理由和平台说明见 entityStore.ts 的 `assertNoCaseCollision`）。
- * 存储层有最后一道（拒绝写入、抛错），但抛到路由里会让**整批**推送 500、手机上
- * 所有离线改动一起卡住；这里把这种 id 判成撞车、写副本，别的照推。
- */
-function caseClashIn(ids: string[]): (id: string) => boolean {
-  const folded = new Map(ids.map((id) => [id.toLowerCase(), id]));
-  return (id) => {
-    const other = folded.get(id.toLowerCase());
-    return other !== undefined && other !== id;
-  };
-}
-
-/**
  * `POST /api/push` 的收件箱那一半。**这一半之内**先算完全部判定、再动文件（计划②）：
  * 一次读、至多一次写，不是每条一次——每次独立写都是一轮目录监听器 → SSE 广播 →
  * 所有页面 refetch，这正是这个仓库那三条批量端点存在的理由。
@@ -259,6 +202,8 @@ function applyInboxPush(entries: PushEntry[], now: string): PushKindResult {
   // `deletedAt?` 只为删除撞车那一格：`Task`/`InboxItem` 都没有这个字段（只有垃圾箱里的
   // `TrashItem` 有），它是这一层现盖的一句注解，见 entityStore.writeConflictCopy 的注释。
   const copies: { id: string; deletedAt?: string }[] = [];
+  // 这里先筛而不靠存储层最后一道：抛到路由里会让**整批**推送 500、手机上所有离线
+  // 改动一起卡住——这种 id 判成撞车、写副本，别的照推。判据见 entityStore.caseClashIn。
   const caseClash = caseClashIn(all.map((x) => x.id));
   for (const e of entries) {
     const verdict = caseClash(e.id) ? 'conflict' as const : decidePush(e, byId.get(e.id));
@@ -320,6 +265,7 @@ function applyTasksPush(entries: PushEntry[], now: string): PushKindResult {
   // `deletedAt?` 只为删除撞车那一格：`Task`/`InboxItem` 都没有这个字段（只有垃圾箱里的
   // `TrashItem` 有），它是这一层现盖的一句注解，见 entityStore.writeConflictCopy 的注释。
   const copies: { id: string; deletedAt?: string }[] = [];
+  // 判据见 entityStore.caseClashIn——理由同上面收件箱那一半（别让存储层抛错卡整批）。
   const caseClash = caseClashIn(all.map((t) => t.id));
   for (const e of entries) {
     let verdict = caseClash(e.id) ? 'conflict' as const : decidePush(e, byId.get(e.id));
@@ -1075,6 +1021,53 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
     return c.json({ ok: true });
   });
 
+  /**
+   * 整表导入：请求体 = 「导出数据」的原样 JSON。**先全量校验、后动手**——
+   * 校验不过 400，`data/` 一字节不碰、连回滚快照都不写（与 outbox 拒收同一
+   * 哲学）。落盘/回滚在 import.ts 的 applyImport：写到一半失败会自己滚回去，
+   * 措辞区分「未触碰任何数据」与「已回滚到导入前状态」。
+   * `settings` 走 `sanitizeSettings`——与 `PUT /api/settings` 同一份逐键清洗，
+   * 打码回来的 `aiKey` 由它沿用存着的真值，不写回一串星号。
+   *
+   * 两道校验的**顺序**是契约的一部分：`checkShapes` 的前提是「已过
+   * `checkKeysAndIds`」（九键齐全、每行 id 合法），反过来先跑形状会在那之前
+   * 就踩空。这个次序本身就写在代码里，不靠注释维护。
+   */
+  app.post('/api/import', async (c) => {
+    const body = await jsonBody(c);
+    // 「未做任何改动」这句要跟着 400 一起上屏——它是这条路由对用户的承诺，
+    // 而 500 走的是另一句「已回滚」。少了它，红色的「tasks[0] …」读完之后
+    // 用户没法确定眼前这份数据安不安全。
+    const untouched = '——当前数据未做任何改动';
+    const keys = checkKeysAndIds(body);
+    if (!keys.ok) return c.json({ error: keys.error + untouched }, 400);
+    const shapes = checkShapes(body);
+    if (!shapes.ok) return c.json({ error: shapes.error + untouched }, 400);
+    const settings = sanitizeSettings((body as { settings: Record<string, unknown> }).settings, readSettings());
+    try {
+      // `settings` 是清洗后的 `Settings`（interface 没有隐式索引签名，接不进
+      // `ImportPayload` 的 `Record<string, unknown>`）——与 import.ts 里
+      // AnyRow 那座桥同理，在这里过一次双层 cast 桥。
+      const { counts, backupFile } = applyImport({
+        ...(body as Omit<ImportPayload, 'settings'>),
+        settings: settings as unknown as Record<string, unknown>,
+      });
+      // 八张 data/ 表的变化由文件监听器广播（events.ts），settings 不在监听
+      // 范围——照 PUT /api/settings 由这条路由自己补发。
+      bus?.emit('data-changed', { file: 'settings' });
+      return c.json({ ok: true, counts, backupFile });
+    } catch (e) {
+      // 两种失败两句话（spec §3 的措辞纪律）：applyImport 给「备份都没写下」
+      // 那种打了 dataUntouched 标——那张表压根没碰过，报「已回滚」是假话。
+      const err = e as Error & { dataUntouched?: boolean };
+      return c.json({
+        error: err.dataUntouched
+          ? `导入没有开始（回滚备份没能写下），数据未做任何改动：${err.message}`
+          : `导入失败，已回滚到导入前状态：${err.message}`,
+      }, 500);
+    }
+  });
+
   // ── AI 提议 ──
 
   // 只吐还没处理的。被忽略的行留在文件里给去重用（见下面的 dismiss 路由），
@@ -1185,88 +1178,20 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   });
 
   /**
-   * **这是 PUT，不是 PATCH：请求体就是完整的新设置，没给的字段一律回默认值。**
-   *
-   * 唯一的调用方是 `api.saveSettings(s: Settings)`，它发的是设置页那份完整对象
-   * （`api.ts` 那段注释里说的也是「整份 PUT 回服务端」）。所以「没给就回默认」
-   * 不是漏合并，是这条路由的契约。
-   *
-   * 写下来是因为它看起来很像一个 bug：随手加一个字段、忘了在设置页表单里带上，
-   * 保存一次就把它清成默认值，而且不报错。**加字段时必须两头一起加。**
-   * `dailySummaryOn` 是唯一的例外，理由在它自己那行——它是事实不是偏好。
+   * 导出专用的设置读取：**`aiKey` 给明文**。普通 GET 永远打码，那是给界面回显
+   * 用的；这条是给「导出数据」文件的。拍板（2026-09-26）：换机是导入的主场景，
+   * 而打码串到了空机器会被 `aiKeyFrom` 当成「没给密钥」的普通字符串原样存下——
+   * 星号串变成真密钥，第一次拆解才以 401 现形。带明文才带得动。
+   * 代价：LAN=1 时局域网里任何设备 GET 这一下就拿走密钥，所以 `LAN_WARNING`
+   * 点名了这条路径（`lanBind.test.ts` 钉着）。
    */
+  app.get('/api/settings/export', (c) => c.json(readSettings()));
+
   app.put('/api/settings', async (c) => {
     const body = (await jsonBody(c)) as Record<string, unknown> | null;
     if (!body) return c.json({ error: '请求体不是合法 JSON' }, 400);
     const stored = readSettings();
-    // 先算出要落盘的地址：下面判「密钥字段缺失要不要沿用」得拿它跟存着的比。
-    const aiBaseUrl = typeof body.aiBaseUrl === 'string' ? body.aiBaseUrl.trim() : DEFAULT_SETTINGS.aiBaseUrl;
-    const next: Settings = {
-      webhookUrl: typeof body.webhookUrl === 'string' ? body.webhookUrl.trim() : DEFAULT_SETTINGS.webhookUrl,
-      toastEnabled: typeof body.toastEnabled === 'boolean' ? body.toastEnabled : DEFAULT_SETTINGS.toastEnabled,
-      autoExpand: typeof body.autoExpand === 'boolean' ? body.autoExpand : DEFAULT_SETTINGS.autoExpand,
-      autoExpandDelaySec: clampAutoExpandDelaySec(body.autoExpandDelaySec),
-      focusMinutes: clampFocusMinutes(body.focusMinutes),
-      breakMinutes: clampBreakMinutes(body.breakMinutes),
-      // 每日概览的时刻：`HH:MM` 或 null。**不夹、不猜**，跟上面那几个数字
-      // 不一样——一个写坏的时刻没有「最近的合法值」可退，猜一个会让他以为
-      // 设成功了，而通知在别的时候响。
-      dailySummaryAt: parseHhmm(body.dailySummaryAt) ? String(body.dailySummaryAt).trim() : null,
-      // **服务端盖的章，请求体里的一概不采信**：它记的是「今天这条推过了没有」，
-      // 是事实不是偏好（跟 Reminder.firedAt 同一类）。不把存着的那份原样带过来
-      // 的话，用户在设置页随手按一次保存，当天的概览就会再推一遍。
-      dailySummaryOn: stored.dailySummaryOn,
-      // 任务默认值。**不校验这个 id 是不是真的存在**——清单可以在任何时候被
-      // 删掉，那之后这个字段就指着一个不存在的东西，而这里没法回头去改它。
-      // 界面那边（TaskComposer 的 defaultDraft）在用之前先对一遍 lists，
-      // 对不上就当没设，这是唯一守得住的地方。
-      defaultListId: typeof body.defaultListId === 'string' && body.defaultListId ? body.defaultListId : null,
-      defaultPriority: [0, 1, 2, 3].includes(body.defaultPriority as number) ? body.defaultPriority as 0 | 1 | 2 | 3 : 0,
-      // 认不出的档一律回默认档，不拒绝整份——跟上面那几个 clamp 同一个态度：
-      // 一个写坏的字段不该让另外十几个正确的字段一起存不进去。
-      defaultDue: (['none', 'today', 'tomorrow'] as const).includes(body.defaultDue as 'none')
-        ? body.defaultDue as Settings['defaultDue'] : DEFAULT_SETTINGS.defaultDue,
-      // 提前多久：非负整数分钟，或者 null（不预设）。负数没有意义（「提醒时间
-      // 在截止之后」是另一件事，这个应用不提供），一律当没设。
-      defaultRemindMinutes: typeof body.defaultRemindMinutes === 'number'
-        && Number.isFinite(body.defaultRemindMinutes) && body.defaultRemindMinutes >= 0
-        ? Math.round(body.defaultRemindMinutes) : null,
-      // 标签：只收字符串、去空白、去重、丢掉空串。手改文件写进来的数字/对象
-      // 会一路流到任务的 tags 上，那边全是按字符串处理的。
-      defaultTags: Array.isArray(body.defaultTags)
-        ? [...new Set(body.defaultTags.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter(Boolean))]
-        : [],
-      // 三档白名单（见 model.ts 的 `WeekStart`）。认不出的落回默认档 1，
-      // 不是「不是 0 就当 1」——那种写法在加第三档时会把 6 静默吃成 1。
-      weekStart: body.weekStart === 0 || body.weekStart === 6 ? body.weekStart : 1,
-      // 这四个**默认开**，所以判据是「明确存了 false 才关」，不是「=== true
-      // 才开」——照抄 toastEnabled 那种写法会让它们变成默认关，等于把智能识别
-      // 整个悄悄关掉。
-      smartDate: body.smartDate !== false,
-      smartStripDate: body.smartStripDate !== false,
-      smartTag: body.smartTag !== false,
-      smartStripTag: body.smartStripTag !== false,
-      // 农历和「休/班」同样默认开，同样是「存了 false 才关」。
-      showLunar: body.showLunar !== false,
-      showHolidays: body.showHolidays !== false,
-      // 认不出的模式落回 'cli'，跟上面那几个白名单同一个态度。
-      aiMode: body.aiMode === 'api' ? 'api' : 'cli',
-      aiCli: (['claude', 'agy', 'codex', 'gemini', 'aider', 'custom'] as const).includes(body.aiCli as 'claude')
-        ? body.aiCli as Settings['aiCli'] : DEFAULT_SETTINGS.aiCli,
-      aiCliPath: typeof body.aiCliPath === 'string' ? body.aiCliPath.trim() : DEFAULT_SETTINGS.aiCliPath,
-      aiCliCustomArgs: typeof body.aiCliCustomArgs === 'string' ? body.aiCliCustomArgs.trim() : DEFAULT_SETTINGS.aiCliCustomArgs,
-      aiBaseUrl,
-      aiModel: typeof body.aiModel === 'string' ? body.aiModel.trim() : DEFAULT_SETTINGS.aiModel,
-      // 密钥三种走法，缺一不可：
-      //   - 请求体里压根没这个字段（别的客户端只想改别的设置）→ 原样留着，
-      //     **但只在地址没变时**——地址换了、密钥又没给，密钥不跟着搬过去。
-      //     不然这就是一条把密钥送给任意地址的路，理由见 aiKeyFrom 的注释
-      //   - 收到的正是 GET 回去的那串打码 → 原样留着。界面读回来的就是打码，
-      //     不认它的话，用户在设置页改一下番茄钟时长再保存，密钥就被那串
-      //     `••••abcd` 覆盖了，而下一次拆解才会以 401 的形式暴露出来
-      //   - 别的字符串（含空串）→ 照收。空串就是「清掉」，得留这条路
-      aiKey: aiKeyFrom(body.aiKey, stored.aiKey, { incoming: aiBaseUrl, stored: stored.aiBaseUrl }),
-    };
+    const next = sanitizeSettings(body, stored);
     writeSettings(next);
 
     /**

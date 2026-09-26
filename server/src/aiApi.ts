@@ -437,7 +437,7 @@ export function maskKey(key: string): string {
 }
 
 /**
- * 请求里的密钥该落成什么。三种走法见 app.ts `PUT /api/settings` 那处调用点的注释；
+ * 请求里的密钥该落成什么。三种走法见 settings.ts `sanitizeSettings` 里 `aiKey` 那行的注释；
  * `POST /api/ai/test` 也走这一份。
  *
  * 关键的是**中间那条**：界面读回来的是打码串，用户不碰它、只改了别的设置再保存，

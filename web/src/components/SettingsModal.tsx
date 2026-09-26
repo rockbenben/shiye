@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, App as AntApp, AutoComplete, Button, ConfigProvider, Form, Input, InputNumber, Modal, Radio, Select, Space, Switch, Tag, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { api } from '../api.js';
@@ -117,6 +117,19 @@ const CLI_META: Record<AiCliKind, { defaultCmd: string; help: string }> = {
 const parseTags = (s: string): string[] =>
   [...new Set(s.split(/[,，]/).map((x) => x.trim()).filter(Boolean))];
 
+/**
+ * 「导入数据」认的九个键——跟「导出数据」产出的那份 JSON 一字不差地对。
+ * 名单跟服务端 `server/src/import.ts` 的 `IMPORT_KEYS`（八张表）加 `settings`
+ * 是同一件事的两半，**两边同步由守卫测试盯**（见 web/src/exportCoverage.guard.test.ts
+ * 那一族，Task 10 会补对账）。这里先给用户话看：少了哪个键，报的是中文名，
+ * 不是 `proposals` 这种他看不懂的内部字段名。
+ */
+const IMPORT_LABELS: Record<string, string> = {
+  inbox: '收件箱', tasks: '任务', settings: '设置', proposals: 'AI 建议', lists: '清单',
+  folders: '文件夹', countdowns: '纪念日', insights: '观察', trash: '垃圾箱',
+};
+const REQUIRED_KEYS = Object.keys(IMPORT_LABELS);
+
 export function SettingsModal({ open, value, onClose, onSave, navOptions, navModes, onNavModes, lists }: Props) {
   const { message } = AntApp.useApp();
   /**
@@ -132,6 +145,13 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
   const [draft, setDraft] = useState(value);
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // 「导入数据」：importing 是发请求那一截的按钮态；importPreview 是确认框的
+  // 受控开关——存解析好了的整份 payload，非空即弹（渲染方式见下面 data 页）。
+  const [importing, setImporting] = useState(false);
+  const [importPreview, setImportPreview] = useState<Record<string, unknown> | null>(null);
+  // 「导入数据」那颗按钮不直接开文件框，经这个隐藏的 input.click()——
+  // 浏览器只允许用户手势唤起文件框，程序里 `new FileReader` 挑不了文件。
+  const fileRef = useRef<HTMLInputElement>(null);
   const [section, setSection] = useState('modules');
   // 「显示订阅套餐节点」是这台设备的界面偏好（localStorage），不进 draft、
   // 不上服务端。默认关——两个订阅套餐端点（火山 Coding Plan / 阿里 Token Plan）
@@ -163,9 +183,11 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
   // data/ 下三个常驻文件加设备本地的设置，一起现读一遍打包下载——data/ 那
   // 三份是唯一一份，.bak 只保得住最近一次写入，过几分钟一写就没了；设置
   // 虽然不在 data/ 里，但这份导出是给人看的「现状快照」，物理上存在哪不
-  // 重要，一起打包才是完整的备份。客户端直接拼，不用另开一个后端接口：
-  // GET /api/inbox、/api/tasks、/api/settings、/api/proposals 已经能把这
-  // 四份原样吐出来。文件名带时间戳，连着导出几次不会互相覆盖。
+  // 重要，一起打包才是完整的备份。客户端直接拼：GET /api/inbox、/api/tasks、
+  // /api/proposals 这些原样吐；**设置单独走 /api/settings/export**——普通
+  // GET 的 `aiKey` 是打码串，那玩意儿到新机器上会被存成「真值」，等于密钥
+  // 根本没搬家（换机是导入的主场景，2026-09-26 拍板导出带明文密钥）。
+  // 文件名带时间戳，连着导出几次不会互相覆盖。
   const exportData = async () => {
     setExporting(true);
     try {
@@ -179,7 +201,7 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
       // 那边的注释专门讲了「别手抄一份表名单」。这里够不着服务端的 `paths()`
       // （web 侧只有 HTTP 接口），所以是手写的八条 + 下面那条守卫盯着它别再漏。
       const [inbox, tasks, settings, proposals, lists, folders, countdowns, insights, trash] = await Promise.all([
-        api.inbox(), api.tasks(), api.settings(), api.proposals(),
+        api.inbox(), api.tasks(), api.settingsExport(), api.proposals(),
         api.lists(), api.folders(), api.countdowns(), api.insights(), api.trash(),
       ]);
       const payload = { inbox, tasks, settings, proposals, lists, folders, countdowns, insights, trash };
@@ -202,6 +224,46 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
       setExporting(false);
     }
   };
+
+  /**
+   * 「导入数据」选中文件后的第一站：**只读、只把关、不导**。在这里拦三种
+   * 一眼能看出来的坏输入（JSON 都读不出来、顶层不是对象、缺键），剩下的
+   * 交给服务端——表内形状（`tasks[3] 的 status 不是五档之一` 这种）不是
+   * 界面该复述的判据，服务端那份 `checkKeysAndIds`/`checkShapes` 才是正本，
+   * 它的错误文本本来就是点名到 `表[序号]` 的用户话，原样上屏。
+   *
+   * 三道都过了才把 payload 存进 `importPreview` 弹确认框——**整表替换这种
+   * 操作，「先看数」这一步不能省**：导出文件可能是半份、可能是别人那台
+   * 机器的、条数可能一眼就不对。
+   */
+  const readFileAndConfirm = async (file: File) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      void message.error('这份文件不是合法的 JSON');
+      return;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      void message.error('这份文件的顶层不是一个对象——就选「导出数据」产出的那份文件，别选导出后被什么工具改写过的');
+      return;
+    }
+    const payload = parsed as Record<string, unknown>;
+    const missing = REQUIRED_KEYS.filter((k) => !(k in payload));
+    if (missing.length > 0) {
+      void message.error(`缺了键：${missing.map((k) => IMPORT_LABELS[k]).join('、')}——这份备份不完整，可能是更老的版本导的`);
+      return;
+    }
+    setImportPreview(payload);
+  };
+
+  /** 确认框里那句「收件箱 1 条 · 任务 12 条 · …」。settings 不数条数——
+   *  它是一份对象不是表，混在条数里反而看不出「这份有多少条任务」。 */
+  const importCountsLine = (payload: Record<string, unknown>): string =>
+    Object.entries(IMPORT_LABELS)
+      .filter(([k]) => k !== 'settings')
+      .map(([k, label]) => `${label} ${Array.isArray(payload[k]) ? payload[k].length : 0} 条`)
+      .join(' · ');
 
   /** 一段「导航显示」的列表。`modules` 和 `lists` 两页各渲染一半，判据是
    *  `RAIL_GROUPS`（哪几段画在竖栏上）——跟界面本身同一份判据，不手抄。 */
@@ -278,10 +340,67 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
 
           <Typography.Title level={3} style={{ marginTop: 20 }}>备份</Typography.Title>
           <Button loading={exporting} onClick={() => void exportData()}>导出数据</Button>
+          <Button loading={importing} onClick={() => fileRef.current?.click()} style={{ marginLeft: 8 }}>导入数据</Button>
+          {/* 藏在按钮背后：这颗按钮的职责只是「把文件框叫起来」，选完文件
+              就交给 readFileAndConfirm。`e.target.value = ''` 是必须的——
+              不清掉的话，第二次选同一个文件不会触发 change（值没变）。 */}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) void readFileAndConfirm(file);
+            }}
+          />
           <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
             把 data/ 下的八样——任务、收件箱、清单、文件夹、AI 建议、跨任务观察、倒数纪念日、垃圾箱——连同这里的设置，一起打进一个 JSON 文件下载。
-            data/ 下现在没有 .bak 这层保险了（历史版本交给同步服务），这份导出就是自己给自己多买一层。
+            data/ 下现在没有 .bak 这层保险了（历史版本交给同步服务），这份导出就是自己给自己多买一层。导入是把这九样整表换回去——选一份导出文件，确认框里先看数。这份文件里的 AI 密钥是明文（换机才带得动），别把它发到聊天里。
           </Typography.Paragraph>
+
+          {/* 确认框用**受控 Modal** 而不是 `Modal.confirm`：静态方法在组件树
+              外面另起一个渲染，拿不到这个应用的主题语境（本文件里连一小块
+              子树都要套 `ConfigProvider theme={boardLocalTheme}`，何况整张
+              确认框）——它画出来的会是 antd 默认蓝的「替换」。受控的这只跟
+              外层弹层同一语境，开关状态就是 importPreview，跟本组件收 props
+              控制 open 的写法同一条路子。
+              失败时**不关框**：catch 里只把服务端那句话原样弹出来（那句已经
+              点名到 表[序号]），框留着，他换个文件或者取消，都看得见他刚才
+              确认的是哪一份。 */}
+          <Modal
+            open={!!importPreview}
+            title="导入这份备份"
+            okText="替换"
+            okButtonProps={{ danger: true }}
+            confirmLoading={importing}
+            onOk={async () => {
+              if (!importPreview) return;
+              setImporting(true);
+              try {
+                const r = await api.importData(importPreview);
+                void message.success(`已导入——替换前的数据存成了回滚备份 ${r.backupFile}，带错了可以再把它导回去`);
+                setImportPreview(null);
+              } catch (e) {
+                void message.error((e as Error).message);
+              } finally {
+                setImporting(false);
+              }
+            }}
+            onCancel={() => setImportPreview(null)}
+          >
+            {importPreview && (
+              <>
+                <p style={{ marginBottom: 8 }}>{importCountsLine(importPreview)}</p>
+                <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                  ① 当前九张表会被整表替换。<br />
+                  ② 附件文件不会被恢复——换到新机器时旧任务的附件会缺。<br />
+                  ③ 替换前会把现在这份存成回滚备份，带错了备份可以再把它导回去。
+                </Typography.Paragraph>
+              </>
+            )}
+          </Modal>
         </>
       );
     }
@@ -742,7 +861,13 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
             role="tab"
             aria-selected={section === s.key}
             className={`ink-set-navitem${section === s.key ? ' ink-set-navitem-active' : ''}`}
-            onClick={() => setSection(s.key)}
+            onClick={() => {
+              // 导入确认框画在「数据与服务」分区里——切分区顺手收掉它：
+              // 不然「看不见但还开着」的确认会等你切回来时冒出来，而那份
+              // 备份是你什么时候选的都已经说不清了。
+              setImportPreview(null);
+              setSection(s.key);
+            }}
           >{s.label}</button>
         ))}
       </nav>

@@ -53,7 +53,8 @@ const CONTEXT_OK: Record<TaskContext, true> = {
  *  两份名单迟早分叉，而分叉的表现是「校验器认、迁移器不认」这种最难查的不一致。 */
 export const CONTEXTS = Object.keys(CONTEXT_OK) as TaskContext[];
 
-const isIsoOrNull = (v: unknown): v is string | null =>
+/** 也导给 `import.ts` 的逐表形状校验用——「合法 ISO 或 null」这条判据别抄第二份。 */
+export const isIsoOrNull = (v: unknown): v is string | null =>
   v === null || (typeof v === 'string' && !Number.isNaN(Date.parse(v)));
 
 /**

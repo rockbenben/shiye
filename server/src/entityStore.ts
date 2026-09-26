@@ -92,6 +92,19 @@ export const isSafeId = (id: unknown): id is string =>
   && !CONFLICT_RE.test(`${id}.json`);
 
 /**
+ * 「只差大小写」的 id 判据。**存储层的 `assertNoCaseCollision` 是写盘时的最后一道**
+ * （它抛错、整批拒），这条给调用方在做计划阶段先筛——原样是 `app.ts` 里 push 的
+ * 私有判据，导入校验需要同一份，下沉到这里，app.ts 改从这儿引。
+ */
+export function caseClashIn(ids: string[]): (id: string) => boolean {
+  const folded = new Map(ids.map((id) => [id.toLowerCase(), id]));
+  return (id) => {
+    const other = folded.get(id.toLowerCase());
+    return other !== undefined && other !== id;
+  };
+}
+
+/**
  * **两个只差大小写的 id，在 Windows 上是同一个文件。** `isSafeId` 只看单个 id
  * 的形状，看不见「盘上已经有一个只差大小写的」；而 NTFS（macOS 默认也是）
  * 不区分大小写：盘上有 `foo.json` 时写 `Foo.json`，写的就是那个文件——`foo`

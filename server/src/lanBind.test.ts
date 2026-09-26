@@ -40,6 +40,16 @@ describe('logLanWarningIfNeeded', () => {
     expect(LAN_WARNING).toMatch(/公共 Wi-Fi/);
   });
 
+  /**
+   * `/api/settings/export` 掀开了明文 AI 密钥（换机备份的拍板），局域网里
+   * 任何设备都能白拿——这句警告必须点名它，否则用户是拿着一句不完整的话
+   * 在决定要不要开 LAN=1。
+   */
+  it('点名「导出数据会掀开明文 AI 密钥」这条局域网后果', () => {
+    expect(LAN_WARNING).toMatch(/\/api\/settings\/export/);
+    expect(LAN_WARNING).toMatch(/密钥/);
+  });
+
   it('提示原文还说清另外两件事：能烧订阅额度、webhook 改掉之后关 LAN 也收不回来（final-review.md I1/I2）', () => {
     expect(LAN_WARNING).toMatch(/订阅额度/);
     expect(LAN_WARNING).toMatch(/webhook/);

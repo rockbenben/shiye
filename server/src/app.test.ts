@@ -3195,6 +3195,20 @@ describe('设置里的 AI 密钥不原样回给浏览器', () => {
   });
 
   /**
+   * 「导出数据」带的是明文密钥——换机场景的拍板（2026-09-26）：打码串导出去
+   * 新机器等于没带（`aiKeyFrom` 在空机上会把星号串存成「真值」）。普通 GET
+   * 照旧打码，只有这条导出专用的路掀开。它等于把密钥摆给局域网里所有人，
+   * 所以 `LAN_WARNING` 必须点名它——下面那条断言钉着这件事。
+   */
+  it('GET /api/settings/export 回明文密钥（导出带得动），普通 GET 照旧打码', async () => {
+    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl' });
+    const s = (await (await get('/api/settings/export')).json()) as Settings;
+    expect(s.aiKey).toBe('sk-abcdefghijkl');
+    const masked = (await (await get('/api/settings')).json()) as Settings;
+    expect(masked.aiKey).toBe('••••ijkl');
+  });
+
+  /**
    * 界面读回来的就是打码串。用户不碰它、只改了番茄钟时长再保存，请求体里带回来的
    * 也是那串打码——不认它的话密钥会被 `••••ijkl` 覆盖，而这次覆盖悄无声息，
    * 要等下一次拆解报 401 才现形。

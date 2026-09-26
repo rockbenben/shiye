@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSync, utimesSync, renameSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { readAll, readOne, writeOne, deleteOne, syncAll, invalidate, invalidateAll, isSafeId, CONFLICT_RE, listConflicts, writeConflictCopy, listBroken } from './entityStore.js';
+import { readAll, readOne, writeOne, deleteOne, syncAll, invalidate, invalidateAll, isSafeId, caseClashIn, CONFLICT_RE, listConflicts, writeConflictCopy, listBroken } from './entityStore.js';
 
 // 只包一层 renameSync/readdirSync，其余原样透传——「写入是原子的」那条测试原来
 // 只查「跑完之后目录里没留 .tmp」，抓不住「有人把 tmp+rename 换成直接
@@ -563,5 +563,14 @@ describe('entityStore：只差大小写的 id 拒绝写入', () => {
   it('同一个 id 原样重写不算撞——那是正常的更新', () => {
     syncAll(dir, [{ id: 'foo', n: 1 } as never]);
     expect(() => syncAll(dir, [{ id: 'foo', n: 2 } as never])).not.toThrow();
+  });
+});
+
+describe('caseClashIn', () => {
+  it('盘上有 foo 时 Foo 判为撞车，foo 本身不判', () => {
+    const clash = caseClashIn(['foo']);
+    expect(clash('Foo')).toBe(true);
+    expect(clash('foo')).toBe(false);
+    expect(clash('bar')).toBe(false);
   });
 });

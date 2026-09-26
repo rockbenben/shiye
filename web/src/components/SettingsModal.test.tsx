@@ -501,7 +501,7 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
 
     const url = screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement;
     expect(url.value).toBe('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
-    expect(modelInput().value).toBe('gemini-3.7-flash');
+    expect(modelInput().value).toBe('gemini-3.8-flash');
   });
 
   /**

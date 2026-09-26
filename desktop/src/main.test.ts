@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -89,26 +89,55 @@ describe('desktop/src/main.ts 源文本', () => {
 // Node 进程里 `import 'electron'` 解析到的那个对象，替换不了背后那整套
 // 真实系统集成。这部分仍然只能靠 `desktop/冒烟清单.md` 里的人工验证兜底，
 // 见那份清单第 4/5 条和「补两条」那一节。
-const state = vi.hoisted(() => ({
-  handlers: {} as Record<string, (...args: unknown[]) => unknown>,
-  lastWindow: null as null | {
-    show: ReturnType<typeof import('vitest')['vi']['fn']>;
-    focus: ReturnType<typeof import('vitest')['vi']['fn']>;
-    webContents: {
-      executeJavaScript: ReturnType<typeof import('vitest')['vi']['fn']>;
-      setWindowOpenHandler: ReturnType<typeof import('vitest')['vi']['fn']>;
-      on: ReturnType<typeof import('vitest')['vi']['fn']>;
-    };
-  },
-  /** 窗口上挂的 webContents 事件处理器（`will-navigate` 那条）。 */
-  wcHandlers: {} as Record<string, (...args: unknown[]) => unknown>,
-  /** `setWindowOpenHandler` 收到的那个回调。 */
-  windowOpenHandler: null as null | ((d: { url: string }) => unknown),
-  /** `shell.openExternal` 被交出去的地址。 */
-  opened: [] as string[],
-  notifications: [] as Array<{ options: Record<string, unknown>; handlers: Record<string, (...a: unknown[]) => unknown> }>,
-  sseCallback: null as null | ((event: string, data: unknown) => void),
-}));
+// 假 electron-updater 的 autoUpdater：属性写经 setter 记录——「没接线时连一次
+// 赋值都不该收到」这条只能这么抓（普通属性读不出「有没有被写过」）。事件单槽
+// 登记（后一次 import 的 main.ts 覆盖前一次的注册），fire 只会打到最新实例。
+const state = vi.hoisted(() => {
+  const auWrites: string[] = [];
+  const auOn: string[] = [];
+  const auHandlers: Record<string, (arg?: unknown) => void> = {};
+  let autoDownload = false;
+  let autoInstallOnAppQuit = false;
+  const au = {
+    get autoDownload() { return autoDownload; },
+    set autoDownload(v: boolean) { auWrites.push(`autoDownload=${v}`); autoDownload = v; },
+    get autoInstallOnAppQuit() { return autoInstallOnAppQuit; },
+    set autoInstallOnAppQuit(v: boolean) { auWrites.push(`autoInstallOnAppQuit=${v}`); autoInstallOnAppQuit = v; },
+    checkForUpdates: vi.fn(async () => undefined),
+    quitAndInstall: vi.fn(),
+    on(ev: string, cb: (arg?: unknown) => void) { auOn.push(ev); auHandlers[ev] = cb; },
+  };
+  return {
+    handlers: {} as Record<string, (...args: unknown[]) => unknown>,
+    lastWindow: null as null | {
+      show: ReturnType<typeof import('vitest')['vi']['fn']>;
+      focus: ReturnType<typeof import('vitest')['vi']['fn']>;
+      webContents: {
+        executeJavaScript: ReturnType<typeof import('vitest')['vi']['fn']>;
+        setWindowOpenHandler: ReturnType<typeof import('vitest')['vi']['fn']>;
+        on: ReturnType<typeof import('vitest')['vi']['fn']>;
+      };
+    },
+    /** 窗口上挂的 webContents 事件处理器（`will-navigate` 那条）。 */
+    wcHandlers: {} as Record<string, (...args: unknown[]) => unknown>,
+    /** `setWindowOpenHandler` 收到的那个回调。 */
+    windowOpenHandler: null as null | ((d: { url: string }) => unknown),
+    /** `shell.openExternal` 被交出去的地址。 */
+    opened: [] as string[],
+    notifications: [] as Array<{ options: Record<string, unknown>; handlers: Record<string, (...a: unknown[]) => unknown> }>,
+    sseCallback: null as null | ((event: string, data: unknown) => void),
+    /** 假 `app.isPackaged` 由它供值：main.ts 的接线路由是 async 的，取值时刻
+     *  晚于用例里翻标志的那一刻，所以必须是 getter（见下面 electron mock）。 */
+    isPackaged: false,
+    /** `Menu.buildFromTemplate` 每次收到的模板都攒在这儿，托盘菜单长什么样
+     *  就靠它断言（假 Tray 的 setContextMenu 只负责「被调过」）。 */
+    menuTemplates: [] as Array<Array<Record<string, unknown>>>,
+    au,
+    auWrites,
+    auOn,
+    auHandlers,
+  };
+});
 
 vi.mock('electron', () => {
   const app = {
@@ -120,7 +149,11 @@ vi.mock('electron', () => {
     }),
     whenReady: vi.fn(() => Promise.resolve()),
     quit: vi.fn(),
-    isPackaged: false,
+    // getter 而不是快照：bootstrap 里读它的时刻晚于用例翻 state.isPackaged
+    // 的时刻（whenReady 之后才跑），快照会拿到 import 那一刻的旧值。
+    get isPackaged() {
+      return state.isPackaged;
+    },
     // **必须是绝对路径、而且落在临时目录里。** main.ts 顶层会
     // `mkdirSync(join(getPath('appData'), 'shiye'))`（Electron 的 setPath 契约要求
     // 目录已存在，见那句上面的注释），返回相对路径的话这一句会在跑测试的当前目录
@@ -173,19 +206,34 @@ vi.mock('electron', () => {
   class FakeTray {
     setToolTip = vi.fn();
     setContextMenu = vi.fn();
+    // 真 Tray 上这个方法只有 win32 有（运行时），类型里是全平台的；main.ts 的
+    // balloon 钩子会调它，假对象缺了会在 fire update-downloaded 时当场炸。
+    displayBalloon = vi.fn();
     on = vi.fn();
   }
 
   return {
     app,
     BrowserWindow: FakeBrowserWindow,
-    Menu: { setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn(() => ({})) },
+    Menu: {
+      setApplicationMenu: vi.fn(),
+      buildFromTemplate: vi.fn((template: Array<Record<string, unknown>>) => {
+        state.menuTemplates.push(template);
+        return {};
+      }),
+    },
     Notification: FakeNotification,
     Tray: FakeTray,
     dialog: { showErrorBox: vi.fn() },
     shell: { openExternal: vi.fn(async (u: string) => { state.opened.push(u); }) },
   };
 });
+
+// main.ts 顶层 import 它（不管接没接线都会被解析），所以 mock 无条件装上；
+// 「接没接线」的判据全落在 state.au 那三个登记器上（赋值/事件/调用）。
+vi.mock('electron-updater', () => ({
+  default: { autoUpdater: state.au },
+}));
 
 // bootstrap() 会真的调用这三个模块——不 mock 的话，测试会真的 spawn 子进程、
 // 真的发起网络连接。resolvePaths（./paths.js）不 mock：它是纯函数（不做
@@ -358,5 +406,190 @@ describe('main.ts 真行为：冷启动（应用没在跑，托盘退出过/机�
     // 取任务那一发走的是整份列表——服务端没有 GET /api/tasks/:id。
     expect(vi.mocked(fetch).mock.calls.some(([u, i]) =>
       String(u).endsWith('/api/tasks') && (i as RequestInit | undefined)?.method === undefined)).toBe(true);
+  });
+});
+
+// ============================================================================
+// 更新接线（计划 Task 4）：只在「打包的 Windows」上点亮
+// ============================================================================
+//
+// 四条意图：① 接线时 autoDownload 开、autoInstallOnAppQuit 显式关（spec 的
+// 「没点不装」全靠这一句显式赋值——electron-updater 默认 true，正常退出会
+// 顺手装）；② 托盘菜单长出「检查更新 / 自动检查更新（checkbox，默认关）」，
+// update-downloaded 之后 rebuild 出「重启以完成更新 vX」；③ quitAndInstall
+// 只有点那一项才会发生，ready 之前菜单里根本没有那一项；④ 未打包形态下
+// 假 autoUpdater 一次属性写、一次事件注册都没收到，托盘还是原来的两项。
+//
+// 「win32」这个前提在需要它的场景里都手动钉死（process.platform 是可重定义
+// 的值属性，defineProperty 换掉、afterAll 还原），另有一条反向场景把平台这
+// 半边单独钉住——不钉的话在 mac 上跑「未打包」那条会因为平台门先挡住而假
+// 绿，isPackaged 那半扇门等于没测；反过来只测 win32+未打包，删掉平台判断也
+// 全绿，所以门的后半截由最后那条「打包的非 Windows」钉。
+function useWin32(): () => void {
+  const prev = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  return () => Object.defineProperty(process, 'platform', { value: prev, configurable: true });
+}
+
+/**
+ * 「打包的 Windows」这一形态要把两件事一起钉死，缺一不可：
+ * - `process.platform`（接线门控的前半）；
+ * - `process.resourcesPath`——`app.isPackaged` 一真，bootstrap 传给
+ *   `resolvePaths()` 的就是它（paths.ts 里 `resolvePaths()` 算 `base` 那行），纯 Node 的 vitest 环境里这个键
+ *   压根不存在，于是 `join(undefined, …)` 当场 TypeError，异常被 bootstrap 的
+ *   catch 吞成一次 `dialog.showErrorBox`，窗口永远不出现（踩过：接线场景
+ *   卡在 `waitFor(lastWindow)` 上，看不出任何原因）。真 Electron 里它总是字符串。
+ * 顺带把它指进测试自己的临时目录，不在仓库里留垃圾。
+ */
+function usePackagedWindows(): () => void {
+  const restorePlatform = useWin32();
+  const prevResources = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+  Object.defineProperty(process, 'resourcesPath', {
+    value: join(tmpdir(), 'shiye-main-test-resources'),
+    configurable: true,
+    writable: true,
+  });
+  return () => {
+    restorePlatform();
+    if (prevResources) Object.defineProperty(process, 'resourcesPath', prevResources);
+    else delete (process as { resourcesPath?: unknown }).resourcesPath;
+  };
+}
+
+/** 最近一次 buildFromTemplate 收到的 label 序列——菜单形状全靠它断言。 */
+const lastMenuLabels = (): unknown[] => state.menuTemplates.at(-1)!.map((i) => i.label);
+
+describe('main.ts 真行为：打包的 Windows 上接线', () => {
+  let restorePlatform: () => void;
+
+  beforeAll(async () => {
+    restorePlatform = usePackagedWindows();
+    state.isPackaged = true;
+    vi.resetModules();
+    state.handlers = {};
+    state.lastWindow = null;
+    state.menuTemplates.length = 0;
+    state.auWrites.length = 0;
+    state.auOn.length = 0;
+    state.au.checkForUpdates.mockClear();
+    state.au.quitAndInstall.mockClear();
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
+  });
+
+  afterAll(() => {
+    restorePlatform();
+    state.isPackaged = false;
+  });
+
+  it('接线把 autoDownload 设 true、autoInstallOnAppQuit 显式设 false', () => {
+    expect(state.auWrites).toContain('autoDownload=true');
+    expect(state.auWrites).toContain('autoInstallOnAppQuit=false');
+  });
+
+  it('托盘菜单有「检查更新」和「自动检查更新」（checkbox，默认关）；ready 之前没有「重启」项', () => {
+    // checkbox 的默认关读的是 Preferences 里那份 update-prefs.json——假
+    // app.getPath('appData') 指着临时目录，那儿没有这个文件，loadAutoCheck
+    // 落默认值 false（这正是 D1 拍板的「文件不存在=关」在接线层的投影）。
+    expect(lastMenuLabels()).toEqual(['打开', '检查更新', '自动检查更新', '退出']);
+    const checkbox = state.menuTemplates.at(-1)!.find((i) => i.type === 'checkbox');
+    expect(checkbox, '「自动检查更新」不是 checkbox').toBeDefined();
+    expect(checkbox!.checked).toBe(false);
+    expect(lastMenuLabels().some((l) => String(l).startsWith('重启'))).toBe(false);
+  });
+
+  it('fire update-downloaded → 菜单 rebuild 出「重启以完成更新 v0.2.0」；点它才 quitAndInstall', () => {
+    // 事件从假 autoUpdater 的登记表打进去（on 是 main.ts 接线时注册的），
+    // updater 状态进 ready → onChange → refreshTrayMenu → 又一次
+    // buildFromTemplate。点之前 quitAndInstall 一次都没被调——「下载自动、
+    // 安装绝不自作」里后半句在接线层的样子。
+    expect(state.au.quitAndInstall).not.toHaveBeenCalled();
+    state.auHandlers['update-downloaded']?.({ version: '0.2.0' });
+    const restart = state.menuTemplates.at(-1)!.find((i) => String(i.label ?? '').startsWith('重启以完成更新'));
+    expect(restart, 'ready 之后菜单里没有「重启以完成更新 vX」').toBeDefined();
+    expect(restart!.label).toBe('重启以完成更新 v0.2.0');
+    (restart!.click as () => void)();
+    expect(state.au.quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('main.ts 真行为：未打包形态（dev / 别的平台同理）', () => {
+  let restorePlatform: () => void;
+
+  // 平台**照旧钉成 win32**：挡住这条的必须恰好是 isPackaged 那半扇门，
+  // 而不是「在 mac 上跑所以平台门先拦了」——那样 isPackaged 等于没测。
+  beforeAll(async () => {
+    restorePlatform = useWin32();
+    state.isPackaged = false;
+    vi.resetModules();
+    state.handlers = {};
+    state.lastWindow = null;
+    state.menuTemplates.length = 0;
+    state.auWrites.length = 0;
+    state.auOn.length = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
+  });
+
+  afterAll(() => {
+    restorePlatform();
+  });
+
+  it('electron-updater 一行都不接：没有属性写、没有事件注册', () => {
+    expect(state.auWrites).toEqual([]);
+    expect(state.auOn).toEqual([]);
+  });
+
+  it('托盘还是原来的「打开/退出」两项', () => {
+    expect(lastMenuLabels()).toEqual(['打开', '退出']);
+  });
+});
+
+// 上面「未打包」那条把平台钉成 win32，只测 isPackaged 那半扇门；这一条反向
+// 补上平台那半：isPackaged 为真但平台不是 win32，门照样要挡住。没有这条的
+// 话，删掉 `process.platform === 'win32'` 判断，全量测试照样绿——复审点名的
+// 正是这个没钉住的半边。resourcesPath 照样要打桩：bootstrap 顶上的
+// resolvePaths 在 isPackaged 为真时无条件读它（paths.ts），跟接不接线无关，
+// 纯 Node 环境里缺了它 bootstrap 会 TypeError、窗口永远不出现。
+describe('main.ts 真行为：打包的非 Windows（平台门那半边单独钉住）', () => {
+  let restore: () => void;
+
+  beforeAll(async () => {
+    const prevPlatform = process.platform;
+    const prevResources = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    Object.defineProperty(process, 'resourcesPath', {
+      value: join(tmpdir(), 'shiye-main-test-resources'),
+      configurable: true,
+      writable: true,
+    });
+    restore = () => {
+      Object.defineProperty(process, 'platform', { value: prevPlatform, configurable: true });
+      if (prevResources) Object.defineProperty(process, 'resourcesPath', prevResources);
+      else delete (process as { resourcesPath?: unknown }).resourcesPath;
+    };
+    state.isPackaged = true;
+    vi.resetModules();
+    state.handlers = {};
+    state.lastWindow = null;
+    state.menuTemplates.length = 0;
+    state.auWrites.length = 0;
+    state.auOn.length = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
+  });
+
+  afterAll(() => {
+    restore();
+    state.isPackaged = false;
+  });
+
+  it('darwin + 已打包：门照样挡住，electron-updater 一行不接，菜单还是两项', () => {
+    expect(state.auWrites).toEqual([]);
+    expect(state.auOn).toEqual([]);
+    expect(lastMenuLabels()).toEqual(['打开', '退出']);
   });
 });

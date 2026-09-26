@@ -39,8 +39,11 @@ directories:
   output: desktop/release
   buildResources: desktop/build
 
-# 相对 directories.app（desktop/）。desktop 自己没有任何运行时依赖——electron
-# 由 Electron 运行时本身提供，不用从 node_modules 里拷任何东西进去。
+# 相对仓库根目录里 desktop/（package.json + 编译出来的 dist/main.js 都在这儿）。
+# 2026-09-26 起 desktop 有了第一个运行时依赖 electron-updater，但**不用写进这
+# 个列表**：electron-builder 按 desktop/package.json 的 dependencies 自动把
+# node_modules 收进 asar（打包核验实测：app.asar 里有 node_modules/electron-updater
+# 及其依赖树）。下面的列表只管「dependencies 之外还要带什么」。
 files:
   - dist/**/*
   - build/icon.png
@@ -66,8 +69,8 @@ asar: true
 asarUnpack:
   - build/icon.png
 
-# desktop/ 没有任何运行时依赖（electron 由运行时本身提供），没有原生模块要
-# 重新编译——跳过这一步纯粹是省时间，不是绕开一个 bug。曾经怀疑过
+# desktop 的运行时依赖（electron-updater）是纯 JS、没有原生模块要重新编译——
+# 跳过这一步纯粹是省时间，不是绕开一个 bug。曾经怀疑过
 # @electron/rebuild 会在这个 npm workspaces monorepo 里跑「installing native
 # dependencies」那一步时把仓库根 package.json 整个替换成 desktop/package.json
 # 的内容；重新测过：把这行改成 npmRebuild: true 跑一遍完整打包，根
@@ -76,21 +79,27 @@ asarUnpack:
 # package.json——上面那个说法不成立，撤回。
 npmRebuild: false
 
-# **不发布，只出包。** 这一条不是可选的洁癖，是第一次推 tag 时三个平台一起红的
-# 那个原因：electron-builder 看见当前提交上有 git tag 就会**隐式**打开发布流程
-# （日志原话：`Implicit publishing triggered by git tag. This behavior will be
-# disabled in electron-builder v27.`），而 `package.json` 的 `repository` 指向
-# GitHub，于是它推断出 github provider、去找 `GH_TOKEN`，找不到就
-# `⨯ GitHub Personal Access Token is not set` 退出码 1——**包其实已经全打完了**
-# （dmg / zip / AppImage / exe 都在日志里 building 过），死在最后一步。
+# ── publish：开着，但只用来「产元数据」 ──
+# 接了 electron-updater（desktop/src/updater.ts），包里得有 app-update.yml、
+# Release 上得有 latest.yml/blockmap，这两样只有配了 publish 才会生成。
+# **上传仍然不归 builder**：`dist:desktop` 脚本带着 `--publish never`（根
+# package.json，`identity-literals.test.ts` 钉着），发 Release 的动作照旧由
+# release.yml 的 softprops/action-gh-release 做——和「每个平台各自发同一个
+# tag」那套矩阵姿势不变。
 #
-# 这个仓库没有接 `electron-updater`（全仓零引用），也就没有「自动更新源」这回事，
-# 发布是 release workflow 用 softprops/action-gh-release 直接挂到 GitHub Release
-# 的（upload-artifact 只留 90 天的调试档）。所以这里明确关掉：`app-update.yml`
-# 和 `latest.yml` 那两份假的更新元数据也跟着不再生成（它们本来就名不副实——
-# `latest.yml` 里的文件名是 `desktop-setup-0.1.0.exe`，而真实产物当时叫
-# 「办事师爷 Setup 0.1.0.exe」——见下面 artifactName 那节，现在改成 ASCII 了）。
-publish: null
+# 原来这里写的是 `publish: null` 加一段「本仓库没有接 electron-updater（全仓
+# 零引用）」的论证，那是 0.1.x 的事实，2026-09-26 起作废。当初踩过的坑不变：
+# 没有 `--publish never`，打 tag 那次 builder 会隐式开启发布（日志原话：
+# `Implicit publishing triggered by git tag. This behavior will be disabled
+# in electron-builder v27.`），`repository` 指向 GitHub，于是它推断出 github
+# provider、去找 `GH_TOKEN`，找不到就 `⨯ GitHub Personal Access Token is not
+# set` 退出码 1——**包其实已经全打完了**（dmg / zip / AppImage / exe 都在
+# 日志里 building 过），死在最后一步，三个平台一起红。所以 flag 和配置是
+# 一套，拆哪个哪个当场出事。
+publish:
+  provider: github
+  owner: rockbenben
+  repo: shiye
 
 # 全部相对仓库根（electron-builder 管这叫 projectDir，就是跑 npm run dist:desktop
 # 时的 cwd）。to 是相对打包后 resources/ 目录的子路径。

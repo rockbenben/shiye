@@ -345,3 +345,29 @@ it('README 和冒烟清单写的产物名不带中文，跟 artifactName 那套�
   expect(readme).toContain('shiye-<版本号>-win.zip');
   expect(readme).toContain('shiye-<版本号>-win-setup.exe');
 });
+
+/**
+ * 第六对：**publish 配置和 `--publish never` 是一套，拆哪个哪个当场出事。**
+ *
+ * 「builder 自己不发布」是桌面自动更新这一批的地基：publish 配置只为生成
+ * `latest.yml` / `app-update.yml` 这两份元数据，上传永远归 softprops/action-gh-release。
+ * 当初隐式发布（builder 看见 git tag 自己冲上 GitHub 找 GH_TOKEN）把三个平台
+ * 一起搞红过——包全打完了死在最后一步（yml 注释里记着），所以这条不能只靠自觉：
+ * 脚本里的 flag 和 yml 里的配置缺任何一边，下一次打 tag 就复现那个事故。
+ *
+ * publish 三条断言匹配的是**剥注释后的** `yml`（文件顶部那个常量）——沿用本文件的
+ * 既有惯例：yml 注释里历史性地写着「推断出 github provider」这类话，整文件匹配会
+ * 在配置块被删光、只剩注释时假绿，跟上面 appId 那条撞过的是同一个形状。
+ */
+it('dist:desktop 显式 --publish never，builder 不会自己冲上 GitHub', () => {
+  const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
+  expect(pkg.scripts['dist:desktop']).toMatch(/electron-builder .*--publish never/);
+});
+
+it('builder 的 publish 指向的 owner/repo 就是仓库自己', () => {
+  const repo = (JSON.parse(read('package.json')) as { repository: { url: string } }).repository.url;
+  expect(repo).toBe('https://github.com/rockbenben/shiye.git');
+  expect(yml).toMatch(/provider:\s*github/);
+  expect(yml).toMatch(/owner:\s*rockbenben/);
+  expect(yml).toMatch(/repo:\s*shiye/);
+});

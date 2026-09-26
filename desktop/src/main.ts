@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, Notification, Tray, dialog, shell } from 'electron';
-import type { NotificationConstructorOptions } from 'electron';
+import type { MenuItemConstructorOptions, NotificationConstructorOptions } from 'electron';
+import electronUpdater from 'electron-updater';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -10,6 +11,17 @@ import { buildNotificationOptions, toNotification, PROTOCOL, type NotifyContent 
 import { parseProtocolUri, patchForAction, routeSecondInstance, type ReminderLike } from './protocol.js';
 import { decideLink } from './links.js';
 import { subscribeSse } from './sse.js';
+import { createUpdater, type Updater } from './updater.js';
+import { loadAutoCheck, saveAutoCheck } from './updatePrefs.js';
+
+// electron-updater 是 CJS、这个文件是 ESM——default import 拿到的是整个
+// module.exports。顶层只 import 不解构：真实的 autoUpdater 是个惰性 getter，
+// 读它就会构造平台更新器（mac 上给 Electron 原生 autoUpdater 注册监听器、
+// 构造时还对 app.version 做 semver 校验、可能抛），没接线的环境不该付这笔
+// 钱。而 import 本身只把模块加载进来，不触发 getter。所以解构放在
+// bootstrap 里那道「打包的 Windows」门内——门外的平台一次都不读，不会构造
+// 任何更新器。门的两个条件各有一条场景钉住：isPackaged 那半见「未打包形
+// 态」，平台那半见「打包的非 Windows」（main.test.ts）。
 
 // 跟 server/src/index.ts 里 `port` 的默认值对齐——子进程用这个端口起服务，这里才
 // 知道往哪个地址 loadURL、探活、订阅 SSE。不读 process.env.PORT：Electron 主
@@ -94,6 +106,10 @@ app.setAppUserModelId('com.rockbenben.shiye');
 // 字面量跟 store.ts 里那个配置目录名对齐，scripts/identity-literals.test.ts 守着。
 const USER_DATA_DIR = join(app.getPath('appData'), 'shiye');
 
+// 托盘「自动检查更新」checkbox 的落盘位置（读写规矩见 updatePrefs.ts：
+// 文件不存在 = 默认关，那是 D1 拍板，不是没写完的半成品）。
+const PREFS_FILE = join(USER_DATA_DIR, 'update-prefs.json');
+
 // Electron 的文档写死了这条契约：「If the path specifies a directory that does
 // not exist, an `Error` is thrown. In that case, the directory should be created
 // with `fs.mkdirSync` or similar.」（node_modules/electron/electron.d.ts）。
@@ -134,6 +150,8 @@ app.setPath('userData', USER_DATA_DIR);
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let child: ChildHandle | null = null;
+// null = 这台机器不接更新（未打包 / 非 Windows），托盘菜单和调度都绕开它。
+let updater: Updater | null = null;
 // close 事件靠它分清「隐藏到托盘」还是「真退出」——只有 app 自己要退出时才置 true。
 let quitting = false;
 
@@ -290,14 +308,48 @@ function createWindow(healthy: boolean): void {
 function createTray(): void {
   tray = new Tray(ICON_PATH);
   tray.setToolTip('办事师爷');
-  // 5. 托盘右键菜单：打开 / 退出。「随手记」小窗不在这一批（brief 明确排除）。
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: '打开', click: openWindow },
-      { label: '退出', click: () => app.quit() },
-    ]),
-  );
+  refreshTrayMenu();
   tray.on('click', openWindow); // 左键点图标 = 打开窗口
+}
+
+// 5. 托盘右键菜单。「随手记」小窗不在这一批（brief 明确排除）。
+//
+// 菜单**每调一次就整个重算一遍**，不是建好之后往里加项：更新状态机在
+// checking/downloading/ready 之间跳的时候喊的就是这个函数（updater 的
+// onChange 钩子），「重启以完成更新」那一项只在 ready 时存在。整个重建比
+// 拿着 MenuItem 引用去改 checked/label 简单，也不会有「拿到的是旧那一份」
+// 的错位。
+//
+// 没接线的形态（updater 为 null，见 bootstrap 里那道门）就是原来的两项。
+function refreshTrayMenu(): void {
+  if (!tray) return;
+  const template: MenuItemConstructorOptions[] = [{ label: '打开', click: openWindow }];
+  if (updater) {
+    const busy = updater.state() === 'checking' || updater.state() === 'downloading';
+    template.push(
+      {
+        label: busy ? '检查更新中…' : '检查更新',
+        enabled: !busy,
+        click: () => updater?.checkManual(),
+      },
+      {
+        label: '自动检查更新',
+        type: 'checkbox',
+        // 每次重开菜单都从盘上读一遍：这个开关的另一半是 updater 自己的
+        // setAutoCheck 在写，读缓存会跟它打架。
+        checked: loadAutoCheck(PREFS_FILE, (m) => console.warn('[updater]', m)),
+        click: (item) => updater?.setAutoCheck(item.checked),
+      },
+    );
+    if (updater.state() === 'ready') {
+      template.push({
+        label: `重启以完成更新 v${updater.versionReady() ?? ''}`,
+        click: () => updater?.restartToInstall(),
+      });
+    }
+  }
+  template.push({ label: '退出', click: () => app.quit() });
+  tray.setContextMenu(Menu.buildFromTemplate(template));
 }
 
 // 桌面端「在线」（SSE 连接活着）不等于这条 Electron 通知真的弹出来了——用户在
@@ -393,6 +445,32 @@ async function bootstrap(): Promise<void> {
     createWindow(healthy);
     createTray();
     subscribeReminders();
+
+    // 自动更新只在「装了 NSIS 的 Windows」上点亮：zip 免安装版没有可覆盖的
+    // 安装根目录，mac 未签名走不通 ShipIt（见 spec §0），dev 形态压根没有
+    // app-update.yml。electron-updater 默认「正常退出时顺手装」——那不是
+    // 「用户点重启」，是它自己决定，关死。
+    if (process.platform === 'win32' && app.isPackaged) {
+      // 解构放在门内：见文件顶部那段——autoUpdater 是惰性 getter，门外的平
+      // 台读它才会构造更新器，这里没通过门就一次都不读。
+      const { autoUpdater } = electronUpdater;
+      autoUpdater.autoDownload = true;
+      autoUpdater.autoInstallOnAppQuit = false;
+      updater = createUpdater(autoUpdater, {
+        log: (m) => console.log('[updater]', m),
+        balloon: (title, content) => tray?.displayBalloon({ title, content }),
+        showError: (m) => dialog.showErrorBox('办事师爷更新', m),
+        setTimer: (cb, ms) => { setTimeout(cb, ms); },
+        readAutoCheck: () => loadAutoCheck(PREFS_FILE, (m) => console.warn('[updater]', m)),
+        writeAutoCheck: (v) => saveAutoCheck(PREFS_FILE, v, (m) => console.warn('[updater]', m)),
+        onChange: () => refreshTrayMenu(),
+      });
+      // 默认关（D1）：这条在偏好没开的时候什么都不排，开了才落 60s 首查。
+      updater.scheduleAuto();
+      // createTray 先跑了一步，那时 updater 还是 null、菜单是两项；现在补一次
+      // 重建，把「检查更新 / 自动检查更新」亮出来。
+      refreshTrayMenu();
+    }
 
     // I1（code review 修复）：`second-instance` 只覆盖「应用已经在跑」这一种
     // 情况——托盘退出过、或者机器重启过之后，通知中心里留着的旧 toast 被点

@@ -87,6 +87,15 @@ jobs:
       #
       # 只捞最终产物，不要 win-unpacked / mac 那个 .app 目录——那两个是打包
       # 中间态，几百 MB，上传上去没人会去下。
+      #
+      # 末两行是自动更新要用的元数据：latest.yml 是 electron-updater 读的版本
+      # 清单，.exe.blockmap 给安装包做增量下载。它们**只有 Windows NSIS 那趟
+      # job 会产出**，但照样放进三份共享清单——if-no-files-found: error 判的是
+      # 「整个步骤一个文件都没匹配到」，mac/ubuntu 至少命中前面四个模式里的
+      # 一个，多几条空匹配的模式不会把那两个 job 染红，不需要按平台分支。
+      # 这两个文件之所以落在盘上：electron-builder.yml 的 publish: 块加上
+      # dist:desktop 的 --publish never，builder 只写不传（这两样是否真的产出，
+      # 由计划 Task 6 的一次真打包核验坐实），上传归下面那步。
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
@@ -96,6 +105,8 @@ jobs:
             desktop/release/*.zip
             desktop/release/*.dmg
             desktop/release/*.AppImage
+            desktop/release/latest.yml
+            desktop/release/*.exe.blockmap
 
       # 挂到这个 tag 的 GitHub Release。electron-builder 官方文档给多平台矩阵的
       # 模式就是每个 job 各自往同一个 Release 发。
@@ -106,7 +117,9 @@ jobs:
       # 资产名全是 ASCII（`shiye-0.1.3-win-setup.exe` / `-win.zip` 这种），跟本地
       # 打出来的名字一致，不在这里另起一套。glob 匹配不到别的平台的扩展名是正常的
       # （if 只在真有 tag 时才跑这一步，fail_on_unmatched_files 默认 false，缺一个
-      # 模式不报错）。
+      # 模式不报错）。末两行 latest.yml / *.exe.blockmap 只有 Windows 那趟产出
+      # （见上面 Artifacts 那步的注释），mac/ubuntu 上空匹配就是这同一种情况，
+      # 更新全靠这两份文件挂上 Release，缺了它们装好的应用永远查不到新版本。
       #
       # **别把 artifactName 改成带中文的。** v0.1.2 是第一次真发出 Release，实测
       # GitHub 会把非 ASCII 从资产名里抹掉：builder 打出来的是
@@ -151,3 +164,5 @@ jobs:
             desktop/release/*.zip
             desktop/release/*.dmg
             desktop/release/*.AppImage
+            desktop/release/latest.yml
+            desktop/release/*.exe.blockmap

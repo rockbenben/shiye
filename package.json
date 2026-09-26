@@ -27,7 +27,7 @@
     "test": "npm run typecheck && vitest run",
     "typecheck": "tsc -p web/tsconfig.json --noEmit && tsc -p server/tsconfig.typecheck.json && tsc -p desktop/tsconfig.typecheck.json",
     "desktop": "npm run build && npm run build -w desktop && electron desktop/dist/main.js",
-    "dist:desktop": "npm run build && npm run build -w desktop && electron-builder --config desktop/electron-builder.yml"
+    "dist:desktop": "npm run build && npm run build -w desktop && electron-builder --config desktop/electron-builder.yml --publish never"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.2",

@@ -182,10 +182,13 @@ export function SchedulePanel({ tasks, lists, now, onClose, onOpen, onReorder }:
                             />
                           )}
                           {onOpen ? (
-                            <button type="button" className="ink-sched-name" onClick={() => onOpen(t.id)}>
+                            // `title` 挂在**这一整行**（那颗按钮）上：面板窄，长标题
+                            // 一定被省略号收掉，而这一列里认出「是哪一条」全靠标题
+                            // ——跟搜索结果、任务行同一处同一个理由。
+                            <button type="button" className="ink-sched-name" title={t.title} onClick={() => onOpen(t.id)}>
                               {t.title}
                             </button>
-                          ) : <span className="ink-sched-name">{t.title}</span>}
+                          ) : <span className="ink-sched-name" title={t.title}>{t.title}</span>}
                           {/* 按清单分组时行上不再重复清单名（组标题已经写了），
                               按标签/优先级分组时才补一句它属于哪个清单。 */}
                           {axis !== 'list' && list && (

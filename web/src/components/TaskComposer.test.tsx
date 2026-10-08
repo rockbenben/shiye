@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 import { TaskComposer } from './TaskComposer.js';
 import { DATETIME_FORMAT } from './TaskFields.js';
 import { ink, theme as appTheme } from '../theme.js';
+import { addField } from '../test-utils.js';
 
 // 按中文找按钮先去空白：孤立渲染时没有 main.tsx 那层 autoInsertSpace: false，
 // antd 仍会给两字按钮插空格。跟 InboxComposer.test.tsx 同一条防御写法。
@@ -118,6 +119,7 @@ describe('TaskComposer：手工建任务', () => {
     const { onCreate } = setup();
 
     fireEvent.change(screen.getByPlaceholderText('标题'), { target: { value: '买牛奶' } });
+    addField('优先级');
     fireEvent.click(screen.getByRole('button', { name: '高' }));
     fireEvent.click(byText('添加')!);
 
@@ -195,15 +197,114 @@ describe('TaskComposer：任务默认值', () => {
  * 提示条出不出、认走的东西有没有真的进 onCreate、「取消识别」管不管用、
  * 手填过的字段会不会被识别覆盖掉。两边不重复同一批用例。
  */
+/**
+ * 切去处的时候 App 那条 `[view, query, filter, boardFilter]` 清理会把这张表单
+ * 关掉（组件卸载），而草稿活在它自己的 `useState` 里——不接住的话切一下侧栏
+ * 就把刚打的标题吃掉。接住它的是 `lib/draftStash.ts`（那边管卡片编辑态，
+ * 这儿用键 `'new-task'`）。
+ */
+describe('TaskComposer：切走再回来，草稿不该被吃掉', () => {
+  const open = (props: Partial<React.ComponentProps<typeof TaskComposer>> = {}) => render(
+    <AntApp>
+      <TaskComposer view="today" boardFilter="all" now={NOW} lists={[]} onCreate={vi.fn()} onClose={vi.fn()} {...props} />
+    </AntApp>,
+  );
+  const titleValue = () => (screen.getByPlaceholderText('标题') as HTMLInputElement).value;
+  const typeTitle = (v: string) => fireEvent.change(screen.getByPlaceholderText('标题'), { target: { value: v } });
+  /** 日期那一格收起时把值写在行上（「截止 8月25日 23:59」），第一行就是它。 */
+  const dateRow = () => (document.querySelector('.ink-frow') as HTMLElement).textContent ?? '';
+
+  it('卸载（切去处）之后重新打开：刚打的标题还在', () => {
+    const first = open();
+    typeTitle('写季度报表');
+    first.unmount();
+    open();
+    expect(titleValue()).toBe('写季度报表');
+  });
+
+  it('按「取消」之后再打开：不恢复——那是他明确说过「这条不建了」', () => {
+    const first = open();
+    typeTitle('写季度报表');
+    fireEvent.click(byText('取消')!);
+    first.unmount();
+    open();
+    expect(titleValue()).toBe('');
+  });
+
+  it('建好了之后不再恢复：下一次开表单不该凭空冒出已经变成任务的那份字', async () => {
+    const onCreate = vi.fn().mockResolvedValue(task());
+    const first = open({ onCreate });
+    typeTitle('写季度报表');
+    fireEvent.click(byText('添加')!);
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    first.unmount();
+    open();
+    expect(titleValue()).toBe('');
+  });
+
+  it('点了日历上某一天才开表单：那一天盖过草稿里的旧日期，但字留着', () => {
+    const first = open({ defaults: { listId: null, priority: 0, due: localIso(2026, 8, 20, 23, 59) } });
+    typeTitle('写季度报表');
+    first.unmount();
+    const day = localIso(2026, 8, 25, 23, 59);
+    open({ defaults: { listId: null, priority: 0, due: day }, pinnedDue: day });
+    expect(titleValue(), '文字是他打的，该还回来').toBe('写季度报表');
+    expect(dateRow()).toContain('8月25日');
+    expect(dateRow(), '「点了那天」是这一刻说的话，比草稿里的旧日期新').not.toContain('8月20日');
+  });
+
+  it('没有 pinnedDue 时不拿设置里的默认截止盖草稿：预填排在草稿后面（控件 > 标题 > 预填）', () => {
+    const first = open({ defaults: { listId: null, priority: 0, due: localIso(2026, 8, 20, 23, 59) } });
+    typeTitle('写季度报表');
+    first.unmount();
+    open({ defaults: { listId: null, priority: 0, due: localIso(2026, 8, 25, 23, 59) } });
+    expect(dateRow(), '他动过手的那份草稿排在预填前面').toContain('8月20日');
+  });
+
+  it('一字未改就切走再开：这一次该套的预填照常套上', () => {
+    // 挂载时那份初值本身就带着预填。原样存了再原样恢复，第二次打开拿到的
+    // 是「上一次的初值」而不是「这一次的预填」——浏览器实测过这一条：日期那一格
+    // 从「截止 10月3日 23:59」变成「未设置」。没动过手就没有值得留的东西。
+    const first = open({ defaults: { listId: null, priority: 0, due: localIso(2026, 8, 20, 23, 59) } });
+    first.unmount();
+    open({ defaults: { listId: null, priority: 0, due: localIso(2026, 8, 25, 23, 59) } });
+    expect(dateRow()).toContain('8月25日');
+  });
+});
+
 describe('TaskComposer：智能识别', () => {
   const typeTitle = (v: string) => fireEvent.change(screen.getByPlaceholderText('标题'), { target: { value: v } });
 
   it('认出来的东西摆在提示条上，标题会变成什么也说清楚——认走的字会从标题里消失，事后才发现跟建错了没区别', () => {
     setup();
     typeTitle('明天下午两点交周报 #工作');
-    expect(screen.getByRole('status').textContent).toContain('#工作');
-    expect(screen.getByRole('status').textContent).toContain('明天 下午两点');
-    expect(screen.getByRole('status').textContent).toContain('交周报');
+    const st = screen.getByRole('status');
+    expect(st.textContent).toContain('#工作');
+    // 原来这里断的是 `hits` 拼出来的那一句「明天 下午两点」——batch9 把「识别到什么」
+    // 从一句话改成**一段一颗 chip**（要点某一段单独撤，见 SmartHint），于是
+    // 「明天」和「下午两点」是两颗而不是一句里的两个词。断言跟着换成逐颗，
+    // 覆盖比原来更细：连「哪几段各自成一颗」都钉住了。
+    expect([...st.querySelectorAll('.ink-smart-chip')].map((e) => e.textContent)).toEqual(['明天', '下午两点', '#工作']);
+    expect(st.textContent).toContain('交周报');
+  });
+
+  it('被读走的那几个字在提示条上**划掉**，不是只报一个结果标题', () => {
+    setup();
+    typeTitle('明天下午两点交周报 #工作');
+    const st = screen.getByRole('status');
+    expect([...st.querySelectorAll('.ink-smart-gone')].map((e) => e.textContent)).toEqual(['明天', '下午两点', '#工作']);
+    expect(st.querySelector('.ink-smart-kept')).toBeNull();
+    // 划掉之外，原话里没被读走的字要原样在那儿——不然这条只是把标题抄了一遍。
+    expect(st.querySelector('.ink-smart-echo')?.textContent).toContain('交周报');
+  });
+
+  it('「认了但不摘」那一档不划掉，改成虚线：那几个字明明还在标题里', () => {
+    setup({ defaults: { listId: null, priority: 0, smart: { stripDate: false } } });
+    typeTitle('明天下午两点交周报');
+    const st = screen.getByRole('status');
+    expect(st.querySelectorAll('.ink-smart-gone').length).toBe(0);
+    expect([...st.querySelectorAll('.ink-smart-kept')].map((e) => e.textContent)).toEqual(['明天', '下午两点']);
+    expect(st.textContent).toContain('这几个字留在标题里');
   });
 
   it('什么都没认出来时不出提示条', () => {
@@ -238,6 +339,48 @@ describe('TaskComposer：智能识别', () => {
     })));
   });
 
+  /**
+   * 全局那颗「取消识别」管的是整句；这一条管**一段**。认错的常见形状是
+   * 「一句里三个词认对了两个」——那时候要撤一个不该被迫三个全撤。
+   * 走的是 `parseIgnoring`（遮字重解析），跟 QuickAdd 那边同一条判据，
+   * 但这里的合并多一层「控件 > 标题 > 预填」，所以这张表单自己也要有一条证人。
+   */
+  it('点掉提示条上「明天」那颗：那几个字回到标题，「下午两点」照认（落今天 14:00）', async () => {
+    const { onCreate } = setup();
+    typeTitle('明天下午两点交周报 #工作');
+    const chip = [...screen.getByRole('status').querySelectorAll('.ink-smart-chip')]
+      .find((c) => c.textContent === '明天');
+    fireEvent.click(chip!);
+    fireEvent.click(byText('添加')!);
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      title: '明天交周报',
+      due: localIso(2026, 8, 12, 14, 0),
+      tags: ['工作'],
+    })));
+  });
+
+  /**
+   * batch9 I-5：屏幕上不许同时站着两个日期而只有一个有记号。
+   * 原来预填的「截止 今天 23:59」一直写在日期那一行上，而按「添加」真的落
+   * 句子里那个——行上那个值从头到尾不动（它动的是草稿，识别只动合并结果）。
+   * 现在行显示合并后的那份并挂「识别」，编辑器里仍是空的。
+   */
+  it('日期那一行显示句子里认出来的那个日期，并挂「识别」；编辑器里仍是空的', () => {
+    setup();
+    typeTitle('明天下午三点交周报');
+    const row = document.querySelector('.ink-frow') as HTMLElement;
+    expect(row.textContent).toContain('截止 8月13日 15:00');
+    expect(row.querySelector('.ink-frow-smart')?.textContent).toBe('识别');
+    fireEvent.click(row);
+    expect((screen.getByLabelText('截止') as HTMLInputElement).value, '点开之后里面该是空的——那是没挑过的意思').toBe('');
+  });
+
+  it('没打字时行上写的就是草稿那份，没有「识别」', () => {
+    setup();
+    const row = document.querySelector('.ink-frow') as HTMLElement;
+    expect(row.querySelector('.ink-frow-smart')).toBeNull();
+  });
   it('取消过之后再打字也不会自己回来——他明确说过的「别认」不该被一个字的输入撤销', () => {
     setup();
     typeTitle('明天开会');
@@ -440,5 +583,53 @@ describe('TaskComposer：时间不带秒', () => {
     fireEvent.keyDown(picker, { key: 'Enter' });
     expect(picker.value).toBe('2026-09-01 08:00');
     expect(picker.value).not.toMatch(/:\d\d:\d\d$/);
+  });
+});
+
+// ============================================================================
+// Esc 关这张表单（batch9 I-6）：回车能提交，Esc 就得能退出，而且从表单里**任何**一处
+// ============================================================================
+
+describe('TaskComposer：Esc', () => {
+  const esc = (el: Element) => fireEvent.keyDown(el, { key: 'Escape' });
+
+  /**
+   * 标题框和备注框本来就接了 Esc（`formKey` 判成 cancel），缺的是焦点在别处的时候
+   * ——光标停在「添加」上按 Esc，屏幕上什么都不发生，只能挪鼠标去点「取消」。
+   */
+  it('焦点在「添加」按钮上：Esc 走 onClose，跟点「取消」同一个动作', () => {
+    const { onClose } = setup();
+    esc(byText('添加')!);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('焦点在卡片空白处（表单根上）也关得掉', () => {
+    const { onClose } = setup();
+    esc(document.querySelector('.ink-task-composer')!);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 弹层控件里的 Esc 意思是「把这个弹层收起来」，不是「把整张表单作废」。
+   * 日期面板开着时按 Esc 顺手关掉整张表单，等于他改错一个字就把这条整个丢了。
+   */
+  it('日期面板开着时：Esc 不关表单（那一下是面板自己的）', () => {
+    const { onClose } = setup();
+    fireEvent.click(document.querySelector('.ink-frow') as HTMLElement);
+    const picker = document.querySelector('.ant-picker input') as HTMLElement;
+    expect(picker, '夹具没把日期那一行点开').toBeTruthy();
+    esc(picker);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 这条钉的是「两道让路」里的另一道：标题框自己处理过 Esc 并且 preventDefault，
+   * 根上那个处理器就该让开。让开失败的表现是 `dismiss()` 跑两遍——今天看不出来
+   * （都是关表单），哪天 onClose 带上计数或者副作用，就多关一次。
+   */
+  it('标题框里按 Esc 只关一次（框自己接了，根上不该再来一遍）', () => {
+    const { onClose } = setup();
+    esc(screen.getByPlaceholderText('标题'));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

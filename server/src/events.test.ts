@@ -515,7 +515,8 @@ describe('/api/events', () => {
   // 上面两条只看「连上那一刻」的状态，抓不住 beat 心跳里的续期逻辑本身
   // （app.ts 里 `beat` 那个 setInterval）——这两条把假时钟推过好几个心跳周期。
   // 只假 Date/setInterval/clearInterval，**setTimeout 留给真实定时器**：
-  // 下面的 vi.waitFor 靠它轮询，整套都假掉的话会被饿死（CLAUDE.md 记过这个坑）。
+  // 下面的 vi.waitFor 靠它轮询，整套都假掉的话会被饿死——假时钟把 setTimeout
+  // 一起吃掉，vi.waitFor 就再也轮询不到。
   it('?client=desktop 连接存续期间，25 秒一次的心跳持续续期在线状态——不是连上那一刻钉死一次就不管了', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
     try {

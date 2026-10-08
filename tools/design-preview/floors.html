@@ -1,0 +1,283 @@
+<!doctype html>
+<!--
+  24px 下限的「咬人检测」：`tools/preview-floors.mjs` 抽出来的每一条，在真渲染里
+  把它抵掉（`min-height: auto`）再看元素有没有变矮。
+
+  **为什么要有这一张表**：`min-height: 24px` 写下去之后，谁都不会再去看它——它
+  看着就是「这条下限有人守」。可它只有在**没写它就会变矮**的时候才真的守着什么。
+  batch2 拿左右两栏比出一条这样的（`.ink-dt-date`，抵掉之后逐字相同，注释里还写着
+  「实测高 22px」），而全站这样的下限不止这一条——一条开一格 A/B 要把浏览器开同样
+  多次。这一张表一次跑完：每条在每个屏上量「抵掉之前 / 之后」的高度，差不到
+  0.05px 且元素上屏过 = 这条不咬人。
+
+  三种结论都要看，别只盯第一种：
+  - **不咬人**：抵掉以后没变矮 → 这条是装饰，不是守卫（该删，或者按它旁边
+    那句注释的说法，那条注释本身就是错的）。
+  - **咬**：给出最大那一档的差（比如 24 → 21），这是它守住的证据。
+  - **没见过**：这一轮跑的格子没让它上屏（某个弹层里、某个状态里）。**「没量到」
+    不等于「不咬」**——那要去补格子，不是判它死刑。
+
+  ## 「不咬人」不等于「删掉」，这条线在哪儿
+
+  跑出来三类不咬的，处置不一样，别一锅端：
+  - **元素自己已经写着 `height` / 内边距凑够 24**（`.ink-trow-check` 那类）：这条
+    下限是「哪天那个显式尺寸被改小」的保险。留着。删它换来的只有下次真被改小时
+    静默塌到 22。
+  - **它管的是一行的高度、不是点击目标**（`.ink-dt-top` 这种容器）：24 在这儿是
+    「别挤成一条缝」，跟目标尺寸下限同名不同事。留着，但别拿它当 a11y 证据。
+  - **注释声称一个没量过的事实**：这一类才是真该删的。上一轮那条
+    `.ink-dt-date{min-height:24px}` 就是——注释写着「实测高 22px」，而抵掉它盒子
+    一像素不动（那颗药丸一直是 32 高，22 是里面那个 `<input>` 的盒子）。判据是
+    **「这条声明有没有守过任何东西」**，不是「它看着多余」。
+
+  ## 补了两轮之后还剩三条没判
+
+  **`.ink-due-check` / `.ink-due-open`（三条）**：那是「两条以上提醒同时到点」
+  才画的聚合横幅，靠服务端 SSE 推事件。夹具确实备了两条「五分钟前」的提醒，
+  但**发过一次就盖 `firedAt` 章**，而这张表是逐格 boot 的——赶得上那一时刻
+  纯属运气（有一格真撞上了：那两条「到点」的标记框抵掉不动、点开那颗差
+  3.6px，可那是运气不是量法）。要稳定量它，得给横幅那条路单做一格
+  「重新发一次」的仪器。
+
+  上一轮记在这里的另一条（「在这天新建」那颗）**是我说错了**：当时三条走法都
+  没让那颗按钮出现，我就把它写成了一条死路。真相是第四种错——切档之后 React
+  会把那一列重画一遍，我存下来的那个节点已经不在树上，点在它身上什么都不发生、
+  也不报错。现查现点、点完等一下，它就出来了，那颗下限量出来是**咬，差 5.1px**。
+  教训写进 `drive.js` 那条 drive 的注释里。
+
+  还有一条同样值得记：**子任务那三条曾经被假报成「量过了」**。卡片不在草稿态时
+  那些输入框也在树里，只是 0×0——等待条件只查「DOM 里有」等于永远第一时间命中，
+  于是那一格不报错、表也不报错，两边都以为量过了。判据换成「看得见」
+  （`offsetWidth` + `offsetParent`，跟探针同一把尺）之后三条当场判出来：那颗
+  「删掉」宽差 15.1px、高差 5.1px（**咬**），改文本那个框抵掉一像素没动
+  （为什么不动没去查，这张表的判据只到「它有没有守过东西」为止）。
+
+  ## 跑法
+
+  起服务那一段写在 `batch1.html` 头部（要带 `DESIGN_PREVIEW=1`，否则这三张表
+  全 404），这里不复述。这一张还要先 `node tools/preview-floors.mjs --json`
+  生成同目录的 `floors.json`——那份是抽出来的清单，本表按 `./floors.json` 读它，
+  没有那份表就是空的。
+-->
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>办事师爷 · 打磨稿 · 24px 下限咬人检测</title>
+<style>
+  body { margin: 0; padding: 20px 24px 60px; background: #14161a; color: #dfe3e8;
+    font: 13px/1.6 ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  .legend { color: #8b96a5; margin: 0 0 14px; max-width: 92ch; }
+  #status { color: #ffd479; font-family: ui-monospace, Consolas, monospace; font-size: 12px; margin-bottom: 12px; }
+  h2 { font-size: 14px; margin: 20px 0 6px; }
+  .row { display: flex; gap: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 2px 0; }
+  .row.dead { color: #ff8f7a; }
+  .row.bite { color: #9fd48a; }
+  .row.unseen { color: #7d879a; }
+  .row .sel { flex: 1 1 40ch; }
+  .why { color: #8b96a5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>办事师爷 · 打磨稿 · 24px 下限咬人检测</h1>
+  <p class="legend">
+    每一条 <code>min-height/min-width: 24px</code>，在每个屏上把它抵成 <code>auto</code>
+    再量一次。<b>抵掉没变矮、而且这轮真的上屏了</b>的，才算「不咬人」。
+  </p>
+  <div id="status">booting…</div>
+</header>
+<div id="report"></div>
+<script src="./drive.js"></script>
+<script>
+// 每一格都是一个屏；`drive`/`section`/`openFirst` 沿用 drive.js 那套。跑哪些屏
+// 由「这一条下限住在哪儿」决定：侧栏、看板两档、详情、日历、收件箱、设置两页、
+// 手机、批量条、日期面板。
+const ALL_CELLS = [
+  { label: '今天 · 卡档', hash: '#/today', density: 'card', w: 1280, h: 900 },
+  { label: '今天 · 行档', hash: '#/today', density: 'row', w: 1280, h: 900 },
+  { label: '全部', hash: '#/all', density: 'card', w: 1280, h: 900 },
+  { label: '接下来', hash: '#/upcoming', density: 'card', w: 1280, h: 900 },
+  { label: '收件箱', hash: '#/inbox', density: 'row', w: 1280, h: 900 },
+  { label: '回顾', hash: '#/review', density: 'row', w: 1280, h: 900 },
+  { label: '日历', hash: '#/calendar', density: 'row', w: 1280, h: 900 },
+  { label: '四象限', hash: '#/quadrant', density: 'card', w: 1280, h: 900 },
+  { label: '纪念日', hash: '#/countdown', density: 'row', w: 1280, h: 900 },
+  { label: '习惯', hash: '#/habits', density: 'row', w: 1280, h: 900 },
+  { label: '专注统计', hash: '#/focus', density: 'row', w: 1280, h: 900 },
+  { label: '详情面板', hash: '#/all', density: 'row', w: 1280, h: 900, openFirst: true },
+  { label: '按来源', hash: '#/source', density: 'card', w: 1280, h: 900 },
+  { label: '批量条', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'select2' },
+  { label: '日期面板摊开', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'datePanel' },
+  { label: '设置 · 提醒与通知', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '提醒与通知' },
+  { label: '设置 · 任务默认值', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '任务默认值' },
+  { label: '设置 · 智能识别', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '智能识别' },
+  { label: '设置 · AI', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: 'AI 拆解' },
+  { label: '设置 · 专注', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '专注' },
+  { label: '新建任务表单', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'compose' },
+  { label: '搜索', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'search' },
+  { label: '命令面板', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'palette' },
+  { label: '快捷键一览', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'help' },
+  { label: '手机 · 今天', hash: '#/today', density: 'row', w: 390, h: 844 },
+  { label: '手机 · 抽屉', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'drawer' },
+  // ── 下面这一批是第二轮补的：第一轮跑完有五十来条下限「这轮没上屏」，
+  //    而它们对应的面从来没被任何一张表量过（不是量了没问题，是没量）。
+  //    每一条都靠 `drive.js` 里同名的那条真点出来。
+  { label: '日历 · 安排任务那栏', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'schedPanel' },
+  { label: '日历 · 周档', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'calMode', mode: 'week' },
+  { label: '日历 · 年档', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'calMode', mode: 'year' },
+  { label: '日历 · 日程档', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'calMode', mode: 'agenda' },
+  { label: '日历 · 点一天新建', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'calCompose' },
+  { label: '表单 · 重复那一行', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'repeatEditor' },
+  { label: '表单 · 标签那一行', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'tagEditor' },
+  { label: '表单 · 优先级', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'priRow' },
+  { label: '表单 · 斜杠插入菜单', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'slashMenu' },
+  { label: '搜索结果那一屏', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'searchJump' },
+  { label: '筛选栏摊开', hash: '#/all', density: 'row', w: 1280, h: 900, drive: 'filterPanel' },
+  { label: '侧栏 · 标签改名', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'renameTag' },
+  { label: '卡片编辑态 · 检查事项', hash: '#/all', density: 'card', w: 1280, h: 900, drive: 'subtaskEdit' },
+  { label: '行档 · 今天那颗 ⋯', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'rowMenu' },
+  { label: '卡片 · 批量勾选', hash: '#/all', density: 'card', w: 1280, h: 900, drive: 'selCheck' },
+  { label: '习惯 · 展开月历', hash: '#/habits', density: 'row', w: 1280, h: 900, drive: 'habitMonth' },
+  { label: '今天 · 推荐摊开', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'suggestPanel' },
+  { label: '详情 · 带附件那条', hash: '#/all', density: 'row', w: 1280, h: 900, drive: 'attachRow' },
+  { label: '看板 · AI 理由收两行', hash: '#/source', density: 'card', w: 390, h: 844, drive: 'marginExpand' },
+  { label: '垃圾箱 · 里面有东西', hash: '#/trash', density: 'row', w: 1280, h: 900 },
+  // 撤销那条 toast 只活六秒，所以这一格排在最后：它标完成一条，后面的格子
+  // 不该跟着受这个影响。
+  { label: '标完成之后那条撤销', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'undoToast' },
+  // ── 第三轮补的三条（上一轮跑完还剩十条没上屏，逐条对过为什么）。
+  { label: '设置 · 功能模块', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '功能模块' },
+  { label: '随手添加那行打了字', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'quickAdd' },
+  // 报错横幅那一格：**夹具默认档就把「命令行工具路径」指到一个不存在的二进制**
+  // （`node tools/preview-fixture.mjs …`，不带任何开关），所以它不会真的去 spawn
+  // 一个命令行 AI。绿色那条「拆解完成」
+  // 跟红色那条一样都带右上角那颗 ×，所以这一格量的是那颗 ×，不是红还是绿。
+  { label: '横幅上那颗关闭 ×', hash: '#/inbox', density: 'row', w: 1280, h: 900, drive: 'agentFail' },
+];
+
+const status = document.getElementById('status');
+const report = document.getElementById('report');
+/**
+ * **跑哪几格由 `?cells=` 决定**（如 `?cells=26,27`，跟 batch1 同一个写法）。
+ * 默认全跑。分片在这儿不是优化而是前提：一条 drive 写错了，重跑一次整张表要
+ * 十几分钟，而看它报错只需要那一格。
+ */
+const picked = new URLSearchParams(location.search).get('cells');
+const CELLS = picked
+  ? picked.split(',').map((n) => ALL_CELLS[Number(n)]).filter(Boolean)
+  : ALL_CELLS;
+// sel+prop 一份账：seen / bites / 最大那一档的差 / 在哪些屏上量的
+const tally = new Map();
+/**
+ * 哪一格没开起来要留下来看，不能只把最后一句写在状态行上——状态行会被下一格
+ * 覆盖，一轮 47 格跑完，屏幕上只剩最后一格的那句。写错一条 drive 的时候，
+ * 这两样差得很远：一个是「跑完了，数字挺好看」，一个是「这六格根本没开起来」。
+ */
+const failures = [];
+const key = (e) => `${e.prop} :: ${e.sel}`;
+
+(async () => {
+  const floors = await (await fetch('./floors.json')).json();
+  status.textContent = `${floors.length} 条下限 × ${CELLS.length} 个屏…`;
+  let ci = 0;
+  for (const c of CELLS) {
+    ci += 1;
+    const cell = document.createElement('div');
+    cell.style.cssText = 'position:fixed;left:-10000px;top:0';
+    cell.innerHTML = '<iframe></iframe>';
+    document.body.appendChild(cell);
+    const f = cell.querySelector('iframe');
+    f.style.cssText = `width:${c.w}px;height:${c.h}px`;
+    try {
+      prepareCell(c);
+      await bootCell(f, c);
+      await settle(f);
+      const n = await measure(f, floors, (done) => {
+        status.textContent = `${ci}/${CELLS.length} ${c.label} — 量到第 ${done}/${floors.length} 条`;
+      });
+      status.textContent = `${ci}/${CELLS.length} ${c.label} — 这一屏量了 ${n} 条`;
+    } catch (err) {
+      const msg = String(err && err.message || err);
+      failures.push(`${c.label} — ${msg}`);
+      status.textContent = `${ci}/${CELLS.length} ${c.label} — 量不到：${msg}`;
+    }
+    f.src = 'about:blank';
+    cell.remove();
+  }
+  render(floors);
+})();
+
+/**
+ * 一格屏：每条下限抵掉再量，返回这一屏真量过的条数。
+ *
+ * **每量一二十条让出一拍。** 不让的话，一格是一整段同步的强制布局（清单里每一条
+ * 都要「抵掉量一次、还原再量一次」），这段时间里页面既不画也不回消息——上一版跑
+ * 的时候整屏停在「booting…」，看着像挂了，其实只是在量第三格。让出之后那行状态
+ * 跟着走，看的人分得清「还在量」和「卡住了」。（让的是 `setTimeout`，不是
+ * `requestAnimationFrame`：后台标签里 rAF 根本不跑，那样才是真挂住。）
+ */
+async function measure(f, floors, onChunk) {
+  const d = f.contentDocument;
+  const style = d.createElement('style');
+  d.head.appendChild(style);
+  let touched = 0;
+  for (let i = 0; i < floors.length; i++) {
+    const e = floors[i];
+    let els;
+    try { els = [...d.querySelectorAll(e.sel)]; } catch { continue; }
+    const vis = els.filter((x) => x.offsetWidth > 0 && x.offsetHeight > 0 && x.offsetParent !== null);
+    if (vis.length === 0) continue;
+    const size = (x) => (e.prop === 'min-height' ? x.getBoundingClientRect().height : x.getBoundingClientRect().width);
+    const before = vis.map(size);
+    style.textContent = `${e.sel}{${e.prop}:auto !important}`;
+    const after = vis.map(size);
+    style.textContent = '';
+    touched += 1;
+    const k = key(e);
+    const t = tally.get(k) || { e, seen: 0, bites: 0, worst: 0 };
+    t.seen += 1;
+    let delta = 0;
+    for (let j = 0; j < vis.length; j++) delta = Math.max(delta, before[j] - after[j]);
+    /**
+     * 判「咬」的线画在 **0.05px**，不是一像素的一半。原来写的是 0.5，于是
+     * `.ink-searchmodal-input` 那条被归进「不咬人」——量它的人一看注释写着
+     * 「实测 23.x px」，会以为注释在撒谎：抵掉之后它是 23.56，**咬，只差
+     * 0.44px**。半像素那条线不是从噪声来的，是顺手写的；真正该躲开的是浮点
+     * 噪声，而「完全冗余」的那些条差的是整整 0（`getBoundingClientRect` 给出
+     * 的就是同一个数），0.05 够把它们分开，又不会把 0.4px 当成没有。
+     */
+    if (delta > 0.05) { t.bites += 1; t.worst = Math.max(t.worst, delta); }
+    tally.set(k, t);
+    if (i % 20 === 19) {
+      onChunk(i + 1);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+  style.remove();
+  return touched;
+}
+function render(floors) {
+  const all = [...tally.values()];
+  const dead = all.filter((t) => t.seen > 0 && t.bites === 0);
+  const biting = all.filter((t) => t.bites > 0);
+  const never = floors.filter((e) => !tally.has(key(e)));
+  const row = (cls, text, extra) => `<div class="row ${cls}"><span class="sel">${text}</span><span class="why">${extra || ''}</span></div>`;
+  report.innerHTML = [
+    failures.length
+      ? `<h2>有 ${failures.length} 格没开起来 —— 它们量过的条数不算数，先修这些</h2>`
+        + failures.map((x) => row('dead', x, '')).join('')
+      : '',
+    `<h2>不咬人（${dead.length} 条）——抵掉之后没变矮，量到过 ${dead.map((t) => t.seen).join('/') || '—'} 屏</h2>`,
+    ...dead.map((t) => row('dead', `${t.e.prop}: 24px ｜ ${t.e.sel}`, `量过 ${t.seen} 屏，一次没变矮`)),
+    `<h2>咬（${biting.length} 条）——最大那一档：抵掉会矮多少</h2>`,
+    ...biting.sort((a, b) => b.worst - a.worst).map((t) => row('bite', `${t.e.prop}: 24px ｜ ${t.e.sel}`, `最多差 ${t.worst.toFixed(1)}px，${t.bites}/${t.seen} 屏上量到`)),
+    `<h2>这轮没上屏（${never.length} 条）——不能判，只能补格子</h2>`,
+    ...never.map((e) => row('unseen', `${e.prop}: 24px ｜ ${e.sel}`, '这一轮的格子里没出现')),
+    `<h2>合计 ${floors.length} 条：咬 ${biting.length} ｜ 不咬 ${dead.length} ｜ 没量到 ${never.length}</h2>`,
+  ].join('');
+  status.textContent = `跑完：${floors.length} 条 ｜ 咬 ${biting.length} ｜ 不咬 ${dead.length} ｜ 没上屏 ${never.length}`;
+}
+</script>
+</body>
+</html>

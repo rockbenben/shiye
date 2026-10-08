@@ -242,7 +242,7 @@ function FilterRow({ group, onChange, listOptions, tagOptions }: RowProps) {
       >
         只看重复的
       </Checkbox>
-      {/* 「还没开始的」。判据走 `notStarted`，跟卡片上那个「9 月 1 日 开始」的
+      {/* 「还没开始的」。判据走 `notStarted`，跟卡片上那个「9月1日 开始」的
           记号是同一个函数——这一维要是自己写一遍，筛出来的卡片上会没有那个记号。 */}
       <Checkbox
         className="ink-filter-waiting"

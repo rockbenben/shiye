@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Dropdown } from 'antd';
+import { Button, DatePicker, Dropdown } from 'antd';
 import type { List, Status, TaskContext } from '../types.js';
 import { CONTEXT_LABEL, CONTEXTS, STATUS_LABEL, STATUSES } from '../lib/taskView.js';
 import { PRI_MENU } from './TaskFields.js';
@@ -27,6 +27,9 @@ export interface BatchBarProps {
   /** 批量改期（仿滴答清单的批量「编辑新日期」）。跟卡片 ⋯ 里那组同一套语义：
    *  原来几点还是几点、提醒跟着挪，判据在 lib/reschedule.ts。 */
   onReschedule: (to: RescheduleTo) => void;
+  /** 批量改到**某一天**（绝对日期，不是「明天」那种相对去处）。只到「哪天」，
+   *  钟点各条自己保留——判据在 `lib/reschedule.ts` 的 `rescheduleDayPatch`。 */
+  onRescheduleDay: (day: Date) => void;
   /** 「推迟」（仿滴答清单：一键把选中的时间统统往后挪一小时，应付临时会议、
    *  堵车、插进来的新安排）。分钟数由调用方给，这里只报动作。 */
   onPostpone: (minutes: number) => void;
@@ -65,7 +68,7 @@ const NO_CONTEXT = '__none__';
 
 
 export function BatchBar({
-  count, lists, onChangeStatus, onReschedule, onPostpone, onChangeList, onAddTag, onChangePriority, onChangeContext, onDelete, onClear,
+  count, lists, onChangeStatus, onReschedule, onRescheduleDay, onPostpone, onChangeList, onAddTag, onChangePriority, onChangeContext, onDelete, onClear,
 }: BatchBarProps) {
   const [tagDraft, setTagDraft] = useState('');
   if (count === 0) return null;
@@ -88,10 +91,14 @@ export function BatchBar({
           理由：这里不需要搜索/多选，原生的可访问性判定更简单，测试用
           fireEvent.change 直接可驱动。不写 value（uncontrolled）：这是一个
           「批量把选中的都改成这个清单」的一次性动作，不是在显示「当前值」——
-          选中的任务清单本来就可能各不相同，没有唯一的「当前值」可显示。 */}
+          选中的任务清单本来就可能各不相同，没有唯一的「当前值」可显示。
+
+          名字是「改清单」，不带「批量」前缀：这一条整组都住在
+          `aria-label="批量操作"` 那条 toolbar 里，读屏会念成「批量操作
+          批量改清单」。同组的 改状态 / 改优先级 / 改情境 / 改期 都不带前缀。 */}
       <select
         className="ink-batch-list-select"
-        aria-label="批量改清单"
+        aria-label="改清单"
         defaultValue=""
         onChange={(e) => {
           const v = e.target.value;
@@ -165,6 +172,19 @@ export function BatchBar({
       >
         <Button size="small">改期</Button>
       </Dropdown>
+
+      {/* 「改到某天…」：这一档**只在批量条上有，单条的 ⋯ 菜单里没有**——单条
+          有编辑表单里那个日期选择器兜着，菜单里再放一个是把同一个控件包两层；
+          而批量没有那个兜：选中八条想都挪到 12 号，只能八条各开一次表单。
+          规矩（原来几点还是几点、提醒跟着挪）跟「改期」那三档一字不差，
+          判据在 `lib/reschedule.ts` 的 `rescheduleDayPatch`。 */}
+      <DatePicker
+        size="small"
+        allowClear={false}
+        aria-label="改到某天"
+        placeholder="改到某天…"
+        onChange={(d) => { if (d) onRescheduleDay(d.toDate()); }}
+      />
 
       {/* 「推迟一小时」单独一颗按钮、不收进「改期」里：它是应付「临时插了个
           会」的当场动作，多一次点开菜单就失去意义了。 */}

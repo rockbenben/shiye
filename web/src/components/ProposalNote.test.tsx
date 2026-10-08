@@ -61,10 +61,10 @@ describe('ProposalNote', () => {
     expect(row.textContent).toContain('2026-08-20 17:00');   // 新值
   });
 
-  it('旧值原本是空的时候说「空」，不是留一段空白', () => {
+  it('旧值原本没有的时候说「没有」，不是留一段空白', () => {
     setup({ t: task({ reminders: [] }) });
 
-    expect(screen.getByRole('listitem').textContent).toContain('空');
+    expect(screen.getByRole('listitem').textContent).toContain('没有');
   });
 
   it('理由要显示出来——他得看得出为什么这么建议', () => {
@@ -198,7 +198,7 @@ describe('提议块渲染这一批新补的四个字段——不再是裸英文�
     expect(txt).not.toContain('repeat');
     expect(txt).toContain('每周一');   // describeRepeat 的输出，跟卡片上一致
     expect(txt).not.toContain('[object Object]');
-    expect(txt).toContain('空');       // 旧值：task.repeat 是 null
+    expect(txt).toContain('没有');       // 旧值：task.repeat 是 null
   });
 });
 
@@ -223,9 +223,9 @@ describe('ProposalNote：提醒全列出来', () => {
     expect(document.body.textContent).not.toContain('、');
   });
 
-  it('空数组说「空」，不是一片空白', () => {
+  it('空数组说「没有」，不是一片空白', () => {
     show({ reminders: [] });
-    expect(document.body.textContent).toContain('空');
+    expect(document.body.textContent).toContain('没有');
   });
 
   it('坏掉的那条跳过，不印 Invalid Date', () => {

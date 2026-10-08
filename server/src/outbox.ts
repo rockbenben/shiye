@@ -1,8 +1,8 @@
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, renameSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
 import type { Bus } from './events.js';
-import { isSafeId } from './entityStore.js';
+import { isSafeId, renameIntoPlace } from './entityStore.js';
 import { emitAgentStatus, type AgentStatus } from './expand.js';
 import { bad, checkProposalPatch, checkTaskPatch, type SanitizeResult } from './task.js';
 import {
@@ -14,8 +14,8 @@ import {
 /**
  * 校验一条 outbox 里的任务对象，通过就补齐成完整 `Task`；不通过就带上是哪个
  * 字段、为什么——外面 `mergeOneFile` 拼横幅文案要用，AI 拿到「status 要是
- * todo/doing/done/later 之一」才有得改，拿到一句「没通过校验」只能在 25 个
- * 字段里猜。
+ * todo / doing / done / later / abandoned 之一」才有得改，拿到一句「没通过
+ * 校验」只能在 31 个字段里猜。
  *
  * 内容字段（title/notes/status/due/reminders/subtasks/source/aiComment）
  * 走 `checkTaskPatch`——跟 `POST /api/tasks` 同一份代码，这是设计文档里
@@ -32,32 +32,30 @@ import {
  * `newTask()` 的默认值（新 uuid、当前时间），不算校验失败。
  */
 /**
- * 校验前把「AI 写什么都不算数」的那几个字段整个摘掉——不止 `order`，
- * `priority`/`completedAt`/`postponeCount`/`focusSessions`/
- * `attachments` 六个新字段跟它是同一个道理：下面 `toTask` 反正会强制覆盖成
- * 固定默认值，校验它们的类型没有意义，只有坏处。
+ * 校验前把「AI 写什么都不算数」的那几个字段整个摘掉——**名单不在这儿手抄**：
+ * `AGENTS.md`「校验失败会怎样」一节那份（`agentsMd.guard.test.ts` 拿它跟
+ * `stripForced` 逐个对账，抄两份迟早有一份是旧的）。
  *
- * `checkTaskPatch` 对其中四个——`order`/`priority`/
- * `focusSessions`/`attachments`——是「类型不对就拒收」（`PATCH
+ * `order` 是第一档：`checkTaskPatch` 对它是「类型不对就拒收」（`PATCH
  * /api/tasks/:id` 需要这条，人手滑传错类型要能看到 400），但那是给人经网页
- * 发起的请求用的规矩。outbox 是 AI 写的、信任边界之外的输入，这五个字段在
+ * 发起的请求用的规矩。outbox 是 AI 写的、信任边界之外的输入，这些字段在
  * 这条路径上唯一合法的处理方式就是覆盖——AI 写个字符串、写个超范围的数字，
  * 都不该让 `checkTask` 判定失败、进而让 `mergeOneFile` 拒收这一整个文件。
  * 不摘掉的话会出现第三种、谁都没设计过的行为：「填对了当没填（反正会被覆盖），
- * 填错了却让整份文件退回」——即使 `checkTaskPatch` 现在会指名是这四个字段里
- * 哪一个，那也是在让 AI 白费一次改动去修一个结果完全不采信的字段，不摘掉的话
+ * 填错了却让整份文件退回」——即使 `checkTaskPatch` 现在会指名是哪个字段，
+ * 那也是在让 AI 白费一次改动去修一个结果完全不采信的字段，不摘掉的话
  * 等于逼它去关心一件不该关心的事。
  *
  * `completedAt`/`postponeCount` 这两个字段不是这条道理——上一个 Task 已经把
  * 它们整个从 `checkTaskPatch` 的白名单里删掉了（`TaskPatch` 类型上已经
  * 没有这两个键，人也不能再经 `PATCH` 直接改），`checkTaskPatch` 现在压根
- * 不认它们，给了也不会被拒收、只是不会被采纳。这里仍然把它们跟另外五个一起
+ * 不认它们，给了也不会被拒收、只是不会被采纳。这里仍然把它们跟其他几个一起
  * 摘掉，纯粹是不让原始值混进下面 `newTask()` 的入参、图一个统一，不是在
  * 避免一次本来就不会发生的类型校验拒收。
  *
  * `AGENTS.md`「校验失败会怎样」一节原话（举的是 `order`，同一条道理套在
- * 全部七个字段上）：「order 不在这条规则里……不管你写什么都会被悄悄改成
- * null」——这里改代码去符合这条承诺，不是反过来放宽承诺去将就代码。
+ * 那份名单上的每一个字段）：「order 不在这条规则里……不管你写什么都会被悄悄
+ * 改成 null」——这里改代码去符合这条承诺，不是反过来放宽承诺去将就代码。
  */
 function stripForced(raw: unknown): unknown {
   if (typeof raw !== 'object' || raw === null) return raw;
@@ -95,10 +93,11 @@ function checkTask(raw: unknown): SanitizeResult<Task> {
   const r = checkTaskPatch(stripForced(raw));
   if (!r.ok) {
     // status 的原因单独换一句：task.ts 里的共用文案（「要是 todo / doing /
-    // done / later 之一」）对 PATCH /api/tasks/:id 是对的——人经网页发起的
-    // 写，四个值都合法。但这里的读者是 AI，AGENTS.md「拆解要做的事」写得
-    // 很死：AI 只能写 todo，later 是人的决定，写了会被下面 mergeOneFile 里
-    // 另一条特判单独拒收（在调用这个函数之前就已经拦下，走不到这里）。
+    // done / later / abandoned 之一」）对 PATCH /api/tasks/:id 是对的——人经
+    // 网页发起的写，五个值都合法。但这里的读者是 AI，AGENTS.md「拆解要做的
+    // 事」写得很死：AI 只能写 todo，later 是人的决定，写了会被下面
+    // mergeOneFile 里另一条特判单独拒收（在调用这个函数之前就已经拦下，
+    // 走不到这里）。
     // 照着共用文案改的 AI 有 1/3 概率把自己送进那条特判、再退回一次——这里
     // 只改 outbox 这一侧看到的话，不动 task.ts 的共用文案，PATCH 的 400
     // 不受影响。
@@ -246,7 +245,7 @@ interface FileResult {
   /** 指向已经不存在的任务、因而被丢弃的建议数。跟 duplicateCount 一样要进
    * 横幅：只记日志的话，AI 写错 id 时用户看不出少了东西。 */
   droppedCount: number;
-  /** 因为 id 已经在 `tasks.json` 里而被丢弃的任务数——多半是中断后的重试，
+  /** 因为 id 已经在 `data/tasks/` 里而被丢弃的任务数——多半是中断后的重试，
    * 但也可能是 AI 手滑复用了旧 id，那种情况下这个任务是真的丢了（新内容没有
    * 落地）。之前只写进服务窗口的日志，横幅不提，AI 犯错时用户看不出少了东西——
    * `mergeOutbox` 把它汇总进汇报消息，见「另有 N 个 id 重复被跳过」那一句。 */
@@ -259,6 +258,16 @@ interface FileResult {
    * `proposalCount` 分开数是同一个理由：一个只含 `insights` 的文件不该被判
    * 定成「什么都没干」。 */
   insightCount?: number;
+  /** **AI 判「这不是任务」的那几条收件箱记录**（处理了，但一条任务都没拆出来）。
+   *
+   * 为什么单独数、还要进横幅：这类条目从「待拆解」消失、掉进折叠的「已拆解」，
+   * 行上写着「没拆出任务——AI 觉得它不是一件要做的事」。**横幅只报总数的话，
+   * 用户不知道是哪几条被处理了**——3 条待拆、拆出 1 条，那 2 条去了哪儿只有
+   * 界面知道。差清单第 12 条记的就是这个。
+   *
+   * 可选（默认当 0 算），跟 `insightCount` 同一个理由：校验失败的那些返回点
+   * 没有「判成什么」，补一个 0 是假数。 */
+  notTaskCount?: number;
   failure?: string;
   /** `failure` 存在时，这个字段说明它是「校验没过」（false/未给出）还是
    * 「校验都过了、落盘或清理那一步出的意外」（true）——两种在 `mergeOutbox`
@@ -290,7 +299,7 @@ function safeDelete(file: string, base: string): string | undefined {
 /**
  * 合并单个 outbox 文件。**每次都自己 `readInbox()` / `readTasks()`，不接受调用方
  * 传进来的快照**——这是同一批里多个文件互相看得见彼此效果的唯一原因：文件 A
- * 把某条标成 `processed: true`、把某个 id 写进 `tasks.json` 之后，紧接着处理的
+ * 把某条标成 `processed: true`、把某个 id 写进 `data/tasks/` 之后，紧接着处理的
  * 文件 B 读到的就是刚写完的新状态，天然被下面「已处理就跳过」「id 已存在就
  * 丢弃」两条逻辑拦下——不需要在调用方另外维护一份「这一批里处理过什么」。
  *
@@ -502,6 +511,15 @@ function mergeOneFile(file: string): FileResult {
     idsByInbox.set(entry.inboxId, [...(idsByInbox.get(entry.inboxId) ?? []), ...ids]);
   }
 
+  /**
+   * **AI 判「这不是任务」的那几条。** 判据是「这条收件箱记录处理了，却一条任务都
+   * 没拆出来」——`idsByInbox` 里那一项是空的。
+   *
+   * 跟「被跳过（已经处理过）」是两回事：那种在进这个循环之前就 `continue` 掉了，
+   * 压根没进 `idsByInbox`，所以不会算进来。
+   */
+  const notTaskCount = [...idsByInbox.values()].filter((ids) => ids.length === 0).length;
+
   if (skippedIds.length > 0) {
     console.warn(`[outbox] ${base} 跳过已处理过的收件箱条目（避免重复入库）：${skippedIds.join(', ')}`);
   }
@@ -519,7 +537,7 @@ function mergeOneFile(file: string): FileResult {
     const delErr = safeDelete(file, base);
     return delErr
       ? { newTaskCount: 0, proposalCount: 0, skippedCount: skippedIds.length, duplicateCount: duplicateIds.length, droppedCount: droppedProposals.length, entryCount: entries.length, failure: delErr, writeFailure: true }
-      : { newTaskCount: 0, proposalCount: 0, skippedCount: skippedIds.length, duplicateCount: duplicateIds.length, droppedCount: droppedProposals.length, entryCount: entries.length };
+      : { newTaskCount: 0, proposalCount: 0, skippedCount: skippedIds.length, duplicateCount: duplicateIds.length, droppedCount: droppedProposals.length, entryCount: entries.length, notTaskCount };
   }
 
   // 只在真有新任务时才写 tasks.json——不然是把读回来的同一份内容原样写一遍：
@@ -580,7 +598,7 @@ function mergeOneFile(file: string): FileResult {
 
     const delErr = safeDelete(file, base);
     if (delErr) {
-      return { newTaskCount: newTasks.length, proposalCount: newProposals.length, insightCount: newInsights.length, skippedCount: skippedIds.length, duplicateCount: duplicateIds.length, droppedCount: droppedProposals.length, entryCount: entries.length, failure: delErr, writeFailure: true };
+      return { newTaskCount: newTasks.length, proposalCount: newProposals.length, insightCount: newInsights.length, skippedCount: skippedIds.length, duplicateCount: duplicateIds.length, droppedCount: droppedProposals.length, entryCount: entries.length, notTaskCount, failure: delErr, writeFailure: true };
     }
   } catch (e) {
     // 校验全部通过之后、落盘这一步才炸的（ENOSPC、.bak 被备份软件锁住之类，
@@ -611,12 +629,13 @@ function mergeOneFile(file: string): FileResult {
       duplicateCount: duplicateIds.length,
       droppedCount: droppedProposals.length,
       entryCount: entries.length,
+      notTaskCount,
       failure: message,
       writeFailure: true,
     };
   }
 
-  return { newTaskCount: newTasks.length, proposalCount: newProposals.length, insightCount: newInsights.length, skippedCount: skippedIds.length, duplicateCount: duplicateIds.length, droppedCount: droppedProposals.length, entryCount: entries.length };
+  return { newTaskCount: newTasks.length, proposalCount: newProposals.length, insightCount: newInsights.length, skippedCount: skippedIds.length, duplicateCount: duplicateIds.length, droppedCount: droppedProposals.length, entryCount: entries.length, notTaskCount };
 }
 
 /**
@@ -660,7 +679,13 @@ function writeLastOutboxError(failures: string[]): void {
   const file = join(dir, '.last-outbox-error.json');
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, JSON.stringify({ failures, at: nowIso() }, null, 2), 'utf8');
-  renameSync(tmp, file);
+  // **改名这一步带重试**（`entityStore.ts` 的 `renameIntoPlace`）：Windows 上
+  // `renameSync` 会偶发 EPERM（目标文件刚被写完、句柄还没完全释放），而这一步
+  // 抖一下的后果是**「上次校验失败」那份记录整个没写进去**——AI 下次跑就看不到
+  // 自己上轮错在哪，self-correcting 那条链就断了。同一类病在写任务/写设置/
+  // 写 outbox 文件那几处都修过了（2026-10-21 实测：全量测试每轮随机红 2~3 条，
+  // 红的全是这一条），这里漏了。
+  renameIntoPlace(tmp, file);
 }
 
 /** 成功合并一次之后删掉——错误已经被这次成功消化了，留着只会让 AI 一直看到陈年旧账。 */
@@ -695,6 +720,7 @@ export function mergeOutbox(bus: Bus): void {
   let duplicateCount = 0;
   let droppedCount = 0;
   let totalEntryCount = 0;
+  let notTaskCount = 0;
   const validationFailures: string[] = [];
   const writeFailures: string[] = [];
 
@@ -707,6 +733,7 @@ export function mergeOutbox(bus: Bus): void {
     duplicateCount += result.duplicateCount;
     droppedCount += result.droppedCount;
     totalEntryCount += result.entryCount;
+    notTaskCount += result.notTaskCount ?? 0;
     if (result.failure) {
       (result.writeFailure ? writeFailures : validationFailures).push(result.failure);
     }
@@ -723,10 +750,20 @@ export function mergeOutbox(bus: Bus): void {
   // 指向已经不存在的任务而被丢弃的建议。跟 duplicateNote 同一个道理：只写进
   // 服务窗口的日志的话，AI 手滑写错 id 时用户完全看不出少了东西——他只会看到
   // 一句「没有产出新任务」，而 AI 在对话里说「我提了 3 条建议」。
-  const droppedNote = droppedCount > 0 ? `，另有 ${droppedCount} 条建议指向已经不存在的任务、被丢弃` : '';
+  const droppedNote = droppedCount > 0 ? `，另有 ${droppedCount} 条建议指向已经不存在的任务，被丢弃` : '';
   // 观察不挂在任何一个任务卡上，跟 proposalNote 同一个理由分开数：一个只含
   // insights 的文件不该被后面「没有产出新任务」那条分支盖过去，那句话是假话。
   const insightNote = insightCount > 0 ? `，记录了 ${insightCount} 条观察` : '';
+  // **AI 判「这不是任务」的那几条**（差清单第 12 条）。这类条目从「待拆解」消失、
+  // 掉进折叠的「已拆解」，行上写着「没拆出任务——AI 觉得它不是一件要做的事」。
+  // **横幅只报总数的话，用户不知道是哪几条被处理了**——3 条待拆、拆出 1 条，
+  // 那 2 条去了哪儿只有界面知道（得自己翻折叠面板找）。
+  //
+  // 这句话指得出地方（「已拆解」里那几条），因为第 1 条已经先落地了：那些条目的
+  // 动作区里有「变成任务」，指过去是给一条有出路的路，不是从死胡同引进另一个。
+  const notTaskNote = notTaskCount > 0
+    ? `，另有 ${notTaskCount} 条被 AI 判成了「不是一件要做的事」（在「已拆解」里写着「没拆出任务」的那几条）`
+    : '';
 
   if (validationFailures.length > 0 || writeFailures.length > 0) {
     // 两种失败分开说：「校验没过」意味着 tasks.json 没被动过，改好那个字段重来
@@ -734,7 +771,7 @@ export function mergeOutbox(bus: Bus): void {
     // 数据可能已经部分改动——这种时候告诉人家「没通过校验」是骗人的，还会把
     // 人往错的方向指（去改一个根本没问题的字段）。
     const parts: string[] = [];
-    if (newTaskCount > 0 || proposalCount > 0 || insightCount > 0) parts.push(`新增 ${newTaskCount} 个任务${proposalNote}${insightNote}${duplicateNote}${droppedNote}`);
+    if (newTaskCount > 0 || proposalCount > 0 || insightCount > 0) parts.push(`新增 ${newTaskCount} 个任务${proposalNote}${insightNote}${duplicateNote}${droppedNote}${notTaskNote}`);
     if (validationFailures.length > 0) parts.push(`以下文件没通过校验，原样留在 data/ 里：${validationFailures.join('；')}`);
     if (writeFailures.length > 0) parts.push(`以下文件校验通过但落盘/清理时出了问题（不是校验没过，数据可能已经部分改动）：${writeFailures.join('；')}`);
     const message = parts.join('；');
@@ -762,7 +799,7 @@ export function mergeOutbox(bus: Bus): void {
     const bits: string[] = [];
     if (proposalCount > 0) bits.push(`提了 ${proposalCount} 条修改建议，在「按来源」对应的任务卡上等你确认`);
     if (insightCount > 0) bits.push(`记录了 ${insightCount} 条观察`);
-    emitAgentStatus(bus, { state: 'ok', message: `分析完成，AI ${bits.join('；')}${duplicateNote}${droppedNote}`, kind });
+    emitAgentStatus(bus, { state: 'ok', message: `分析完成，AI ${bits.join('；')}${duplicateNote}${droppedNote}${notTaskNote}`, kind });
     return;
   }
 
@@ -775,11 +812,11 @@ export function mergeOutbox(bus: Bus): void {
         ? `${skippedCount} 条收件箱记录都已经处理过，本次没有新增任务（可能是拆解被重复触发了）`
         // 有内容、也真处理了，但没有一条落成新任务——AI 判断都不是任务，
         // 或者对应的任务因为 id 冲突被跳过（多半是中断后的重试）。
-        : `AI 跑完了，但没有产出新任务（可能是内容都不算需要拆的任务，或者对应的任务已经存在）${duplicateNote}${droppedNote}`;
+        : `AI 跑完了，但没有产出新任务（可能是内容都不算需要拆的任务，或者对应的任务已经存在）${duplicateNote}${droppedNote}${notTaskNote}`;
     emitAgentStatus(bus, { state: 'skipped', message, kind });
     return;
   }
 
   const skippedNote = skippedCount > 0 ? `，跳过 ${skippedCount} 条已处理过的` : '';
-  emitAgentStatus(bus, { state: 'ok', message: `拆解完成，新增 ${newTaskCount} 个任务${proposalNote}${insightNote}${skippedNote}${duplicateNote}${droppedNote}`, kind });
+  emitAgentStatus(bus, { state: 'ok', message: `拆解完成，新增 ${newTaskCount} 个任务${proposalNote}${insightNote}${skippedNote}${duplicateNote}${droppedNote}${notTaskNote}`, kind });
 }

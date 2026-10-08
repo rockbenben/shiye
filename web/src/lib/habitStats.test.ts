@@ -285,3 +285,53 @@ describe('habitStats：checkinDays', () => {
     }
   });
 });
+
+/**
+ * 整宽那张习惯表右边那条带（`recent`）。NOW 是 2026-08-19（周三），往前数
+ * 28 天到 2026-07-23。
+ */
+describe('habitStats：最近 28 天那条带', () => {
+  const WEEKLY: Repeat = { ...DAILY, every: 'week', weekdays: [1, 3, 5] };
+  const band = (tasks: Task[], monthBack = 0) => habitStats(tasks, NOW, 1, monthBack)[0].recent;
+  const wdone = (day: number) => task({
+    id: `健身-${day}`, title: '健身', habit: true, repeat: WEEKLY,
+    status: 'done', completedAt: iso(2026, 8, day),
+  });
+  const wlive = () => task({ id: '健身-live', title: '健身', habit: true, repeat: WEEKLY, status: 'todo' });
+
+  it('28 格，最后一格是今天，一格未来都没有', () => {
+    const r = band([done('喝水', 19), live('喝水')]);
+    expect(r).toHaveLength(28);
+    expect(r[27].key).toBe('2026-08-19');
+    expect(r.some((d) => d.future), '这条带不该把还没到的日子画进去').toBe(false);
+  });
+
+  it('往前退跨月交给 Date 自己进位：第一格是 7 月 23 号', () => {
+    const r = band([done('喝水', 19), live('喝水')]);
+    expect(r[0].key).toBe('2026-07-23');
+    expect(r[0].dayOfMonth).toBe(23);
+  });
+
+  it('建它之前的那些天标 before，不算漏打卡', () => {
+    // 起点取的是名下**最早那条记录**的 createdAt，所以两条都要给——只改一条的话
+    // 另一条还落在夹具默认的 8-01 上，起点就没挪动，这条测的就不是 before 了。
+    const from = iso(2026, 8, 15);
+    const r = band([done('喝水', 19), live('喝水')].map((t) => ({ ...t, createdAt: from })));
+    // 7-23 到 8-14 共 23 天，8-15 起才算账。
+    expect(r.filter((d) => d.before).length).toBe(23);
+    expect(r[27].before).toBe(false);
+  });
+
+  it('一周三次的习惯在非打卡日标 off，跟月历那份同一个判据', () => {
+    const r = band([wdone(19), wlive()]);
+    expect(r[27].off, '8-19 是周三，是打卡日').toBe(false);
+    expect(r.find((d) => d.key === '2026-08-18')!.off, '8-18 是周二，本来不用打').toBe(true);
+  });
+
+  it('翻月看上个月，这条带不动——它说的是「最近」，翻月改的是下面那张月历', () => {
+    const ts = [done('喝水', 19), live('喝水')];
+    expect(band(ts, -1).map((d) => d.key)).toEqual(band(ts, 0).map((d) => d.key));
+    // 而月历那一份确实跟着翻。
+    expect(habitStats(ts, NOW, 1, -1)[0].days[0].key).toBe('2026-07-01');
+  });
+});

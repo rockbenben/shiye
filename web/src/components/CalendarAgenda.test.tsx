@@ -32,9 +32,21 @@ describe('CalendarAgenda：按天从上往下列', () => {
     expect(dayNums()).toEqual(['25']);
   });
 
-  it('一天都没有事：说一句话，不摆一片空白', () => {
+  /**
+   * 原来这条钉的是逐字一句「这个月还没有排任何事。」——那是一句**描述**，
+   * 没有出路。空状态的口径在这个应用里是统一的（纪念日那句「上面填一个日期
+   * 就行」、收件箱那句「左下角『随手记』写一句」都是这么写的），这一屏漏了。
+   *
+   * 出路要说**这一刻做得成的那两件**：翻月份；或者切到「月」那一档点一天，
+   * 才有「在这天新建」可用——不能说「点下面任意一天」，因为这句话正是在
+   * 下面什么都没有的时候渲染的。
+   */
+  it('一天都没有事：说得出两条出路，不只描述状态', () => {
     show([]);
-    expect(screen.getByText('这个月还没有排任何事。')).toBeTruthy();
+    const note = screen.getByText(/这个月还没有排任何事/);
+    expect(note.textContent).toMatch(/上一页/);
+    expect(note.textContent).toMatch(/「月」那一档/);
+    expect(note.textContent).toMatch(/在这天新建/);
   });
 
   it('按日期从早到晚排', () => {

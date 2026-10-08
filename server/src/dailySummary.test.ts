@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { localDay, parseHhmm, shouldSendSummary, summaryTasks, summaryText, SUMMARY_MAX } from './dailySummary.js';
+import { localDay, parseHhmm, shouldSendSummary, summaryTasks, summaryText, todayProgress, SUMMARY_MAX } from './dailySummary.js';
 import { DEFAULT_SETTINGS, type Settings, type Task } from './store.js';
 
 // 全程本地墙钟——钉死时区，断言才不会跟着宿主机飘，跟 repeat.test.ts 同一条。
@@ -120,6 +120,58 @@ describe('summaryTasks', () => {
   });
 });
 
+/**
+ * 任务栏进度条要的那三个数（桌面端 `GET /api/summary` 就是它）。
+ *
+ * **「还剩几件」跟 `summaryTasks` 是同一批**（还没了结的那些）——那正是网页
+ * 「今天」那一屏显示的数。而 `total` 多了**已经做完的**：进度条要的是一个
+ * 比例，只给「还剩几件」画不出来。
+ */
+describe('todayProgress', () => {
+  const NOW = () => local(2026, 8, 19, 9, 0);
+  const at = (d: number, h = 12) => local(2026, 8, d, h).toISOString();
+
+  it('今天一共几件 / 做完几件 / 还剩几件', () => {
+    const p = todayProgress([
+      task({ title: '做完了', due: at(19), status: 'done' }),
+      task({ title: '还在', due: at(19) }),
+      task({ title: '还在2', due: at(19) }),
+    ], NOW());
+    expect(p).toEqual({ total: 3, done: 1, remaining: 2 });
+  });
+
+  it('**搁置和放弃不算「做完」**——那是「不做」，不是「做完了」', () => {
+    const p = todayProgress([
+      task({ title: '搁置', due: at(19), status: 'later' }),
+      task({ title: '放弃', due: at(19), status: 'abandoned' }),
+      task({ title: '做完', due: at(19), status: 'done' }),
+      task({ title: '还在', due: at(19) }),
+    ], NOW());
+    expect(p.done).toBe(1);
+    // 搁置和放弃「了结了」，所以不占「还剩」——跟 summaryTasks 同一口径。
+    expect(p.remaining).toBe(1);
+    expect(p.total).toBe(4);
+  });
+
+  it('**「还剩」跟 summaryTasks 是同一批**——网页「今天」显示几件，这里就剩几件', () => {
+    const rows = [
+      task({ title: '做完了', due: at(19), status: 'done' }),
+      task({ title: '还在', due: at(19) }),
+      task({ title: '过期的', due: at(17) }),
+      task({ title: '明天的', due: at(20) }),
+    ];
+    expect(todayProgress(rows, NOW()).remaining).toBe(summaryTasks(rows, NOW()).length);
+  });
+
+  it('今天没安排就是三个 0——桌面端据此不画那条进度条', () => {
+    expect(todayProgress([task({ title: '明天的', due: at(20) })], NOW())).toEqual({ total: 0, done: 0, remaining: 0 });
+  });
+
+  it('坏日期不算，也不炸', () => {
+    expect(todayProgress([task({ title: '坏的', due: '下周三' })], NOW())).toEqual({ total: 0, done: 0, remaining: 0 });
+  });
+});
+
 describe('summaryText', () => {
   const NOW = () => local(2026, 8, 19, 9, 0);
   const at = (d: number) => local(2026, 8, d, 12).toISOString();
@@ -180,5 +232,71 @@ describe('summaryText', () => {
     const t = summaryText(rows, NOW());
     expect(t.body.split('\n')).toHaveLength(SUMMARY_MAX + 1);
     expect(t.body).toContain('…还有 3 件');
+  });
+
+  /**
+   * **跨天的那几条要跟「今天要清的」分开数。** 网页头上那一行已经分了两档
+   * （`web/src/lib/workload.ts` 的 `todayMetaLabel`），推送这边原来只说
+   * 「今天 3 件事」——同一天同一批任务，屏幕上说「今天要清 2 件，另 1 件在做着」，
+   * 通知里说「3 件」，而那条「在做着」的是一个要做五天的活在推进，不是今天清得掉的。
+   * 这个仓库对「两个数字各说各的」最敏感，见这个文件顶上那段。
+   */
+  describe('两档：今天要清的 / 在做着的', () => {
+    /** 8-17 开始、8-22 截止：今天（8-19）走到第 3 天。 */
+    const doing = (over: Partial<Task> = {}) => task({ title: '铺地板', startAt: at(17), due: at(22), ...over });
+
+    it('两档都有就各数各的，「已过期」数在要清那一档', () => {
+      const rows = summaryTasks([
+        task({ title: '昨天的', due: at(18) }),
+        task({ title: '今天的', due: at(19) }),
+        doing(),
+      ], NOW());
+      expect(summaryText(rows, NOW()).title).toBe('今天 3 件事（今天要清 2 件，1 件已过期），另 1 件在做着');
+    });
+
+    it('整排都在做着时不报「今天要清 0 件」——那是句没人接着说的话', () => {
+      const rows = summaryTasks([doing(), doing({ title: '另一件' })], NOW());
+      expect(summaryText(rows, NOW()).title).toBe('今天 2 件事，都在做着');
+    });
+
+    /**
+     * **这一条盯的是「分档只在真有两档时才出现」。** 上面那几条既有的钉死了
+     * 一句「今天 2 件事，其中 1 件已经过期」——没有跨天任务时那一句一个字都不能动，
+     * 一个天天收推送的人不该因为有人加了个字段就换一种读法。
+     */
+    it('没有跨天的那几条时，那句和原来一字不差', () => {
+      const rows = summaryTasks([task({ title: '昨天的', due: at(18) }), task({ title: '今天的', due: at(19) })], NOW());
+      expect(summaryText(rows, NOW()).title).toBe('今天 2 件事，其中 1 件已经过期');
+      expect(summaryText(rows, NOW()).title).not.toContain('在做着');
+    });
+  });
+
+  /**
+   * **概览在晚上发的时候，「今天几点截止」那几条已经欠着了——推送原来看不见。**
+   *
+   * 上面那句注释写着「跟网页 `taskView.ts` 的 `isTaskOverdue` 是同一条规矩」，
+   * 而那条规矩是**分两档**的：落在本地零点的（全天）按天比，定了具体钟点的按
+   * 时刻比（`dueOverdue` 上面有整段理由）。原来那份只抄了按天那一半，
+   * 于是「截止今天 18:00」那条在 21:00 的屏幕上写着「过期 3 小时」、卡片一片红，
+   * 推送却报「1 件都没过期」。实测出来的：同一份数据同一时刻，屏幕那句是
+   * 「今天要清 6 件，5 件已过期」，推送那句是「今天要清 6 件，1 件已过期」。
+   */
+  describe('按天还是按时刻：跟屏幕上那个红标签同一条', () => {
+    const evening = local(2026, 8, 19, 21, 0);
+
+    it('截止今天 18:00、概览 21:00 发：算过期', () => {
+      const rows = summaryTasks([task({ title: '交总结', due: local(2026, 8, 19, 18).toISOString() })], evening);
+      expect(summaryText(rows, evening).title).toBe('今天 1 件事，其中 1 件已经过期');
+    });
+
+    it('全天那种（落在本地零点）今天之内不算过期——那一整天的期限还没走完', () => {
+      const rows = summaryTasks([task({ title: '交总结', due: local(2026, 8, 19, 0, 0).toISOString() })], evening);
+      expect(summaryText(rows, evening).title).toBe('今天 1 件事');
+    });
+
+    it('全天那种过了今天才算过期', () => {
+      const rows = summaryTasks([task({ title: '交总结', due: local(2026, 8, 19, 0, 0).toISOString() })], local(2026, 8, 20, 9));
+      expect(summaryText(rows, local(2026, 8, 20, 9)).title).toBe('今天 1 件事，其中 1 件已经过期');
+    });
   });
 });

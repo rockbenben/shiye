@@ -31,7 +31,7 @@ const webSrc = readFileSync('web/src/types.ts', 'utf8');
 const NAMES = [
   'Status', 'Subtask', 'Task', 'InboxItem', 'Settings', 'Proposal',
   'Reminder', 'FocusSession', 'Repeat', 'SmartFilter', 'List', 'Folder', 'Insight', 'TrashItem',
-  'ConflictFile', 'Countdown', 'TaskContext', 'WeekStart', 'RepeatKind', 'AiCliKind',
+  'ConflictFile', 'Countdown', 'TaskContext', 'WeekStart', 'RepeatKind', 'AiCliKind', 'AiEndpoint',
 ];
 
 /**
@@ -47,7 +47,7 @@ describe('web 的类型副本跟服务端一致', () => {
   });
 
   /**
-   * 上面这份 NAMES 曾经飘过一次（`CLAUDE.md` 停在「十三个」，model.ts 实际
+   * 上面这份 NAMES 曾经飘过一次（有一份手抄的名单停在「十三个」，model.ts 实际
    * 已经长到 15 个——见 2026-08-17-debt-sweep #14）：手维护的名单，问题从
    * 来不是「加的时候写错」，是「加第 16 个类型时压根没人想起来这里还有
    * 一份名单」。这条测试从源码直接扫 `export interface`/`export type`，

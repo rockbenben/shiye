@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { App as AntApp, Button, ConfigProvider, Input } from 'antd';
 import type { Countdown } from '../types.js';
 import { countdownState, sortCountdowns } from '../lib/countdown.js';
@@ -64,6 +64,11 @@ export function CountdownView({ rows, now, onAdd, onDelete, onToggleYearly, onTo
     setEditing(null);
   };
 
+  /** 收回去：什么都不发。草稿不用清——下次点 ✎ 会按那一条现在的值重新预填。 */
+  const cancelEdit = () => setEditing(null);
+  /** Esc 跟点「取消」同一件事（就地编辑的通用退路，输入框里手就在那儿）。 */
+  const onEditKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cancelEdit(); };
+
   const submit = () => {
     const name = title.trim();
     if (!name || !date) return;
@@ -122,7 +127,7 @@ export function CountdownView({ rows, now, onAdd, onDelete, onToggleYearly, onTo
           {sortCountdowns(rows, now).map((c) => {
             const st = countdownState(c, now);
             return (
-              <li className="ink-cd-row" key={c.id}>
+              <li className={`ink-cd-row${editing === c.id ? ' ink-cd-row-edit' : ''}`} key={c.id}>
                 {/* 改名字/改日期：就地把这两样换成输入框，不另开弹窗——
                     「每年」那个勾选框本来就是就地改的，同一条 PATCH，
                     没有理由另外两个字段要换一种交互。 */}
@@ -135,6 +140,7 @@ export function CountdownView({ rows, now, onAdd, onDelete, onToggleYearly, onTo
                       value={draftTitle}
                       onChange={(e) => setDraftTitle(e.target.value)}
                       onPressEnter={() => saveEdit(c.id)}
+                      onKeyDown={onEditKey}
                     />
                     <input
                       className="ink-cd-date"
@@ -142,14 +148,40 @@ export function CountdownView({ rows, now, onAdd, onDelete, onToggleYearly, onTo
                       aria-label={`「${c.title}」的新日期`}
                       value={draftDate}
                       onChange={(e) => setDraftDate(e.target.value)}
+                      onKeyDown={onEditKey}
                     />
-                    <Button size="small" color="default" variant="solid" onClick={() => saveEdit(c.id)}>存下</Button>
+                    <Button size="small" color="default" variant="solid" onClick={() => saveEdit(c.id)}>保存</Button>
+                    {/* 一条明说的退路。原来这一行只有「保存」：改乱了要么把改坏
+                        的存下去，要么清空字段赌 `saveEdit` 那支静默丢弃——后者是
+                        一条没人看得见的暗道。跟删任务要先确认同一条道理：没有退路
+                        的动作要给一条明路。草稿不用清——下次点 ✎ 是按那一条现在的
+                        值重新预填的。 */}
+                    <Button size="small" onClick={cancelEdit}>取消</Button>
                   </>
                 ) : (
-                  <span className="ink-cd-name">{c.title}</span>
+                  /* 名字这一格在窄屏会被截（实测 390：可视 50px / 全文 56px，
+                     「妈妈生日」差一个字）。日历格子里的事件块、行档的任务标题
+                     都带着全文 `title`，这一屏原来是唯一一处「截了就没地方读全」
+                     ——同一份界面里，截断能不能救回来不该看运气。不换行：这一屏
+                     值钱的是「还有几天」那列数字对齐，换行会把行高打乱。 */
+                  <span className="ink-cd-name" title={c.title}>{c.title}</span>
                 )}
-                {/* 日期坏掉（手改文件写了别的）时说出来，不显示「NaN 天」。 */}
-                {!st ? <span className="ink-cd-bad">日期坏了：{c.date}</span> : (
+                {/* 日期坏掉（手改文件写了别的）时说出来，不显示「NaN 天」。
+                    说的是**怎么改对**，不是「我解析到了什么」：原来这一行直接把
+                    存进去的那个串甩在卡面上（`日期坏了：2026-11-01T16:00:00.000Z`），
+                    看完不知道该改哪儿——一串机器格式对不上任何输入框的形状。
+                    原始值挪进 `title`（悬停可看，排查时它是唯一线索），卡面上
+                    只留「填成什么形状」和那颗真的能点的 ✎——那句「点右边那颗 ✎」
+                    跟着 `onEdit` 走，没接它就没有那颗按钮，指过去等于教人
+                    找一个屏幕上没有的东西。跟 batch3 那条
+                    「每条报错要说下一步查什么」是同一条规矩。 */}
+                {!st ? (
+                  <span className="ink-cd-bad" title={`文件里存的是：${c.date}`}>
+                    {onEdit
+                      ? '日期没写对——点右边那颗 ✎ 填成 2026-11-02 这样（年-月-日）'
+                      : '日期没写对——填成 2026-11-02 这样（年-月-日）'}
+                  </span>
+                ) : (
                   <>
                     <span className={`ink-cd-days ink-cd-days-${st.kind}`}>
                       {st.kind === 'today' ? '就是今天' : st.kind === 'down' ? `还有 ${st.days} 天` : `已经 ${st.days} 天`}
@@ -157,16 +189,24 @@ export function CountdownView({ rows, now, onAdd, onDelete, onToggleYearly, onTo
                     <span className="ink-cd-at">{st.at.getFullYear()}-{String(st.at.getMonth() + 1).padStart(2, '0')}-{String(st.at.getDate()).padStart(2, '0')}</span>
                   </>
                 )}
-                <label className="ink-cd-yearly">
-                  <input
-                    type="checkbox"
-                    aria-label={`「${c.title}」每年重复`}
-                    checked={c.yearly}
-                    onChange={(e) => onToggleYearly(c.id, e.target.checked)}
-                  />
-                  每年
-                </label>
-                {c.yearly && (
+                {/* 正在改这一行时，这两个勾选框和那颗「×」都让位。勾选框是
+                    **立刻发写**的（同一条 PATCH，不经过草稿）：名字改到一半顺手
+                    勾一下，就成了「重复规则已落库、名字日期还在草稿里」的半存，
+                    而那一行还会因 yearly 立刻重排（`sortCountdowns` 按天数排），
+                    正在输入的那一格当场跳位。× 是另一回事——确认框挡得住数据，
+                    挡不住那一格正在输入的东西。 */}
+                {editing !== c.id && (
+                  <label className="ink-cd-yearly">
+                    <input
+                      type="checkbox"
+                      aria-label={`「${c.title}」每年重复`}
+                      checked={c.yearly}
+                      onChange={(e) => onToggleYearly(c.id, e.target.checked)}
+                    />
+                    每年
+                  </label>
+                )}
+                {editing !== c.id && c.yearly && (
                   <label className="ink-cd-yearly">
                     <input
                       type="checkbox"
@@ -188,20 +228,22 @@ export function CountdownView({ rows, now, onAdd, onDelete, onToggleYearly, onTo
                     onClick={() => { setEditing(c.id); setDraftTitle(c.title); setDraftDate(c.date); }}
                   >✎</Button>
                 )}
-                <Button
-                  size="small"
-                  type="text"
-                  danger
-                  aria-label={`删掉「${c.title}」`}
-                  onClick={() => modal.confirm({
-                    title: `删掉「${c.title}」？`,
-                    content: '纪念日不进垃圾箱，删了就是真的没了——重新填一个也很快。',
-                    okText: '删除',
-                    cancelText: '取消',
-                    okButtonProps: { danger: true },
-                    onOk: () => onDelete(c.id),
-                  })}
-                >×</Button>
+                {editing !== c.id && (
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    aria-label={`删掉「${c.title}」`}
+                    onClick={() => modal.confirm({
+                      title: `删掉「${c.title}」？`,
+                      content: '纪念日不进垃圾箱，删了就是真的没了——重新填一个也很快。',
+                      okText: '删除',
+                      cancelText: '取消',
+                      okButtonProps: { danger: true },
+                      onOk: () => onDelete(c.id),
+                    })}
+                  >×</Button>
+                )}
               </li>
             );
           })}

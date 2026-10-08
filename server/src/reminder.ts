@@ -14,8 +14,8 @@ const here = dirname(fileURLToPath(import.meta.url));
  * 一条任务上可能有多个提醒同时到期——那只该通知一次，但两条都要盖章，
  * 见下面 `fireReminders` 里的说明。
  *
- * `later`（搁置）跟 `done` 一样不提醒：搁置的意图就是「暂时不想看见它」
- * （见 2026-08-12-today-view.md），三路通知（网页横幅、Windows 通知、webhook）
+ * `later`（搁置）跟 `done` 一样不提醒：搁置的意图就是「暂时不想看见它」，
+ * 三路通知（网页横幅、Windows 通知、webhook）
  * 到点照样炸出来是直接反着来——用户刚把一张卡从「今天」挪走图个清净，
  * 下一秒就被同一张卡的提醒烦到，比放着不搁置还糟。
  */

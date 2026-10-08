@@ -102,8 +102,46 @@ function escapeXml(s: string): string {
 }
 
 /** 按钮 `arguments` 用的协议 URI，例如 `todo-desktop://complete?id=abc`。 */
-function actionUri(kind: 'complete' | 'snooze', id: string): string {
+export function actionUri(kind: 'complete' | 'snooze', id: string): string {
   return `${PROTOCOL}://${kind}?id=${encodeURIComponent(id)}`;
+}
+
+/**
+ * 非 Windows（mac / Linux）那两颗按钮的形状。**跟 Windows 的 toast 按钮是
+ * 同一件事的两个实现**：点一下都是「完成」或者「推迟」，只是两边的送达机制
+ * 不同——Windows 走协议 URI（**冷启动也成立**：通知中心把 toast 留着，托盘退出
+ * 过、机器重启过之后再点，系统按协议拉起新进程），mac/Linux 走 Electron 自己
+ * 的 `action` 事件（**只在应用活着的时候送到**）。
+ *
+ * **平台支持范围**（2026-10-21 拿 Electron v44 与 45 的官方文档逐字比对）：
+ * `actions` 和 `'action'` 事件在 **v44 是 macOS + Windows**，**从 45 起加了
+ * Linux**——所以「非 Windows 就只有 mac 支持」那句旧话在 45 之后不成立，
+ * 「Linux 压根不支持」也是旧版事实。
+ *
+ * **没有任务 id 就不给按钮**——跟 toast 那条同规矩：概览（`id === null`）说的是
+ * 一整天、成批提醒说的是一批，两者的按钮都没有「是哪一条」可指。
+ */
+export interface NotificationAction {
+  type: 'button';
+  text: string;
+}
+
+/** 两颗按钮的顺序**固定**——`actionKindAt()` 靠序号认按钮，顺序反了就是
+ * 「点『完成』变成『推迟』」。 */
+export const NOTIFICATION_ACTIONS: readonly NotificationAction[] = [
+  { type: 'button', text: '完成' },
+  { type: 'button', text: '推迟' },
+];
+
+/**
+ * 按钮序号 → 动作。序号是 Electron 那边给的（`action` 事件的参数），跟
+ * `NOTIFICATION_ACTIONS` 的顺序一一对应。**越界的序号当没有**——Electron
+ * 那边给什么就是什么，不猜。
+ */
+export function actionKindAt(index: number): 'complete' | 'snooze' | null {
+  if (index === 0) return 'complete';
+  if (index === 1) return 'snooze';
+  return null;
 }
 
 /**
@@ -120,19 +158,36 @@ function actionUri(kind: 'complete' | 'snooze', id: string): string {
  * `arguments`，**不是 `NotificationConstructorOptions.actions` 字段**。
  *
  * ⚠️ **这里原来写的理由是「`actions` 是 macOS 专属，Windows 上无效」——那是旧版
- * 事实，已经不成立了**（2026-09 核对官方文档：`actions` 现在 macOS 和 Windows
- * 都支持，Windows 还多一种 selection 型）。真正的理由换成下面这条，它跟版本无关：
+ * 事实，已经不成立了**（2026-09 核对官方文档）。真正的理由是下面这条：
  *
- * **`actions` 的回调只送给「正在跑的那个实例」**（`notification.on('action')`），
- * 而协议这条路连**冷启动**都成立：Windows 的通知中心会把 toast 留着，托盘退出过、
+ * **`notification.on('action')` 这个实例事件只送给「正在跑的那个实例」**，而协议
+ * 这条路连**冷启动**都成立：Windows 的通知中心会把 toast 留着，托盘退出过、
  * 或者机器重启过之后再点「完成」，系统按协议拉起一个新进程，URI 在 argv 里，
  * bootstrap() 末尾那段照样把它 PATCH 掉（见 main.ts 的 I1 那段注释和对应测试）。
- * 换成 `actions` 就丢掉这一半——应用没在跑的时候点了没反应。
  *
- * 另外两条顺带的（不是主要理由，但都指向同一个选择）：macOS 上 `actions` 要求
- * **应用已签名**才出按钮，而这个仓库有意不签（`electron-builder.yml` 的
- * `identity: null`）；Linux 压根不支持。所以「换成 actions 就能三平台统一」
- * 这个说法在这个仓库的约束下不成立。
+ * ⚠️ **但「冷启动」已经不是唯一理由了**（2026-10-21 核过官方文档）：Electron 有个
+ * 静态方法 `Notification.handleActivation()`（**Windows 独有**），官方原话是
+ * 「不管那个 Notification 对象还在不在内存里，激活都会送给这个回调」——冷启动
+ * 也在它管的范围内。**这个 API v44 就有，不是 45 新增的。** 所以单论冷启动，
+ * Windows 这边改用 `actions` + `handleActivation` 也接得住。
+ *
+ * 那为什么 Windows 这边还留着 toast XML？两条，都是「不更划算」不是「做不到」：
+ * ① 这条路写完了、在真机上验过（`desktop/冒烟清单.md` 里那两格冷启动验收），
+ *    换过去等于把一条验过的路重写一遍，用户看不到任何差别；
+ * ② `toastXml` 还管着这条通知的**长相**（图标、圆形裁剪），改用 `actions`
+ *    就退回 Electron 默认的 toast 样式了。
+ *
+ * 顺带把平台支持范围校准一下（2026-10-21 拿 v44 与 45 的官方文档逐字比对）：
+ * `actions` 和 `'action'` 事件在 **v44 是 macOS + Windows**（Windows 还多一种
+ * selection 型），**从 45 起加了 Linux**（Linux 要求桌面环境的通知守护进程
+ * 声明了 `actions` 能力，否则只有通知、没有按钮）。所以「非 Windows 就只有 mac
+ * 支持」那句旧话在 45 之后不成立——Linux 现在也支持，只是看守护进程。
+ *
+ * 还有一条跟平台无关、但在本仓库的约束下依然成立：macOS 上 `actions` 要求
+ * **应用已签名**、且 Info.plist 里的 `NSUserNotificationAlertStyle` 是 `alert`，
+ * 而这个仓库有意不签（`electron-builder.yml` 的 `identity: null`）——mac 那边的
+ * 按钮因此出不来（更进一步：不签名的话 mac 上**通知本身**都出不来，UNNotification
+ * 要求签名）。所以「换成 actions 就能三平台统一」在这个仓库的约束下依然不成立。
  *
  * 点击后
  * Windows 把这个 URI 当协议链接启动，命中 main.ts 里
@@ -186,22 +241,47 @@ export function buildToastXml(n: NotifyContent, iconFileUrl: string): string {
  * 纯函数、`platform` 当参数传：`process.platform` 在测试里改不动（只读），
  * 而这三档的分支正是要测的东西。main.ts 不传，用真实平台。
  *
- * ponytail: **非 Windows 没有「完成」「推迟」两颗按钮**。Windows 的按钮走
- * toast XML 的 `activationType="protocol"`；mac 的对应物是
- * `NotificationConstructorOptions.actions`，但它要求通知是 alert 样式
- * （用户可在系统设置里改成横幅，那样按钮就不出现），Linux 则取决于桌面环境
- * 装的是哪个通知守护进程，两边都给不出 Windows 那种稳定行为。天花板是
- * 「点通知本体打开那条任务」，这条三平台都成立（`Notification.on('click')`）。
- * 真要补，先补 mac 的 `actions`，Linux 维持现状。
+ * ponytail: **两颗按钮三个平台都有，但走的路不同、外加各自的门槛。**
+ *
+ * Windows 走 toast XML 的 `activationType="protocol"`——**连冷启动都管用**：
+ * 通知中心把 toast 留着，托盘退出过、机器重启过之后再点，系统按协议拉起新
+ * 进程，URI 在 argv 里。
+ *
+ * mac/Linux 走 Electron 自己的 `action` 事件。**它只在应用活着的时候送到**：
+ * 这是它跟 Windows 那条路的唯一差别，别的都一样。
+ *
+ * 三边各有各的门槛（官方 `NotificationAction` 文档的原话）：
+ * - **macOS**：要求**应用已签名**、且 Info.plist 的 `NSUserNotificationAlertStyle`
+ *   是 `alert`。**本仓库有意不签**（`electron-builder.yml` 的 `identity: null`），
+ *   所以 mac 上这两颗按钮实际出不来。另外 mac 只把**第一颗**（完成）当主按钮
+ *   直接显示，第二颗（推迟）要悬停通知才露出来。
+ * - **Linux**：要求桌面环境的通知守护进程声明了 `actions` 能力，否则只有通知、
+ *   没有按钮——**取决于装的是哪个守护进程**，不是代码能定的。
+ * - **Windows**：没有额外门槛，两颗都直接画在 toast 上。
+ *
+ * 天花板仍然是「点通知本体打开那条任务」，这条三平台都成立
+ * （`Notification.on('click')`）。
  */
 export function buildNotificationOptions(
   n: NotifyContent,
   icon: { fileUrl: string; path: string },
   platform: NodeJS.Platform = process.platform,
-): { toastXml: string } | { title: string; body: string; icon: string } {
+): { toastXml: string } | { title: string; body: string; icon: string; actions?: NotificationAction[] } {
   if (platform === 'win32') return { toastXml: buildToastXml(n, icon.fileUrl) };
   // 非 Windows 用普通字段。`icon` 这里要的是**文件系统路径**，不是 file:// URL
   // （那份是拼进 toast XML 给 Windows 自己读的）——传错的话 mac 上图标不显示，
   // 同样不报错。mac 其实会忽略它、一律用应用图标，Linux 认；传着无害。
-  return { title: n.title, body: n.body, icon: icon.path };
+  //
+  // **两颗按钮也给上**（mac 和 Windows 从来都支持，Electron 45 起 Linux 也支持）：
+  // 点一下走 Electron 的 `action` 事件，主进程那边按序号认成「完成 / 推迟」，
+  // 再复用 Windows 那条协议 URI 的处理（main.ts 的 applyProtocolAction）。
+  // **限制照旧**：这只在应用活着的时候管用（协议那条路连冷启动都管用），
+  // 而且 mac 的按钮要求应用已签名 + 通知是 alert 样式、Linux 要求守护进程
+  // 声明 `actions` 能力。这三条限制都写在上面那段 ponytail 里。
+  return {
+    title: n.title,
+    body: n.body,
+    icon: icon.path,
+    ...(n.id === null ? {} : { actions: [...NOTIFICATION_ACTIONS] }),
+  };
 }

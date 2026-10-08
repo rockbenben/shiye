@@ -71,7 +71,7 @@ export function createUpdater(api: UpdaterApi, hooks: UpdaterHooks) {
     versionReady = (info as { version?: string })?.version ?? '新版本';
     setState('ready');
     // 「不会自己重启」这句要出现在用户刚看到消息的那一刻，不是等他出事再来猜。
-    hooks.balloon('办事师爷有新版本了', `v${versionReady} 已下载好，托盘点「重启以完成更新」生效。不会自己重启。`);
+    hooks.balloon('办事师爷有新版本了', `${versionReady ? `v${versionReady} ` : ''}已下载好，托盘点「重启以完成更新」生效。不会自己重启。`);
   });
   api.on('error', (err) => {
     const msg = (err as { message?: string })?.message ?? '未知错误';
@@ -109,7 +109,7 @@ export function createUpdater(api: UpdaterApi, hooks: UpdaterHooks) {
       hooks.onChange();
     },
     restartToInstall: () => {
-      if (state !== 'ready') { hooks.showError('还没有下载好的更新——下好了这里会亮起来'); return; }
+      if (state !== 'ready') { hooks.showError('还没有下载好的更新——下好后托盘菜单里会出现「重启以完成更新」'); return; }
       api.quitAndInstall(); // 走现有 before-quit：quitting 置位 → child.stop()，不留文件占用
     },
   };

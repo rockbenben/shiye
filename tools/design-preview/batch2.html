@@ -1,0 +1,368 @@
+<!doctype html>
+<!--
+  办事师爷 · 打磨稿 batch2 · 版式对比
+
+  batch1 那张表量的是「现在哪儿不对」；这一张量的是**每一条改动到底改变了什么**：
+  同一条格子开两遍，左边把这一条退回去，右边是现在。两格都是真 app，跑完各带一份
+  读数，所以左边那格的小目标/溢出数就是改动前那个缺陷的证据，不用回头翻记录。
+
+  ## 左边那一格是怎么「退回去」的（每条都写在格子下面，别看糊了）
+
+  - **`revert`：往那一格注入一条样式，把这一条改动抵掉。** 大多数改动本来就是一条
+    CSS（24px 的下限、动作行那条分隔线、手机上藏起快捷键提示），抵得干净，左边
+    就是改动前那个像素级的样子。
+  - **`patch`：改一句已经上屏的话。** 文案改动没有样式可退，只能在渲染出来之后
+    把那句换回旧写法。这一种量的还是**版式**（那句话长什么样、占几行），不是
+    行为——行为那一路各有测试盯着。
+  - **退不了的就不做对比**：数字框那两颗加减箭头是 `controls={false}` 让 DOM 里
+    压根不出现那对按钮，CSS 变不出它们；那条只能在 batch1 的读数里看「小目标归零」。
+    硬凑一格「左边什么都能点」是假对比，不如留一句「这一条不比」。
+
+  ## 这三格为什么站在「全部」上点开详情
+
+  夹具的日期全是相对「生成那一刻」算的，所以「今天」有几条会跟着钟点走：晚上
+  十一点后跑，「今天」可能一条都不剩，「点开一条任务」就没有可点的东西（上一轮
+  那三次「详情首帧没等到」全是这个，跟界面无关）。`#/all` 永远是全表，比对用的
+  是那三格里的**详情栏**，不是「今天」这个视图。
+  ## 为什么这些机器在 `drive.js` 里
+
+  两稿都要「开一格真 app → 驱动到某一屏 → 等它画定 → 量一遍」。逐字相同的那段
+  只留一份：漏改一处就会量到还没画完的帧，而那种读数看着像界面的问题。
+
+  ## 跑法
+
+  起服务那一段只在 `batch1.html` 头部写了一份（含 `DESIGN_PREVIEW=1` 那个开关——
+  不带它这三张表全都 404），这里不复述，免得改一处漏一处。这一张开
+  `http://127.0.0.1:30096/design-preview/batch2.html`，端口跟 batch1 同一个。
+  一次比一条用 `?only=3`（按下面那张表的序号，从 1 起）。**逐格跑、量完就放**：
+  这套稿子并发起来读数会互相踩，四格真 app 同时活着还能把浏览器会话压死。
+-->
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>办事师爷 · 打磨稿 batch2 · 版式对比</title>
+<style>
+  body { margin: 0; padding: 20px 24px 60px; background: #14161a; color: #dfe3e8;
+    font: 13px/1.6 ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 17px; margin: 0 0 6px; }
+  .legend { color: #8b96a5; margin: 0 0 18px; max-width: 90ch; }
+  #audit { color: #ffd479; font-family: ui-monospace, Consolas, monospace; font-size: 12px; margin-bottom: 16px; white-space: pre-wrap; }
+  #audit b { color: #f0b429; }
+  section.pair { margin: 0 0 26px; padding: 14px 16px 16px; background: #1b1f25; border: 1px solid #262b33; border-radius: 8px; }
+  section.pair h2 { font-size: 14px; margin: 0 0 2px; }
+  .why { display: block; font: 400 12px/1.6 inherit; color: #8b96a5; margin-bottom: 10px; }
+  .frames { display: flex; gap: 14px; align-items: flex-start; }
+  figure { margin: 0; }
+  figcaption { color: #9aa5b4; font-size: 11px; margin: 0 0 4px; }
+  .nums { display: flex; gap: 14px; margin-top: 6px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  .nums div { flex: 1 1 0; color: #9aa5b4; white-space: pre-wrap; }
+  .released { opacity: .35; }
+</style>
+</head>
+<body>
+<header>
+  <h1>办事师爷 · 打磨稿 batch2 · 版式对比</h1>
+  <p class="legend">
+    每一条两格：<b>左边把这一条改动退回去</b>，右边是现在。退法写在格子下面，
+    量的到底是什么就说清楚——抵不掉的不在这儿比。
+  </p>
+  <div id="audit">booting…</div>
+</header>
+<div id="pairs"></div>
+<script src="./drive.js"></script>
+<script>
+/**
+ * 对比清单。`left` 那一格先按 `revert` 注样式、再按 `patch` 改文案，然后才
+ * `settle` + 探针——顺序是故意的：先画定再量，不然左边那格的读数量的不是这一条。
+ */
+const ITEMS = [
+  {
+    name: '点开「写点什么」，正文框不塌成一行',
+    why: '退法：把那一格的自动高度按一行算回去（`min-height` 用 `!important` 才压得过 antd 写在 style 上的内联值）。旧行为是点开之后框只有约 31px 高，正文写两段就看不见。',
+    cell: { label: '详情面板 · 1280', hash: '#/all', density: 'row', w: 1280, h: 900, openFirst: true },
+    revert: '.ink-dt-notes{min-height:31px !important;height:31px !important}',
+    read: (f) => { const t = f.contentDocument.querySelector('.ink-dt-notes');
+      return t ? `正文框 ${Math.round(t.getBoundingClientRect().height)}px 高` : '没有正文框'; },
+  },
+  {
+    name: '详情底下那排按钮：一条分隔线，「⋯」挪到最右',
+    why: '退法：抵掉动作行的上边框与间距，并把「⋯」那颗排回第一个。旧版是一排颜色一样的按钮挤在一起、最不像动作的那颗占着首位。',
+    cell: { label: '详情面板 · 1280', hash: '#/all', density: 'row', w: 1280, h: 900, openFirst: true },
+    revert: '.ink-dt-actions{border-top:0 !important;padding-top:0 !important;margin-top:0 !important}'
+      + '.ink-dt-actions .ant-space-item:has(.ink-task-more){order:0 !important}',
+    read: (f) => { const row = f.contentDocument.querySelector('.ink-dt-actions');
+      if (!row) return '没有那一排';
+      const cs = f.contentWindow.getComputedStyle(row);
+      const more = row.querySelector('.ink-task-more');
+      // **按视觉位置数，不按 DOM 顺序数**：这一条改动靠的就是 CSS `order`，
+      // 它改的是渲染出来的先后，DOM 序列一个字不动。第一版用
+      // `[...querySelectorAll]` 的下标当「排第几」，于是两边都报「排第 3」，
+      // 把这条改动说成没发生——量的必须是屏幕上的左右次序，不是源码里的。
+      const items = [...row.querySelectorAll('.ant-space-item')].filter((x) => x.offsetParent !== null);
+      const moreItem = more ? more.closest('.ant-space-item') || more : null;
+      const left = moreItem ? moreItem.getBoundingClientRect().left : -1;
+      const rank = moreItem ? items.filter((x) => x.getBoundingClientRect().left <= left + 1).length : -1;
+      return `${cs.borderTopWidth === '0px' ? '没有分隔线' : '一条分隔线'}，⋯ 视觉排第 ${rank}/${items.length}`; },
+  },
+  {
+    name: '详情里那颗日期药丸够 24px（这一条不比——它比出来的是「原来那条不咬人」）',
+    why: '退法：抵掉 `.ink-dt-date` 的 `min-height`。<b>两边逐字相同（111×32）</b>——当初探针报的 22px 是丸子里那个 `<input>` 自己的盒子，用户瞄的是外面这颗丸，而它一直是 antd 默认的 32 高。那条声明因此删了（`theme.css` 里记着这笔账）。这一格留着是因为它就是 batch2 存在的理由：<b>一条「修好了」如果没有读数变化，就没有被修好过。</b>',
+    cell: { label: '详情面板 · 1280', hash: '#/all', density: 'row', w: 1280, h: 900, openFirst: true },
+    revert: '.ink-dt-date{min-height:0 !important}',
+    read: (f) => { const el = f.contentDocument.querySelector('.ink-dt-date');
+      return el ? `药丸 ${Math.round(el.getBoundingClientRect().height)}px 高` : '没有那颗药丸'; },
+  },
+  {
+    name: '日期面板顶上那四颗翻年/翻月的箭头够 24px',
+    why: '退法：把 antd 给的 22.4px 宽写回去。左边那格探针会重新报出「上一年 22×40」那三条——这一格是**读数对比**最直接的一条。',
+    cell: { label: '日期面板摊开', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'datePanel' },
+    revert: '.ant-picker-header.ant-picker-header button{min-width:22.4px !important}',
+    read: (f) => { const b = [...f.contentDocument.querySelectorAll('.ant-picker-header button')]
+        .find((x) => x.getAttribute('aria-label') === '上个月');
+      return b ? `翻月那颗 ${Math.round(b.getBoundingClientRect().width)}px 宽` : '没有那颗箭头'; },
+  },
+  {
+    name: '那个框自己写着「随手记」',
+    why: '退法：藏掉那行标题。旧版命令面板和快捷键表都管它叫「随手记」，屏幕上却没有这三个字——照着说明去找的人找不到它。',
+    cell: { label: '收件箱 · 1280', hash: '#/inbox', density: 'row', w: 1280, h: 900 },
+    revert: '.ink-composer-name{display:none !important}',
+    read: (f) => { const h = f.contentDocument.querySelector('.ink-composer-name');
+      return h && h.offsetParent !== null ? `框上面那行标题「${h.textContent.trim()}」看得见` : '框上面没有那行标题'; },
+  },
+  {
+    name: '批量条上能直接挑「改到哪天」',
+    why: '退法：藏掉那颗日期框（旧版只有「改到今天 / 明天 / 下周」那几档，挑别的日子得先点开单条任务）。',
+    cell: { label: '桌面 · 批量条', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'select2' },
+    revert: '.ink-batch-bar .ant-picker{display:none !important}',
+    read: (f) => { const el = f.contentDocument.querySelector('.ink-batch-bar .ant-picker');
+      return el && el.offsetParent !== null ? '批量条里有「改到某天」那颗日期框' : '批量条上没有挑日期的框'; },
+  },
+  {
+    name: '手机上不说「Ctrl+Enter 存下」',
+    why: '退法：把那条快捷键提示在窄屏上也画出来。旧版在 390 宽上给了一句做不到的指示（没有 Ctrl 键）。',
+    cell: { label: '收件箱 · 手机 390', hash: '#/inbox', density: 'row', w: 390, h: 844 },
+    revert: '.ink-kbd-hint{display:block !important}',
+    read: (f) => { const el = f.contentDocument.querySelector('.ink-kbd-hint');
+      return el && el.offsetParent !== null ? '手机上写着「Ctrl+Enter 存下」' : '手机上没有那句'; },
+  },
+  {
+    name: '那颗按钮写着几条',
+    why: '退法：把「N 条改到今天」换回旧写法「全部推到今天」。旧版既不说几条，还跟确认框、命令面板里的「改到」是两个词。',
+    cell: { label: '今天 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900 },
+    patch: (d) => {
+      const b = [...d.querySelectorAll('button')].find((x) => (x.textContent || '').includes('条改到今天'));
+      if (b) b.textContent = '全部推到今天';
+      return b ? 'ok' : '没找到那颗按钮';
+    },
+    read: (f) => { const b = [...f.contentDocument.querySelectorAll('button')]
+        .find((x) => /改到今天|推到今天/.test(x.textContent || ''));
+      return b ? `那颗写「${b.textContent.trim()}」` : '没有那颗按钮'; },
+  },
+  {
+    name: '搜索框不说半个范围',
+    why: '退法：把占位符换回旧写法「搜索任务、标签」。那句是「找哪些字段」的半句话，而完整的那句就在它下面 12 像素。',
+    cell: { label: '搜索空态', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'searchEmpty' },
+    patch: (d) => {
+      const i = d.querySelector('.ink-searchmodal-input');
+      if (i) i.setAttribute('placeholder', '搜索任务、标签');
+      return i ? 'ok' : '没找到搜索框';
+    },
+    read: (f) => { const i = f.contentDocument.querySelector('.ink-searchmodal-input');
+      return i ? `占位符写「${i.getAttribute('placeholder')}」` : '没有搜索框'; },
+  },
+  {
+    name: '报错横幅点名是哪几个文件（要夹具服务带 `--errors` 起来）',
+    why: '退法：藏掉横幅里那串 `<目录>/<文件名>`。旧版只说「去数据目录看一眼那几个文件」——那个目录里动辄几百个 JSON，让人自己去找出那两份，等于把「明确说出来」退回成一次搜寻。<b>不带 `--errors` 跑这一格，两栏都会读成「没有这两条横幅」</b>，那也是话：这条改动此刻没在上屏的东西里。',
+    cell: { label: '今天 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900 },
+    revert: '.ink-conflict-banner code{display:none !important}',
+    read: (f) => { const code = f.contentDocument.querySelector('.ink-conflict-banner code');
+      return code && code.offsetParent !== null ? `横幅点名「${code.textContent.trim().slice(0, 34)}」` : '横幅没有点名文件'; },
+  },
+  {
+    name: '服务没回话时不替用户说「没有任务」',
+    why: '退法：把那句换回旧写法「还没有任何任务。上面那行「添加任务」直接写一条」。旧版在**一次读还没成**的时候就把 `tasks` 的初值 `[]` 当成了「这人一条都没有」——本地快照里躺着 18 条的那次现形就是它。',
+    cell: { label: '离线 · 今天', hash: '#/today', density: 'row', w: 1280, h: 900, offline: true },
+    patch: (d) => {
+      const p = emptyNote(d);
+      if (p) p.textContent = '还没有任何任务。上面那行「添加任务」直接写一条；想不清楚就先写进「随手记」，AI 会替你拆成任务。';
+      return p ? 'ok' : '没有那行空态';
+    },
+    read: (f) => { const p = emptyNote(f.contentDocument);
+      return p ? `空态写「${p.textContent.trim().slice(0, 14)}…」` : '没有那行空态'; },
+  },
+  {
+    name: '收件箱那两节的计数同一个写法',
+    why: '退法：把「待拆解 4 条」换回旧写法「待拆解 · 4」。同一栏里两节并排，一个写「· 4」、一个写「4 条」，是两种计数写法摆在彼此旁边。',
+    cell: { label: '收件箱 · 1280', hash: '#/inbox', density: 'row', w: 1280, h: 900 },
+    patch: (d) => {
+      const el = [...d.querySelectorAll('.ink-section-label')].find((x) => (x.textContent || '').includes('待拆解'));
+      if (el) el.textContent = el.textContent.replace(/\s*(\d+) 条$/, ' · $1');
+      return el ? 'ok' : '没有那一节标题';
+    },
+    read: (f) => { const el = [...f.contentDocument.querySelectorAll('.ink-section-label')].find((x) => (x.textContent || '').includes('待拆解'));
+      return el ? `标题写「${el.textContent.trim()}」` : '没有那一节标题'; },
+  },
+  {
+    name: '搜索结果里的标题折两行，全名挂在外层那颗按钮上',
+    why: '退法：把标题那一格钉回「一行 + 省略号」。左边那一格三行标题横向就被收掉——读数写的是「有兜底 3」，那是这一轮同时补上的 `title` 兜住的，补之前这三条报的是「截断无兜底 3」（batch1 那一格第一次量出来就是那三条）；右边一行都不裁。这一条比的是**不悬停能不能读**，不是悬停读不读得到。',
+    cell: { label: '手机 · 搜索有结果', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'search' },
+    revert: '.ink-searchmodal-title{display:block !important;-webkit-line-clamp:unset !important;'
+      + 'white-space:nowrap !important;text-overflow:ellipsis !important}',
+    read: (f) => {
+      const t = f.contentDocument.querySelector('.ink-searchmodal-title');
+      if (!t) return '没有结果行';
+      const lh = parseFloat(f.contentWindow.getComputedStyle(t).lineHeight) || 20;
+      // 横向裁不裁按盒子量，不按「有没有省略号」猜：`-webkit-line-clamp` 也会
+      // 画省略号，那是竖着裁到两行，跟一行装不下不是一回事。
+      const cut = t.scrollWidth > t.clientWidth + 2;
+      const tip = t.closest('.ink-searchmodal-hit')?.getAttribute('title');
+      return `标题 ${Math.round(t.getBoundingClientRect().height / lh)} 行`
+        + `${cut ? '·末尾被省略号收掉' : '·横向不裁'}，悬停${tip ? '读得到全名' : '读不到全名'}`;
+    },
+  },
+  {
+    name: '「安排任务」那一栏的长标题，悬停读得到全名',
+    why: '退法：用脚本把那一行的 `title` 摘掉。左边那一格探针报「截断无兜底 1」，右边那格是 0——<b>面板窄，长标题必然被收掉是设计</b>，这一条比的不是收不收，是<b>收掉之后还读不读得回全名</b>。（右边那格的「有兜底」为什么不写在这一条里：摘属性是往 React 拥有的 DOM 上临时改的，探针之后它可能已经写回去了，所以这一条只认探针那一刻的两个数。）',
+    cell: { label: '日历 · 安排任务那栏', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'schedPanel' },
+    patch: (d) => {
+      const els = [...d.querySelectorAll('.ink-sched-name')];
+      els.forEach((e) => e.removeAttribute('title'));
+      return els.length ? `摘掉 ${els.length} 行的 title` : '那一栏没有行';
+    },
+    read: (f) => {
+      /**
+       * 数**整列**，不看第一行。第一版只量第一行，而那一栏第一行恰好是一条短
+       * 标题——两栏都报「没被收掉」，这条对比什么都没比出来。要量的是「这一栏
+       * 里有几行标题真的放不下、其中几行还读得回全名」。
+       */
+      const els = [...f.contentDocument.querySelectorAll('.ink-sched-name')];
+      if (!els.length) return '那一栏没有行';
+      const cut = els.filter((e) => e.scrollWidth > e.clientWidth + 2);
+      // 这一行**只报收掉了几个字**，不报「读不读得回」：摘 `title` 是往 DOM 上
+      // 临时改的，React 下一次重渲染就把那个属性写回来了，而这一句是在探针
+      // **之后**才跑的——报了就是量到已经复原的那一面。读没读得回这件事，
+      // 探针那两列（截断无兜底 → 0）量的是改生效的那一刻，用它。
+      return `${els.length} 行里 ${cut.length} 行标题被省略号收掉`;
+    },
+  },
+  {
+    name: '重复那一排的「截止日」那颗框自己说得出名字',
+    why: '退法：摘掉它的 `aria-label`。左边那一格探针报「无名字控件 1」——<b>框里那行灰字（placeholder）读屏念不出来</b>，这是全站别的几颗日期框都单独写了名字、只有这颗漏了的那一处。',
+    cell: { label: '表单 · 重复那一行', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'repeatEditor' },
+    patch: (d) => {
+      const el = d.querySelector('[aria-label="重复到哪天为止"]');
+      if (!el) return '没有那颗框';
+      el.removeAttribute('aria-label');
+      return '摘掉那颗框的 aria-label';
+    },
+    read: (f) => (f.contentDocument.querySelector('[aria-label="重复到哪天为止"]')
+      ? '那颗框写着「重复到哪天为止」' : '那颗框没有名字（只剩框里那行灰字）'),
+  },
+];
+
+const only = new URLSearchParams(location.search).get('only');// `?only=1,5,6` 按序号挑几条（从 1 起）：改完一条 read 判据不必重跑整张表。
+const PICK = only
+  ? only.split(',').map((n) => Number(n) - 1).filter((i) => ITEMS[i]).map((i) => ({ i, it: ITEMS[i] }))
+  : ITEMS.map((it, i) => ({ i, it }));
+const KEEP = new URLSearchParams(location.search).has('keep');
+const out = document.getElementById('audit');
+const wrap = document.getElementById('pairs');
+const log = [];
+
+(async () => {
+  for (const { i, it } of PICK) {
+    const section = document.createElement('section');
+    section.className = 'pair';
+    section.innerHTML = `<h2>${i + 1}. ${it.name}</h2><span class="why">${it.why}</span><div class="frames"></div><div class="nums"></div>`;
+    wrap.appendChild(section);
+    const rows = [];
+    for (const side of [{ tag: '退回这一条', live: true }, { tag: '现在', live: false }]) {
+      const c = it.cell;
+      const fig = document.createElement('figure');
+      const k = Math.min(1, 620 / c.w);
+      fig.style.width = Math.round(c.w * k) + 'px';
+      fig.style.height = Math.round(c.h * k) + 'px';
+      fig.innerHTML = `<figcaption>${side.tag} · 真宽 ${c.w}px，缩到 ${(k * 100) | 0}%</figcaption>`
+        + `<iframe style="width:${c.w}px;height:${c.h}px;transform:scale(${k});transform-origin:0 0"></iframe>`;
+      section.querySelector('.frames').appendChild(fig);
+      const f = fig.querySelector('iframe');
+      try {
+        prepareCell(c);
+        await bootCell(f, c);
+        // 退回去的那一格：样式和文案都要在「画定」之前落到 DOM 上，
+        // `settle` 量的才是左边那一版真正摆出来的东西。
+        if (side.live && it.revert) addStyle(f, it.revert);
+        let patched = '';
+        if (side.live && it.patch) {
+          const r = it.patch(f.contentDocument);
+          patched = typeof r === 'string' ? ` · 退文案：${r}` : '';
+        }
+        await settle(f);
+        await injectProbe(f);
+        const found = await Promise.race([
+          Promise.resolve(f.contentWindow.__probe(c)),
+          new Promise((_, fail) => setTimeout(() => fail(new Error('探针超时')), 8000)),
+        ]);
+        rows.push({ tag: side.tag, ...found, patched, read: it.read ? it.read(f) : null });
+      } catch (err) {
+        rows.push({ tag: side.tag, nodes: -1, overflow: 0, guarded: 0, clipped: 0, smallTargets: 0, noName: 0, imgNoAlt: 0, squeezed: 0, read: null, hint: `量不到：${String(err && err.message || err)}` });
+      }
+      if (!KEEP) {
+        f.src = 'about:blank';
+        fig.classList.add('released');
+        fig.querySelector('figcaption').textContent = `${side.tag} · 已量完，格子已释放`;
+      }
+    }
+    section.querySelector('.nums').innerHTML = rows.map((r) => `<div>【${r.tag}】${renderRow(r).replace(/^\[[^\]]*\] /, '')}</div>`).join('');
+    log.push({ cell: `${i + 1}. ${it.name}`, left: rows[0], right: rows[1] });
+    out.innerHTML = log.map((r) => `<div>${diffRow(r)}</div>`).join('');
+  }
+})();
+
+/** 往那一格注一条样式表。排在应用自己的样式之后，同特异度这儿赢。 */
+function addStyle(f, css) {
+  const s = f.contentDocument.createElement('style');
+  s.textContent = css;
+  f.contentDocument.head.appendChild(s);
+}
+
+/**
+ * 看板那一行的空态。
+ *
+ * 按**内容**挑，不按容器挑：`.ink-empty-note` 全站好几处（收件箱那栏有一行、
+ * 别的视图各自也有一行，切走的视图节点只是藏起来、还在 DOM 里），第一版
+ * `querySelector('.ink-board-col .ink-empty-note')` 取到的是收件箱那一行——
+ * 左边把收件箱的文案改了，右边原样，读数看着是「有差」，差的却不是这一条。
+ * 现在要的是「看得见、说任务、不说待拆解」那一行。
+ */
+const emptyNote = (d) => [...d.querySelectorAll('.ink-empty-note')]
+  .find((x) => x.offsetParent !== null && /任务/.test(x.textContent || '') && !/待拆解/.test(x.textContent || ''));
+
+/**
+ * 一行汇总：探针那几个口径能抓的只有「太小 / 裁字 / 没名字 / 挤成竖排」，而这一批
+ * 对比里大半的差是**尺寸、有无、字面**——所以每条自带一个 `read`：现场量那一样
+ * 东西，两栏各读一次，不一样就写成 `左 → 右`。
+ *
+ * 为什么不肯用那几个通用口径代替：那正是探针这一路反复学的教训——**判据要指着
+ * 这一条改动真正改变的那个读数**。`min-height` 从 96 退到 31，四个口径一个都不动；
+ * 说「读数相同」就把这条改动说成没发生（而 batch1 那一轮里，被这样糊过去的读数
+ * 已经抓出来过好几次假修复）。
+ */
+function diffRow(r) {
+  const keys = ['smallTargets', 'overflow', 'clipped', 'noName', 'squeezed'];
+  const same = keys.filter((k) => (r.left[k] || 0) === (r.right[k] || 0));
+  const diff = keys.filter((k) => (r.left[k] || 0) !== (r.right[k] || 0))
+    .map((k) => `${LABEL[k]} ${r.left[k] || 0} → ${r.right[k] || 0}`);
+  // 读数**两边都摆出来**，相等也摆：只写「两边一样」会把「两格都没找到那个元素」
+  // 也说成一条结论——第一版就把「没有正文框」读成了「这条改动没差」。
+  const read = r.left.read == null ? ''
+    : (r.left.read === r.right.read ? `${r.left.read}（两边一样）` : `${r.left.read} → ${r.right.read}`);
+  const notes = [r.left.patched, r.left.hint && r.left.hint.startsWith('量不到') ? `左格：${r.left.hint}` : '',
+    r.right.hint && r.right.hint.startsWith('量不到') ? `右格：${r.right.hint}` : ''].filter(Boolean).join(' ');
+  const bits = [read, ...diff].filter(Boolean);
+  return `<div>${r.cell}${bits.length ? ' ｜ ' + bits.join(' ｜ ') : ' ｜ 两边一样（含' + same.map((k) => LABEL[k]).join('、') + '）'}${notes ? ' ｜ ' + notes : ''}</div>`;
+}
+const LABEL = { smallTargets: '点击目标<24', overflow: '横向溢出', clipped: '截断无兜底', noName: '无名字控件', squeezed: '挤成一列一个字' };
+</script>
+</body>
+</html>

@@ -135,6 +135,27 @@ export function dayKey(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * 一段日子怎么写：`8月17日–19日` / `9月28日–10月4日` / `2025年12月29日–1月2日`。
+ *
+ * 三条规则，一条都别在别处再写一遍：
+ * - **同月省掉后一边的月名**——「8月17日–19日」比「8月17日–8月19日」短，
+ *   而这两处（日历的周标题、专注统计那一格）都窄。
+ * - **跨年才补年份**，补在起点那一头。不补的话「12月29日–1月2日」看着像把
+ *   日期写反了。终点不补：它就是「现在」这一侧，年份由界面别处说。
+ * - **分隔符是 en dash、两侧不空格**（`–`）。日历那一处原来写的是
+ *   `8月10日 - 8月16日`（ASCII 连字符加空格），专注统计那处写的是
+ *   `9月28日–10月4日`——同一种信息两种排法，就是这条要收掉的东西。
+ */
+export function dateRangeText(from: Date, to: Date): string {
+  const md = (d: Date) => `${d.getMonth() + 1}月${d.getDate()}日`;
+  if (from.getMonth() === to.getMonth() && from.getDate() === to.getDate()) return md(from);
+  const sameMonth = from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth();
+  const end = sameMonth ? `${to.getDate()}日` : md(to);
+  const year = from.getFullYear() === to.getFullYear() ? '' : `${from.getFullYear()}年`;
+  return `${year}${md(from)}–${end}`;
+}
+
 /** 这个 ISO 时刻带不带具体钟点。全天判据跟 `isAllDay(t)` 完全一致，只是
  *  从一个字符串出发（推演出来的影子没有 `Task` 可以喂进去）。 */
 export function hasClock(iso: string): boolean {

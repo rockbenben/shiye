@@ -115,18 +115,18 @@ function readmeSentence(): string {
 }
 
 /**
- * **AGENTS.md 开头逐字引了服务发给 AI 的那两句提示词，两边必须对得上。**
+ * **AGENTS.md 开头逐字引了服务发给 AI 的那四句提示词，两边必须对得上。**
  *
- * 那一段说「服务会用两份固定提示词叫起你（正本在 `server/src/expand.ts` 的
- * `PROMPT`）」，然后把两句原话抄了出来。抄的这份是 **AI 自己要读的东西**——它
- * 靠这两句认出「我这次是被叫来拆解还是回顾」。飘了之后，AI 收到的那句和文件里
- * 写的那句对不上，而它没有任何办法知道该信哪个。
+ * 那一段说「服务会用四份固定提示词叫起你（正本在 `server/src/expand.ts` 的
+ * `PROMPT`）」，然后把四句原话抄了出来。抄的这份是 **AI 自己要读的东西**——它
+ * 靠这几句认出「我这次是被叫来拆解、回顾、总览还是拆细」。飘了之后，AI 收到的那句
+ * 和文件里写的那句对不上，而它没有任何办法知道该信哪个。
  *
  * 这跟 `android/冒烟清单.md` 抄 `LAN_WARNING` 是同一个形状（那处真的飘过一次，
- * 见 `lanBind.test.ts` 末尾那条）。加提示词的时候最容易漏——`review` 那句就是
- * 后加的。
+ * 见 `lanBind.test.ts` 末尾那条）。加提示词的时候最容易漏——`review`、`board`、
+ * `breakdown` 那几句都是后加的。
  *
- * **比的时候摘掉句末的句号**：`PROMPT` 里那两句各自带一个「。」，而 AGENTS.md
+ * **比的时候摘掉句末的句号**：`PROMPT` 里那几句各自带一个「。」，而 AGENTS.md
  * 把它们放在「」引号里、后面接着破折号，句号在那儿是多余的。摘掉之后比的是
  * 句子本身，不会为一个标点假红。
  */
@@ -153,12 +153,12 @@ function docs(dir = '.', out: string[] = []): string[] {
   return out;
 }
 
-describe('凡是抄了那两句提示词的文档，都得跟 PROMPT 对得上', () => {
+describe('凡是抄了那四句提示词的文档，都得跟 PROMPT 对得上', () => {
   const bare = Object.values(PROMPT).map((p) => flat(p.replace(/。$/, '')));
 
   /**
-   * **按「谁抄了」找，不维护一份文件名单。** 那两句现在被抄在三个地方
-   * （`AGENTS.md` 开头、`CLAUDE.md` 讲自动拆解和定时回顾那两段、
+   * **按「谁抄了」找，不维护一份文件名单。** 那四句现在被抄在三个地方
+   * （`AGENTS.md` 开头四句齐全、同一份文件末尾「定期分析怎么排」那节也抄了两句、
    * `workflows/expand.md` 最后一条规则），而名单本身就是下一个会飘的东西——
    * 新写一份文档抄了它、忘了加进名单，守卫就静默漏掉。
    *
@@ -183,7 +183,7 @@ describe('凡是抄了那两句提示词的文档，都得跟 PROMPT 对得上',
     ).toEqual([]);
   });
 
-  it('两句都抠到了——不是拿空字符串在比', () => {
+  it('四句都抠到了——不是拿空字符串在比', () => {
     expect(Object.keys(PROMPT).length).toBeGreaterThanOrEqual(2);
     for (const p of Object.values(PROMPT)) expect(p.length).toBeGreaterThan(10);
   });

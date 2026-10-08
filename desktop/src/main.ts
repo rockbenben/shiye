@@ -6,13 +6,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { iconPath, resolvePaths } from './paths.js';
 import { ensureAgentFiles } from './agentFiles.js';
-import { startServer, waitUntilHealthy, type ChildHandle } from './serverChild.js';
-import { buildNotificationOptions, toNotification, PROTOCOL, type NotifyContent } from './notify.js';
+import { startServer, waitUntilHealthy, describeLaunchFailure, type ChildHandle } from './serverChild.js';
+import { actionKindAt, actionUri, buildNotificationOptions, toNotification, PROTOCOL, type NotifyContent } from './notify.js';
 import { parseProtocolUri, patchForAction, routeSecondInstance, type ReminderLike } from './protocol.js';
 import { decideLink } from './links.js';
 import { subscribeSse } from './sse.js';
 import { createUpdater, type Updater } from './updater.js';
 import { loadAutoCheck, saveAutoCheck } from './updatePrefs.js';
+import { loginItemReadOptions, loginItemWrite, shouldOpenHidden, supportsLoginItem } from './loginItem.js';
+import { fetchSummary, progressFraction } from './progress.js';
 
 // electron-updater 是 CJS、这个文件是 ESM——default import 拿到的是整个
 // module.exports。顶层只 import 不解构：真实的 autoUpdater 是个惰性 getter，
@@ -73,7 +75,7 @@ const TIMEOUT_HTML = `<!doctype html><meta charset="utf-8">
 <body style="font-family:system-ui,sans-serif;padding:2rem;line-height:1.6">
 <h1>办事师爷服务没能在 10 秒内应答</h1>
 <p>后台服务可能还在启动，或者出了问题。托盘图标还在的话再等一会儿，左键点一下重新打开看看；
-一直这样的话，用仓库里的「启动.cmd」手动起一次，从它弹出的终端窗口里看具体报错。</p>
+一直这样的话，用「启动.cmd」手动起一次，从它弹出的终端窗口里看具体报错。</p>
 </body>`;
 
 // Windows 的 toast 通知认的是 AppUserModelID（AUMID），装了 NSIS 版之后
@@ -169,6 +171,28 @@ function showNotification(options: NotificationConstructorOptions): Notification
   return notification;
 }
 
+/**
+ * 任务栏进度条：今天做完几件。
+ *
+ * **数从服务端取**（`/api/summary`），口径跟每日概览那条推送、跟网页「今天」
+ * 那一屏是同一份（见 desktop/src/progress.ts 顶部）。主进程只负责把比例交给
+ * Electron 的 `setProgressBar`。
+ *
+ * **取不到就什么也不动**（`fetchSummary` 返回 null）——上一次画着的进度条
+ * 留着，总比「因为取不到就画成 0%」诚实：那条 0% 是在说「今天一件事都没做完」，
+ * 而真相可能只是服务正忙。
+ */
+async function refreshTaskbarProgress(): Promise<void> {
+  const summary = await fetchSummary(URL);
+  if (!summary) return;
+  const fraction = progressFraction(summary);
+  // -1 = 撤掉那条进度条（今天没有安排）。mode 得是 'normal' 才真画出来——
+  // 'none' 的意思是「记住这个值但不画」。
+  mainWindow?.setProgressBar(fraction === null ? -1 : fraction, {
+    mode: fraction === null ? 'none' : 'normal',
+  });
+}
+
 function openWindow(): void {
   if (!mainWindow) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -245,7 +269,7 @@ function patchTask(id: string, patch: Record<string, unknown>): Promise<void> {
   }).then(() => undefined, () => undefined);
 }
 
-function createWindow(healthy: boolean): void {
+function createWindow(healthy: boolean, openHidden: boolean): void {
   // 不要菜单栏。Electron 默认给每个窗口挂一套 File/Edit/View/Window/Help——
   // 那是「开箱即用的框架观感」，跟这个产品刻意收着的调子不是一回事（同一条
   // 理由见 theme.css 顶部为什么不用 antd 自带的 Empty 插画）。这里整个去掉，
@@ -253,12 +277,39 @@ function createWindow(healthy: boolean): void {
   //
   // **剪贴板**：老版本 Electron 里 setApplicationMenu(null) 会连带干掉
   // Ctrl+C/V/X/A 的默认加速键（那些绑在 editMenu 的 role 上），而「随手记」
-  // 最主要的捕获路径就是粘贴。Electron 44 的 Chromium 在可编辑区域是原生
-  // 处理这几个键的、不依赖菜单 role——**但这条只能实测**，所以它是
+  // 最主要的捕获路径就是粘贴。Electron 45 的 Chromium 在可编辑区域是原生
+  // 处理这几个键的、不依赖菜单 role（升 45 时核过它的破坏性变更清单，
+  // 这一块不在其中）——**但这条只能实测**，所以它是
   // desktop/冒烟清单.md 里单独一条，不是靠版本号推出来就算数的。
   Menu.setApplicationMenu(null);
 
-  mainWindow = new BrowserWindow({ width: 1200, height: 800, icon: ICON_PATH });
+  // **开机自启那一次开局不露面**（`openHidden`，判据见 loginItem.ts 的
+  // shouldOpenHidden）。一个常驻托盘的东西每天登录时摊开一个 1200×800 的窗口，
+  // 用户要的从来不是这个——要的是「到点会响」，而那是服务 + 托盘在做的事。
+  // `show: false` 之后窗口照样加载、照样订阅 SSE，只是不出来；托盘左键、点通知、
+  // 重复启动那三条路都走 openWindow()，跟这里无关。
+  //
+  // 为什么窗口必须**现在**就建（不是等用户点托盘才建）：`createWindow` 之后
+  // 紧跟着 createTray / subscribeReminders，通知点击要靠 mainWindow 已经在那儿
+  // 才派得出 'desktop-open-task'；藏在托盘里的窗口和露出来的窗口是同一条路。
+  mainWindow = new BrowserWindow({
+    // **窗口位置/大小记忆**（Electron 45 新增的 `windowStatePersistence`）：
+    // 用户把窗口挪到另一块屏、或者拉大拉小之后，下次开应用还在原处。
+    // 这对「一个常驻托盘、每天要开很多次」的工具是实打实的小体贴——每次都被
+    // 甩回屏幕正中是件很烦人的事。
+    //
+    // **必须有唯一的 `name` 才生效**（官方原话：「Has no effect if window `name`
+    // is not provided」）。同一个 name 在前一个窗口销毁之前不能复用，而本应用
+    // 只建一个窗口、而且只藏不销毁（close 事件走的是「藏到托盘」那条路），
+    // 所以不会撞。
+    //
+    // **`displayMode: false`**：不记「最大化 / 全屏 / kiosk」。一个日常小工具
+    // 忽然以全屏的样子冒出来，比位置跑偏更让人以为出了故障。位置和大小照记
+    // （`bounds` 默认就是 true）。
+    name: 'main-window',
+    windowStatePersistence: { bounds: true, displayMode: false },
+    width: 1200, height: 800, icon: ICON_PATH, show: !openHidden,
+  });
 
   // **备注里的链接不许把这个窗口变成浏览器。** 任务备注按 Markdown 渲染，
   // 外链带着 `target="_blank"`——在浏览器里那是新开一个标签页，在 Electron 里
@@ -320,7 +371,9 @@ function createTray(): void {
 // 拿着 MenuItem 引用去改 checked/label 简单，也不会有「拿到的是旧那一份」
 // 的错位。
 //
-// 没接线的形态（updater 为 null，见 bootstrap 里那道门）就是原来的两项。
+// 没接线的形态（updater 为 null，见 bootstrap 里那道门）没有更新那两项；
+// 「开机自启」另有自己的一道门（loginItemAt），两道门都关着就还是原来的
+// 「打开 / 退出」两项。
 function refreshTrayMenu(): void {
   if (!tray) return;
   const template: MenuItemConstructorOptions[] = [{ label: '打开', click: openWindow }];
@@ -343,13 +396,40 @@ function refreshTrayMenu(): void {
     );
     if (updater.state() === 'ready') {
       template.push({
-        label: `重启以完成更新 v${updater.versionReady() ?? ''}`,
+        label: `重启以完成更新${updater.versionReady() ? ` v${updater.versionReady()}` : ''}`,
         click: () => updater?.restartToInstall(),
       });
     }
   }
+  const autoStart = loginItemAt();
+  if (autoStart) template.push(autoStart);
   template.push({ label: '退出', click: () => app.quit() });
   tray.setContextMenu(Menu.buildFromTemplate(template));
+}
+
+/**
+ * 托盘上那颗「开机自启」。不支持的形态返回 null，由调用处滤掉——门写在
+ * loginItem.ts 的 `supportsLoginItem` 里（Linux 没有这条 API，未打包会把
+ * Electron 本体注册成登录项），这里不再判第二遍。
+ *
+ * **状态只有系统那一份，没有第二份 prefs 文件。** 「自动检查更新」要在
+ * `update-prefs.json` 里记一笔，是因为那个开关背后是一个我们自己的定时器，
+ * 系统那边没地方存；开机自启不一样，它唯一的真相就是注册表 Run 键 /
+ * SMAppService 那条登录项。再在 userData 里记一份「用户勾过」只会和系统那份
+ * 漂开：在任务管理器里手动禁用、或者把应用挪了个目录，界面上那颗勾还会是
+ * 勾着的，而实际开机起来的和屏幕说的不是一件事——那种谎比没有这份缓存更难查。
+ *
+ * 于是每次重开菜单现读一遍。读的时候那份参数不能漏，见 loginItem.ts 的
+ * `loginItemReadOptions`——漏了不报错，表现为勾上去、菜单重开就自己弹回来。
+ */
+function loginItemAt(): MenuItemConstructorOptions | null {
+  if (!supportsLoginItem(process.platform, app.isPackaged)) return null;
+  return {
+    label: '开机自启',
+    type: 'checkbox',
+    checked: app.getLoginItemSettings(loginItemReadOptions(process.platform)).openAtLogin,
+    click: (item) => app.setLoginItemSettings(loginItemWrite(item.checked, process.platform)),
+  };
 }
 
 // 桌面端「在线」（SSE 连接活着）不等于这条 Electron 通知真的弹出来了——用户在
@@ -384,14 +464,36 @@ function subscribeReminders(): void {
   // Bus#isDesktopOnline），这样它到点提醒时不会再另起一个 PowerShell 弹窗——
   // 那条路是没有桌面端时的兜底，桌面端在线时这里的 Electron Notification 才是主路径。
   void subscribeSse(`${URL}/api/events?client=desktop`, (event, data) => {
+    // 任务栏进度条：**只有任务变了才刷**（收件箱、设置那些变了，「今天还剩
+    // 几件」一个数都不动）。服务端那边已经按表去抖过一次（events.ts 的
+    // `watchData`，200ms），所以连着改 20 条也只来一个事件。
+    if (event === 'data-changed' && (data as { file?: string } | null)?.file === 'tasks') {
+      void refreshTaskbarProgress();
+    }
     const n = toNotification(event, data);
     if (!n) return;
-    showNotification(buildNotificationOptions(n, { fileUrl: ICON_FILE_URL, path: ICON_PATH }))
+    const notification = showNotification(buildNotificationOptions(n, { fileUrl: ICON_FILE_URL, path: ICON_PATH }));
+    notification
       // `n.id === null`（概览、成批提醒）没有可定位的那一条，开主窗口就是它该做的事。
       // 上报那条路（`reportNotificationFailed`）对这两种照样成立：服务端只读
       // title/body 去弹兜底 toast，`id` 它压根不看。
       .on('click', () => { if (n.id === null) openWindow(); else openTask(n.id); })
       .on('failed', () => reportNotificationFailed(n));
+    // **mac/Linux 那两颗按钮**（Windows 走 toast XML 里的协议 URI，那条路连
+    // 冷启动都成立）。这边是 Electron 的 `action` 事件，**只在应用活着的时候
+    // 送到**——这是它跟 Windows 那条路的唯一差别，别的都一样：认成「完成 /
+    // 推迟」之后，**拼出同一个协议 URI** 交给 applyProtocolAction，两边共用
+    // 一条处理链（解析、算 patch、PATCH 服务端，见 protocol.ts）。
+    if (n.id !== null) {
+      // **序号在 `details.actionIndex` 里**——Electron 把那两个位置参数
+      // （`actionIndex` / `selectionIndex`）标成了 deprecated，新写法是
+      // details 上那两个字段。读废弃的那份，将来 Electron 一改就没了。
+      notification.on('action', (details) => {
+        const kind = actionKindAt(details.actionIndex);
+        if (!kind) return;
+        void applyProtocolAction(actionUri(kind, n.id as string));
+      });
+    }
   });
 }
 
@@ -428,23 +530,43 @@ async function bootstrap(): Promise<void> {
     // 见 serverChild.ts 顶部注释。这种情况下没有「我们自己的」子进程可监控，
     // 8 条里的崩溃通知也就无从谈起，跳过 onExit 完全正确。
     if (child) {
-      child.onExit((code, killedByUs) => {
+      child.onExit((code, killedByUs, launchError) => {
         // 8. 子进程崩了要说清楚，不能「窗口一闪就没了」——第一批那条暂缓项
         // 记下来的教训。killedByUs 为 true 时是我们自己在退出流程里主动
         // stop() 的，那种不用告诉用户。
         if (killedByUs) return;
         showNotification({
-          title: '办事师爷的后台服务退出了',
-          body: `进程退出码 ${code ?? '未知'}。重新打开办事师爷试一次；一直这样的话用「启动.cmd」手动起，看终端里的报错。`,
+          // **「起不来」和「退了」分开说**：前者压根没有退出码，只有 errno
+          // 说得清原因（serverChild.ts 的 describeLaunchFailure）。混成一句
+          // 「退出码未知」，用户连该查哪儿都不知道。
+          title: launchError ? '办事师爷的后台服务起不来' : '办事师爷的后台服务退出了',
+          body: launchError
+            ? `服务没起来：${describeLaunchFailure(launchError)}。重新打开办事师爷试一次；一直这样的话，用「启动.cmd」手动起一次，从它弹出的终端窗口里看具体报错。`
+            : `进程退出码 ${code ?? '未知'}。重新打开办事师爷试一次；一直这样的话，用「启动.cmd」手动起一次，从它弹出的终端窗口里看具体报错。`,
         });
       });
     }
 
     // 3. 等服务真的能答复了再 loadURL，不然是白屏或者连接被拒。
     const healthy = await waitUntilHealthy(PORT);
-    createWindow(healthy);
+    // 「这次是不是开机拉起的那一次」只在这里问一次，之后没人再读：Windows 的答案
+    // 写在 argv 里（登录项就是注册表里那条「路径 + 参数」，参数传得进去），
+    // macOS 的参数传不进去，只能问系统（loginItem.ts 的 HIDDEN_FLAG 上面那段）。
+    // 未打包形态压根没注册过登录项，问了也是 false，但照样把系统调用关在门外，
+    // 免得哪天有人在这条路上加副作用时把 dev 也带进去。
+    const openedAtLogin =
+      supportsLoginItem(process.platform, app.isPackaged) &&
+      app.getLoginItemSettings(loginItemReadOptions(process.platform)).wasOpenedAtLogin;
+    createWindow(healthy, shouldOpenHidden(process.argv, openedAtLogin));
     createTray();
     subscribeReminders();
+
+    // 任务栏进度条：起一次、跟着数据改动刷、每分钟兜一次。
+    // **那个每分钟**是给「跨零点」兜底的——零点一过，「今天」换了一批任务，
+    // 而那一刻没有任何数据改动，不主动去问就永远停在昨天那一条。
+    // unref：别让这个定时器把进程钉住（跟 sse.ts 那颗心跳同一条理由）。
+    void refreshTaskbarProgress();
+    setInterval(() => { void refreshTaskbarProgress(); }, 60_000).unref?.();
 
     // 自动更新只在「装了 NSIS 的 Windows」上点亮：zip 免安装版没有可覆盖的
     // 安装根目录，mac 未签名走不通 ShipIt（见 spec §0），dev 形态压根没有

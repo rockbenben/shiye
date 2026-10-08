@@ -1,6 +1,6 @@
 import { Fragment, useState, type ReactNode } from 'react';
 import { Dropdown } from 'antd';
-import type { Folder, InboxItem, Insight, List, Task } from '../types.js';
+import type { Folder, InboxItem, Insight, List, Task, TrashItem } from '../types.js';
 import { SIDEBAR_GROUPS, NAV_GROUP_LABEL, type ViewDef } from '../lib/views.js';
 import { groupListsByFolder, LIST_COLORS, listLabel, movePatches, type OrderPatch } from '../lib/listIcon.js';
 import { tagTree, type TagNode } from '../lib/tagTree.js';
@@ -20,6 +20,13 @@ interface Props {
   tasks: Task[];
   /** 只用来算「回顾」那个待确认的数（`ViewCountSource`）。 */
   insights: Insight[];
+  /**
+   * **只为判「垃圾箱空不空」**（`ViewCountSource` 里那个 `trash`）。
+   *
+   * 不给的话 `visibleViews` 算不出垃圾箱该不该显示，而它是收窄默认之后头一个
+   * 要收的入口——一个空的垃圾箱杵在导航里，就是这次要减掉的那种噪音。
+   */
+  trash: TrashItem[];
   inbox: InboxItem[];
   now: Date;
   lists: List[];
@@ -109,7 +116,7 @@ const FILTER_LABELS: FilterLabels = {
 };
 
 export function Sidebar({
-  viewDefs, current, onSelect, tasks, insights, inbox, now, lists, onAddList, onRenameTag, onDeleteTag,
+  viewDefs, current, onSelect, tasks, insights, trash, inbox, now, lists, onAddList, onRenameTag, onDeleteTag,
   onRenameList, onArchiveList, onDeleteList, onRecolorList, onReviewList,
   folders = [], onAddFolder, onRenameFolder, onDeleteFolder, onMoveListToFolder, onReorder,
   onEditListFilter,
@@ -391,7 +398,14 @@ export function Sidebar({
     // ——菜单项没地方挂解释，而这个仓库不留没有解释的死按钮。
     ...(onReviewList && !l.filter ? [{
       key: 'review',
-      label: (liveByList.get(l.id) ?? 0) > 0 ? '让 AI 回顾这份清单' : '让 AI 回顾这份清单（没有还挂着的任务）',
+      // **带条数**（差距清单第 14 条）：点下去之前就知道这一轮大概要花多久——
+      // 一次回顾要把这一份清单的任务全读一遍、想一遍，14 条和 2 条不是一回事。
+      // 判据那个数**已经算好了**（`liveByList`），只用来判置灰，白算了一次。
+      //
+      // 置灰那句文案不动——它回答的是「为什么点不动」，不是「有多少条」。
+      label: (liveByList.get(l.id) ?? 0) > 0
+        ? `让 AI 回顾这份清单（${liveByList.get(l.id)} 条）`
+        : '让 AI 回顾这份清单（没有还挂着的任务）',
       disabled: (liveByList.get(l.id) ?? 0) === 0,
     }] : []),
     // 上移 / 下移（仿滴答清单侧栏能拖着重排）。**到头就禁用，不是藏起来**：
@@ -533,12 +547,14 @@ export function Sidebar({
       <nav className="ink-nav" aria-label="视图">
         {/* 这一份在下面分三段各渲染一次，先算好——`SKIP_IN_NAV` 挡的是
             「搜索结果」那种打字之后才出现的去处。 */}
-        {/* `ink-nav-views` 是给样式表点名用的修饰类，跟下面标签那份的
-            `ink-nav-tags` 一个道理：手机宽度下只有**视图**这一份摊成三列
-            （theme.css 的 `@media (max-width: 767px)`），清单和标签两份继续竖排
-            ——它们的名字是人起的，长度不可控。不靠 `:first-of-type` 认位置：那个
-            伪类认的是标签名（`<ul>`），谁在前面插一份新列表，三列就悄悄套到错的
-            那一份上，而且只在窄屏、只在视觉上塌，没有测试拦得住。 */}
+        {/* `ink-nav-views` 是点名这一份视图列表用的修饰类，跟下面标签那份的
+            `ink-nav-tags` 一个道理：清单和标签的名字是人起的、长度不可控，
+            认位置不能靠 `:first-of-type`——那个伪类认的是标签名（`<ul>`），
+            谁在前面插一份新列表，规则就悄悄套到错的那一份上。
+            （窄屏那份「摊成三列」早没了：侧栏整条收进抽屉，那条规则连同
+            `theme.css` 里的写法一起没了，theme.css.test.ts「窄屏侧栏：
+            收进抽屉，不摊成三列」那组钉着它别回来。这一份类现在只当
+            「认得出哪段是视图」的点用，样式表里没有它。） */}
         {/* **分三段，各带一个小标题。** 原来这十四项是一个平的 <ul>——而它们
             本来就是三类东西（换一批任务看 / 同一批任务的另一种摆法 / 另一个
             模块），摆成一排长得一样的行，看着又多又平。分段是仿滴答清单：
@@ -560,7 +576,7 @@ export function Sidebar({
             <Fragment key={g}>
               <p className="ink-nav-group">{NAV_GROUP_LABEL[g]}</p>
               <ul className="ink-nav-list ink-nav-views">
-                {inGroup.map((v) => item(v.key, v.label, v.count?.({ tasks, inbox, now, insights })))}
+                {inGroup.map((v) => item(v.key, v.label, v.count?.({ tasks, inbox, now, insights, trash })))}
               </ul>
             </Fragment>
           );
@@ -673,6 +689,28 @@ export function Sidebar({
         {tags.length > 0 && (
           <>
             <p className="ink-nav-group">标签</p>
+            {/* **这一段是干什么的，一句话说明。**（2026-10-16 实拍滴答清单
+                侧栏时发现的：它的「过滤器」和「标签」两段**各自带一句说明**——
+                「根据清单、时间、优先级、标签等过滤出特定的任务」「以标签的
+                维度展示不同清单的任务，在添加任务时输入 `#` 可快速选择标签」。
+
+                只抄了标签这一半：**「过滤器」段我们压根没有**——筛选是任务列表
+                顶上那颗「筛选」按钮，补一整段是加功能、不是打磨，而且筛选条
+                离它管的东西比侧栏更近，搬过去反而远了一步。这半句不是。
+
+                **只留「打 `#` 会进这一段」那半句。** 滴答那句的前半（「以标签的
+                维度看不同清单的任务」）在 280px 的侧栏里要折成两行，把下面的
+                标签 chip 整体往下推——而那一段摆在那儿，「这是按标签分的」
+                本来就看得出来；真正**不可发现**的是「加任务时打 `#` 就会落进
+                这一段」，那是打完第一个标签的人才知道的经验。第一版两句都留，
+                拍图一看两行太占地方，删掉前半。
+
+                「快速」两个字是刻意的：滴答那边是弹一个候选列表，我们这边是
+                `QuickAdd` 的智能识别（`lib/smartInput.ts`），两边不是同一套，
+                这句只说结果不说机制。 */}
+            <p className="ink-nav-hint">
+              加任务时输入 <code>#</code> 可直接选标签
+            </p>
             {/* 二级标签（仿滴答清单）：`#工作/项目A` 在侧栏里缩进挂在「工作」
                 下面。层级用命名约定表达、不加标签表，理由见 lib/tagTree.ts。
                 父节点自己没有任务时（只有 `#工作/项目A`、没人打过 `#工作`）

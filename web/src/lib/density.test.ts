@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getDensity, setDensity } from './density.js';
 
-// localStorage 在 jsdom 里跨用例会串——CLAUDE.md 明写的那条规矩，这里每条
+// localStorage 在 jsdom 里跨用例会串——这里每条
 // 用例前后各清一次，不依赖用例执行顺序。
 beforeEach(() => localStorage.clear());
 afterEach(() => localStorage.clear());

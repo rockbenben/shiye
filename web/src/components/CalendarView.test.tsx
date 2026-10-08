@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { CalendarView } from './CalendarView.js';
+import { CalendarView, composeHour } from './CalendarView.js';
 import { DEFAULT_CALENDAR_PREFS } from '../lib/calendarPrefs.js';
 import { fcDragEvent, fcSlotPoint, fcTimeGridDrag, installFullCalendarFakeLayout, task } from '../test-utils.js';
 
@@ -74,7 +74,7 @@ describe('CalendarView：切档时把 anchor 同步到 selectedKey（整分支�
 
     // 周视图标题是「M月D日 - M月D日」，8/25 所在的那一周是 8/24（周一）到
     // 8/30（周日）。
-    expect(container.querySelector('.ink-cal-heading')!.textContent).toBe('8月24日 - 8月30日');
+    expect(container.querySelector('.ink-cal-heading')!.textContent).toBe('8月24日–30日');
   });
 
   it('没有 selectedKey 时切档：锚点不动，标题还是今天（NOW）所在的那页——不是每次切档都把锚点拉到 now', () => {
@@ -229,7 +229,37 @@ describe('CalendarView：在这天新建', () => {
 
     fireEvent.click(screen.getByText('在这天新建'));
 
-    expect(onComposeOn).toHaveBeenCalledWith('2026-08-18');
+    // 第二个参数是「刚点中的那个小时格」；这里只选中了某天、没点格子，所以是
+    // undefined，由调用方按「那天晚上」兜。
+    expect(onComposeOn).toHaveBeenCalledWith('2026-08-18', undefined);
+  });
+});
+
+/**
+ * 「点中某个小时格 → 预填那个整点」这一步里，唯一会算错的是**陈旧的那一格**，
+ * 而 FullCalendar 的 `dateClick` 在 jsdom 里驱动不了（要真实的指针交互引擎，
+ * 见这个文件顶部那段说明），所以把判据抽成 `composeHour` 单独测。
+ *
+ * 漏了 key 比对会怎样：在 8/18 点了 14 点那一格，再点 8/20 那天，按钮还写着
+ * 「在 14:00 新建」，点下去表单里的截止日期是 8/20 14:00——一个谁都没说过的
+ * 时刻。
+ */
+describe('CalendarView：composeHour 只认此刻选中的那天', () => {
+  it('点中的格子属于选中的那天 → 报那个整点', () => {
+    expect(composeHour({ key: '2026-08-18', hour: 14 }, '2026-08-18')).toBe(14);
+  });
+
+  it('换了一天（格子是旧的）→ 不报，回到「那天晚上」那条兜底', () => {
+    expect(composeHour({ key: '2026-08-18', hour: 14 }, '2026-08-20')).toBeUndefined();
+  });
+
+  it('压根没点过格子 / 没选中哪天 → 都不报', () => {
+    expect(composeHour(null, '2026-08-18')).toBeUndefined();
+    expect(composeHour({ key: '2026-08-18', hour: 9 }, null)).toBeUndefined();
+  });
+
+  it('0 点是一个合法答案，不能因为它是 0 就被当成「没报」', () => {
+    expect(composeHour({ key: '2026-08-18', hour: 0 }, '2026-08-18')).toBe(0);
   });
 });
 
@@ -275,7 +305,7 @@ describe('CalendarView：农历/节假日两个开关一路传到底（weekStart
 
   it('月视图：开着就画，关着一个字都没有', () => {
     const { container, rerender } = render(
-      <CalendarView {...at({ showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiBaseUrl: '', aiKey: '', aiModel: '' })} />,
+      <CalendarView {...at({ showLunar: true, showHolidays: true, aiMode: 'cli' as const })} />,
     );
     expect(container.querySelector('.ink-cal-lunar')).not.toBeNull();
     expect(container.querySelector('.ink-cal-mark')).not.toBeNull();
@@ -286,7 +316,7 @@ describe('CalendarView：农历/节假日两个开关一路传到底（weekStart
 
   it('周视图：切档之后照样在——月和周/日是两个不同的 <CalendarFull>，各传各的', () => {
     const { container } = render(
-      <CalendarView {...at({ showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiBaseUrl: '', aiKey: '', aiModel: '' })} />,
+      <CalendarView {...at({ showLunar: true, showHolidays: true, aiMode: 'cli' as const })} />,
     );
     fireEvent.change(within(container).getByLabelText('看哪一档'), { target: { value: 'week' } });
     expect(container.querySelector('.fc-col-header-cell .ink-cal-sub')).not.toBeNull();

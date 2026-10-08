@@ -89,7 +89,7 @@ describe('countdownState', () => {
     expect(countdownState(cd({ date: '2026-03-10', yearly: true }), NOW)!.kind).toBe('down');
   });
 
-  it('日期坏掉返回 null——调用方据此画「日期坏了」，不显示 NaN 天', () => {
+  it('日期坏掉返回 null——调用方据此画那条「日期没写对」的报错，不显示 NaN 天', () => {
     expect(countdownState(cd({ date: '下周三' }), NOW)).toBeNull();
   });
 });

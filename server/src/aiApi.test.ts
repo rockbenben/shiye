@@ -109,43 +109,50 @@ describe('maskKey / aiKeyFrom：密钥不原样回给浏览器', () => {
    * 这一条是整件事的关键：界面读回来的是打码串，用户不碰它、只改了别的设置再
    * 保存，请求体里带回来的就是那串打码。不认它的话密钥会被 `••••abcd` 覆盖，
    * 而这次覆盖悄无声息，要等下一次拆解报 401 才现形。
+   *
+   * `stored` 是**同一条记录**自己存着的那把，不是全应用共用的一把——所以这里
+   * 不再比较两个地址。地址相关的两条判据（换了主机就不许沿用）搬去了
+   * `settings.test.ts` 的 `mergeEndpoint`：那层同时看得见新旧两条记录。
    */
-  const same = { incoming: 'https://x.test/v1', stored: 'https://x.test/v1' };
-  const moved = { incoming: 'https://攻击者.test/v1', stored: 'https://x.test/v1' };
-
   it('收到的正是自己打码回去的那串 → 保持原样', () => {
-    expect(aiKeyFrom('••••ijkl', 'sk-abcdefghijkl', same)).toBe('sk-abcdefghijkl');
+    expect(aiKeyFrom('••••ijkl', 'sk-abcdefghijkl')).toBe('sk-abcdefghijkl');
   });
 
-  /** 「改了地址、没动密钥」：最常见的试法，打码那一支照样认。 */
-  it('打码串 + 换了地址 → 仍然沿用——这是界面的正常走法', () => {
-    expect(aiKeyFrom('••••ijkl', 'sk-abcdefghijkl', moved)).toBe('sk-abcdefghijkl');
-  });
-
-  it('请求体里压根没这个字段、地址没变 → 保持原样', () => {
-    expect(aiKeyFrom(undefined, 'sk-abcdefghijkl', same)).toBe('sk-abcdefghijkl');
-  });
-
-  /**
-   * **没这个字段、地址却换了 → 不沿用。** 原来这一支无条件返回存着的密钥，
-   * 那是一条把密钥送给任意地址的路（第三方网页发得出这种请求，理由见
-   * `aiKeyFrom` 的注释）。真实客户端从不省略这个字段，收紧对界面零影响。
-   */
-  it('没这个字段、地址换了 → 空——密钥不跟着搬去陌生地址', () => {
-    expect(aiKeyFrom(undefined, 'sk-abcdefghijkl', moved)).toBe('');
+  it('请求体里压根没这个字段 → 保持这条记录原来的密钥', () => {
+    expect(aiKeyFrom(undefined, 'sk-abcdefghijkl')).toBe('sk-abcdefghijkl');
   });
 
   it('换了一把新的 → 照收', () => {
-    expect(aiKeyFrom('sk-new', 'sk-old', same)).toBe('sk-new');
+    expect(aiKeyFrom('sk-new', 'sk-old')).toBe('sk-new');
   });
 
   it('空串 = 真的清掉——不留这条路就没法删密钥', () => {
-    expect(aiKeyFrom('', 'sk-abcdefghijkl', same)).toBe('');
+    expect(aiKeyFrom('', 'sk-abcdefghijkl')).toBe('');
   });
 
-  /** 本来就没存 → 那串打码只是一段普通文字，照收（也就是存了个假的，他自己看得见）。 */
-  it('本来没存密钥时，打码串不再有特殊含义', () => {
-    expect(aiKeyFrom('••••ijkl', '', same)).toBe('••••ijkl');
+  /**
+   * **这一条改过判据**（2026-10-21）。原来写的是「本来就没存 → 那串打码只是一段
+   * 普通文字，照收（也就是存了个假的，他自己看得见）」。
+   *
+   * **旧理由**：服务端分不出这串 `••••ijkl` 到底是打码回显还是用户真敲的一把
+   * 钥匙，界面上也没有来源可问——那就当普通文字存着，至少用户自己看得见。
+   *
+   * **为什么现在不成立**：分得出来。`maskKey` 造出来的打码**永远以 `••••` 打头**
+   * （`aiApi.ts`），而真钥匙是 ASCII 串，不会有 `••••` 打头。所以「长得像打码」
+   * 就是一条能用的线索。
+   *
+   * **照收的代价是实打实的**：落盘的是 `••••ijkl`，第一次调接口就 401，而报错
+   * 说的是「密钥无效」——界面上那一格明明填过东西，人只会反复重填、看不出真相。
+   * 哪台机器会遇到：换机之后导入一份别处导出的文件（导出的是打码串），或者
+   * 导入一份本机没有那条记录的备份。
+   */
+  it('本来没存密钥、收到的又确实是一串打码 → 当成「没给密钥」，不把打码存成真钥匙', () => {
+    expect(aiKeyFrom('••••ijkl', '')).toBe('');
+  });
+
+  /** 真钥匙照收——「长得像打码」不能误伤正常输入。 */
+  it('本来没存密钥、收到的是真钥匙 → 照收', () => {
+    expect(aiKeyFrom('sk-new-key', '')).toBe('sk-new-key');
   });
 });
 

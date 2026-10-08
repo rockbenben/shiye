@@ -282,6 +282,11 @@ export function RepeatFields({ value, onChange }: Props): ReactNode {
               那一次反而生成不出来，跟人的直觉正好相反。 */}
           <DatePicker
             allowClear
+            // 名字要单独给：antd 把 `placeholder` 画成输入框里那行灰字，读屏的
+            // 时候它不是可及名（全站别的几颗日期框都是这么写的，见
+            // `TaskFields.tsx` 里「截止时间」那几颗）。这一排七个控件挤在一起，
+            // 只靠「重复截止（不填就一直重复）」这行灰字，念出来是「编辑框」。
+            aria-label="重复到哪天为止"
             placeholder="重复截止（不填就一直重复）"
             value={value.until ? dayjs(value.until) : null}
             onChange={(d) => onChange({ ...value, until: d ? d.endOf('day').toISOString() : null })}

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { CAL_MODES, CAL_MODE_LABEL, assertExhaustiveMode, type CalDay, type CalMode } from '../lib/calendar.js';
+import { CAL_MODES, CAL_MODE_LABEL, assertExhaustiveMode, dateRangeText, type CalDay, type CalMode } from '../lib/calendar.js';
 import { CalendarFull } from './CalendarFull.js';
 import { weekdayFull, weekdayHeader } from '../lib/weekday.js';
 import type { WeekStart } from '../types.js';
@@ -67,6 +67,16 @@ interface Props {
    *  找节气；日程视图每一行本来就有完整日期。 */
   showLunar?: boolean;
   showHolidays?: boolean;
+  /**
+   * 画在导航行**下面、日历正文上面**的一块东西（调用方给的是那排显示设置）。
+   *
+   * 为什么是这里而不是调用方自己排在前面：`CalendarView` 里那一排勾选框原来
+   * 就画在 `<CalendarGrid>` 之前，于是它在屏幕上坐在「2026年10月 / 档位 /
+   * 翻页」这一行**上面**——层级倒了。你进这一屏要找的是「我在看哪一页、怎么
+   * 翻」，不是显示设置；而导航行是这个组件画的，调用方排在它前面就只能压在
+   * 它头上。给一个插槽，顺序由这一层保证。
+   */
+  afterNav?: ReactNode;
 }
 
 // task-5-brief：月视图正文换成 FullCalendar（CalendarFull.tsx）——「样式怎么
@@ -90,7 +100,9 @@ function headingText(mode: CalMode, anchor: Date, days: CalDay[]): string {
   if (mode === 'week') {
     const first = days[0]?.date ?? anchor;
     const last = days[days.length - 1]?.date ?? anchor;
-    return `${first.getMonth() + 1}月${first.getDate()}日 - ${last.getMonth() + 1}月${last.getDate()}日`;
+    // 写法是 `lib/calendar.ts` 那一份全应用的（同月省月名、跨年补年份、en dash）——
+    // 原来这里自己拼了一句 `8月10日 - 8月16日`，跟专注统计那格不是一套。
+    return dateRangeText(first, last);
   }
   if (mode === 'day') {
     return `${anchor.getMonth() + 1}月${anchor.getDate()}日 ${weekdayFull(anchor.getDay())}`;
@@ -102,7 +114,7 @@ function headingText(mode: CalMode, anchor: Date, days: CalDay[]): string {
  *  用不上，点开某一天之后的当天列表才用它（见调用方）。 */
 export function CalendarGrid({
   days, mode, anchor, now, selectedKey, onSelectDay, onOpenTask, onShift, onToday, onModeChange, onDropOnDay,
-  onScheduleTo, schedule, weekStart = 1, showLunar, showHolidays, onEventDrag, children,
+  onScheduleTo, schedule, weekStart = 1, showLunar, showHolidays, onEventDrag, afterNav, children,
 }: Props): ReactNode {
   // 月格自己的拖拽提示（挂在日期数字上，不是整张网格）现在是
   // CalendarFull.tsx 的事——那句话是 dayCellContent 渲染出来的
@@ -159,6 +171,8 @@ export function CalendarGrid({
           )}
         </div>
       </div>
+
+      {afterNav}
 
       {mode === 'month' ? (
         <>

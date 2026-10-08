@@ -228,7 +228,7 @@ function applyGroup(tasks: Task[], f: SmartFilter, now: Date): Task[] {
   // 「只看重复任务」。判据就是有没有 `repeat`，跟卡片上那句「每周一」是同一个
   // 依据——一条任务要么挂着重复规则要么没有，没有中间态。
   if (f.isRepeating) out = out.filter((t) => t.repeat !== null && t.repeat !== undefined);
-  // 「还没到开始时间」。**复用 `notStarted`**，跟卡片上那个「9 月 1 日 开始」的
+  // 「还没到开始时间」。**复用 `notStarted`**，跟卡片上那个「9月1日 开始」的
   // 记号、「接下来」里那一组、四象限的排除是同一个函数。这一维自己写一遍
   // 「什么叫还没开始」的后果是：筛出来一条卡片上没有那个记号的任务。
   if (f.notStarted) out = out.filter((t) => notStarted(t, now));

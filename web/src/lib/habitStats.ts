@@ -105,6 +105,14 @@ export interface HabitSummary {
   /** 这个月的打卡表，一天一格。 */
   days: HabitDay[];
   /**
+   * 最近 28 天（四周）那条带，一天一格，**最后一天是今天**、不含未来。
+   *
+   * 给整宽那张习惯表用：一行一个习惯，右边这条带让所有习惯按**同一批日子**
+   * 对齐，一眼比得出谁这周断了。跟 `days` 是两份不同的窗口，不是同一份切两半
+   * ——月历按「一个月」对齐（月初到月末，含空格），这条按「今天」对齐。
+   */
+  recent: HabitDay[];
+  /**
    * 这个习惯是哪天开始的，本地 `YYYY-MM-DD`（名下最早那条记录的 `createdAt`）。
    *
    * 月历格子自己用 `before` 就够了，这个字段是给**「看这一年」那张热力图**用的：
@@ -167,6 +175,32 @@ function monthGrid(doneDays: Set<string>, now: Date, startKey: string, t: Task):
 }
 
 /**
+ * 最近 `n` 天那条横带（**不含未来**，最后一天就是今天）。
+ *
+ * 为什么不复用 `monthGrid`：月历那张表回答的是「这个月怎么样」，一行一个月、
+ * 七天一列；整宽那张表里每一行是一个习惯，要的是**把最近这几周直接跟隔壁那行
+ * 对齐着比**——「我这一周哪几天断了」。月初进这一屏时月历上大半是空格，这条带
+ * 照样是满的，这正是它存在的理由（同一条理由见 `monthOffset` 上面那段）。
+ *
+ * 每一格的状态判定跟月历**一字不差**（同一份 `isCheckinDay`、同一个 `before`
+ * 比法），两处各写一份迟早对不上：一条一三五的健身在周二，两边必须说同一句话。
+ */
+function recentBand(doneDays: Set<string>, now: Date, startKey: string, t: Task, n = 28): HabitDay[] {
+  const out: HabitDay[] = [];
+  // 日子往前退交给 Date 自己进位（`d - back` 退到 0 以下是上个月末），不手写
+  // 月份算术——跟 `takeRelativeMoment` 那边同一条规矩。
+  for (let back = n - 1; back >= 0; back--) {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back);
+    const key = dayKey(date);
+    out.push({
+      key, dayOfMonth: date.getDate(), done: doneDays.has(key),
+      future: false, before: key < startKey, off: !isCheckinDay(t, date),
+    });
+  }
+  return out;
+}
+
+/**
  * 每周那种习惯的**最长连续几周达标**。
  *
  * 跟 `longestStreak` 分开而不是加个参数：两者数的是不同的东西（天 / 周），
@@ -208,7 +242,26 @@ function longestWeeks(doneDays: Set<string>, t: Task, weekStart: WeekStart): num
  * 已放弃/已搁置的实例不参与「代表谁」的挑选，但**它们的历史照样算**——
  * `habitDoneDays` 只看 `completedAt`，一条后来被搁置的实例当初真的打过卡。
  */
-export function habitStats(all: Task[], now: Date, weekStart: WeekStart = 1): HabitSummary[] {
+/**
+ * `now` 往前/往后数 n 个月，**日号和时分照原样带过去**（本地墙钟，不碰 UTC）。
+ *
+ * 两件事都得保住：
+ * - 保住日号：`monthGrid` 用「今天几号」判哪几天还没到（`future`）。翻成
+ *   那个月的一号，月历上除了 1 号全被标成「还没到」——实测八条断言当场红。
+ * - 保住传进来的那个 Date 不被改：不写 `now.setMonth(...)`，调用方拿 `now`
+ *   还要算今天、连续天数，就地改等于「翻了个月，今天变成上个月」。
+ */
+const shiftMonth = (now: Date, n: number): Date =>
+  new Date(now.getFullYear(), now.getMonth() + n, now.getDate(), now.getHours(), now.getMinutes());
+
+/**
+ * 每个习惯一份概览。
+ *
+ * `monthOffset` 只管**月历那 31 格画哪个月**（0 = 这个月，-1 = 上个月），
+ * 连续天数、本周次数、今天打没打一律照真实的 `now` 算——翻到上个月去看，
+ * 不该顺手把「今天」也搬走。
+ */
+export function habitStats(all: Task[], now: Date, weekStart: WeekStart = 1, monthOffset = 0): HabitSummary[] {
   const byTitle = new Map<string, Task[]>();
   for (const t of all) {
     if (!isHabit(t)) continue;
@@ -236,7 +289,7 @@ export function habitStats(all: Task[], now: Date, weekStart: WeekStart = 1): Ha
     // 全都解析不出来（极端情况）就退回 `now`：那天之前没有可信的起点，分母从今天算。
     const starts = instances.map((t) => Date.parse(t.createdAt)).filter((n) => !Number.isNaN(n));
     const startKey = dayKey(starts.length > 0 ? new Date(Math.min(...starts)) : now);
-    const days = monthGrid(doneDays, now, startKey, rep);
+    const days = monthGrid(doneDays, shiftMonth(now, monthOffset), startKey, rep);
     out.push({
       title,
       taskId: rep.id,
@@ -251,6 +304,9 @@ export function habitStats(all: Task[], now: Date, weekStart: WeekStart = 1): Ha
       // 那天本来就不用做，算进分母等于说他欠着。
       monthElapsed: days.filter((d) => !d.future && !d.before && !d.off).length,
       days,
+      // 这条带**跟着今天走，不跟着翻月走**：它说的是「最近这几周」，而翻月改的是
+      // 下面展开那张月历看哪一个月。翻到上个月就把带也挪过去，两句就不成立了。
+      recent: recentBand(doneDays, now, startKey, rep),
       startKey,
     });
   }

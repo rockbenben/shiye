@@ -364,7 +364,7 @@ export interface Task {
 
 /**
  * 垃圾箱里的一条。`deletedAt` 只在这里有意义——加进 `Task` 等于让每一条活着的
- * 任务都背一个永远是 null 的字段，AI 的契约（AGENTS.md 那 23 个字段）也要跟着改。
+ * 任务都背一个永远是 null 的字段，AI 的契约（AGENTS.md 那 31 个字段）也要跟着改。
  *
  * 没有内联对象字面量：`web/src/lib/types.sync.test.ts` 抠 interface 用的正则是
  * `[^}]*`，不支持嵌套花括号，踩了会让两边一起截断、一起通过。
@@ -381,6 +381,39 @@ export interface InboxItem {
   taskIds: string[];
 }
 
+/**
+ * 一条「接口配置」：地址 + **配给这个地址的**密钥 + 这家默认用哪个模型名。
+ *
+ * **三个字段是一个整体，不许拆开单独编辑。** 这条形状是为了堵一个真实的 401：
+ * 以前这里是平铺的三格、全应用只有**一把**密钥，而界面上密钥那一格回填的是打码串，
+ * 保存时打码串会被换回存着的真值——**那次换回不看地址有没有变**。于是「点了另一家
+ * 服务商的芯片、没碰密钥格」这个最常见的动作，实际是把上一家的密钥发到了新地址上，
+ * 接口回 `Invalid API key`，报错文案却让人去查模型名和地址。密钥绑在记录里之后，
+ * 换服务商就是整条换，「跨家串钥匙」这件事在数据结构这一层就不成立了。
+ *
+ * 存在 `Settings.aiEndpoints` 里，一条一个键。键由**客户端**挑：provider 目录里
+ * 那一家的 `key`，手填的地址落进 `custom:<归一化地址>`。服务端把键当**不透明字符串**
+ * 对待、只按它合并，不解释也不改写它——目录住在 `web/src/vendor/`，服务端够不着，
+ * 硬要服务端也算一遍 id 就是让两个包各写一份归一化规则，迟早飘。
+ */
+export interface AiEndpoint {
+  /**
+   * 打到哪儿。填完整地址（`…/v1/chat/completions`）、base（`…/v1`）、或者光一个
+   * 域名都认，`aiApi.ts` 的 `chatUrl` 负责补齐。
+   */
+  baseUrl: string;
+  /**
+   * 接口密钥。**`GET /api/settings` 和 `PUT` 的响应都逐条打码**（`••••` 加后四位），
+   * 真值一步都不离开这台机器——这个服务会绑到局域网上（见 `lanBind.ts`），同一个
+   * Wi-Fi 里的任何人都能读它；只有 `/api/settings/export` 给明文（换机是导入的主场景）。
+   *
+   * 本机跑的 Ollama / LM Studio 那类不要钥匙，留空就行。
+   */
+  key: string;
+  /** 模型名，原样发给接口。各家的默认值互不相同，猜不了，所以跟着记录走。 */
+  model: string;
+}
+
 export interface Settings {
   webhookUrl: string;
   toastEnabled: boolean;
@@ -392,7 +425,7 @@ export interface Settings {
   focusMinutes: number;
   /**
    * 一轮之后歇多久，分钟（仿滴答清单番茄钟的「短休息」）。**0 = 不休息**，
-   * 那就是加这个字段之前的行为：倒计时走完直接回到「开始专注」。
+   * 那就是加这个字段之前的行为：倒计时走完直接回到「番茄钟」。
    *
    * 番茄工作法本来就是「专注一段 + 歇一小段」两半，这个应用一直只有前一半：
    * 倒计时归零、记一条记录，然后什么都不说——真正需要被提醒的那件事
@@ -558,23 +591,23 @@ export interface Settings {
   aiCliCustomArgs: string;
 
   /**
-   * `aiMode: 'api'` 时打到哪儿。填完整地址（`…/v1/chat/completions`）、base
-   * （`…/v1`）、或者光一个域名都认，`aiApi.ts` 的 `chatUrl` 负责补齐。
+   * `aiMode: 'api'` 时用哪一条记录。**一个 id，不是一串格子**——选服务商 = 选记录，
+   * 地址、密钥、模型名一起跟着这条记录走。
+   *
+   * 空串，或者指到 `aiEndpoints` 里没有的键，都算「还没选」：判据上等同于
+   * 「接口地址还没填」（`aiApi.ts` 的 `configProblem`），三颗 AI 按钮因此灰着，
+   * 而不是拿一条空配置去撞一次注定失败的请求。
    */
-  aiBaseUrl: string;
+  aiEndpointId: string;
 
   /**
-   * 接口密钥。**`GET /api/settings` 只回打码后的形状**（`••••` 加后四位），
-   * 真值一步都不离开这台机器——这个服务会绑到局域网上（见 `lanBind.ts`），
-   * 同一个 Wi-Fi 里的任何人都能 GET 它。`PUT` 收到打码值 = 保持原样，收到
-   * 空串 = 真的清掉，见 app.ts 那段。
+   * 这台机器上配过的接口，一条一个键（键的规矩见 `AiEndpoint` 顶部）。
    *
-   * 本机跑的 Ollama / LM Studio 那类不要钥匙，留空就行。
+   * 旧版这里是平铺的 `aiBaseUrl` / `aiKey` / `aiModel` 三格。读到旧形状时由
+   * `aiEndpoints.ts` 的 `withLegacyAi()` 当场派生出一条记录，**不写盘**——每次读都
+   * 重新派生，所以它是幂等的，用户打开设置页保存一次就自然落成新的形状。
    */
-  aiKey: string;
-
-  /** 模型名，原样发给接口。`aiMode: 'api'` 时必填——各家的默认值互不相同，猜不了。 */
-  aiModel: string;
+  aiEndpoints: Record<string, AiEndpoint>;
 }
 
 /**
@@ -592,7 +625,7 @@ export interface Proposal {
   /** 服务端在合并 outbox 时生成，AI 不写这个字段。 */
   id: string;
   taskId: string;
-  /** 只可能含 title/notes/due/reminders/subtasks，见 task.ts 的 sanitizeProposalPatch。 */
+  /** 只可能含 `PROPOSABLE` 那份名单上的字段（见 task.ts 的 `PROPOSABLE`）。 */
   patch: Partial<Task>;
   reason: string;
   createdAt: string;
@@ -656,7 +689,7 @@ export interface SmartFilter {
   /**
    * 只看**还没到开始时间**的（OmniFocus 的 `Availability: Unavailable`）。
    *
-   * 判据复用 `taskView.ts` 的 `notStarted`，跟卡片上那个「9 月 1 日 开始」
+   * 判据复用 `taskView.ts` 的 `notStarted`，跟卡片上那个「9月1日 开始」
    * 的记号、「接下来」里那一组、四象限的排除是同一个函数——这一维要是自己
    * 写一遍「什么叫还没开始」，就会出现「筛出来的那条卡片上没有那个记号」。
    */

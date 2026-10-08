@@ -1,6 +1,6 @@
 import type { Task } from '../types.js';
 import { formatMinutes } from './focusStats.js';
-import { countStale } from './taskView.js';
+import { countStale, isMultiDayToday } from './taskView.js';
 
 /**
  * 「这一批任务排了多少活」——给「今天」头上那行 `N 条` 补一句预计时长。
@@ -22,8 +22,10 @@ import { countStale } from './taskView.js';
  * 一条都没估过时**整句不出**（返回空串）：一个「预计 0 分钟」是句假话，而
  * 「7 条都没估过」对一个从来不填估计的人来说是每天都在的一句废话。
  *
- * 纯函数，不读时钟：进来的是哪一批任务由调用方决定（「今天」传的就是它列表里
- * 那几条，跟旁边的 `N 条` 数的是同一批，两个数字不会各说各的）。
+ * 纯函数，不读时钟：进来的是哪一批任务由调用方决定。**「今天」传进来的不是整排，
+ * 是「今天要清的那几条」**——跨天的那一条上面那个 `estimateMinutes` 是**整件事**的
+ * 时长（「这个模块要 6 小时」），不是今天那一段的，把它加进「今天排得下吗」那个
+ * 数字会虚高。见下面 `todayMetaLabel`：那一行分两档，各数各的。
  */
 export function workloadLabel(tasks: Task[]): string {
   let estimated = 0;
@@ -52,15 +54,35 @@ export function workloadLabel(tasks: Task[]): string {
  * 全都过期时换一句「都已经过期」，不写「9 条（9 条已过期）」——同一个数字报两遍
  * 是句废话。
  *
+ * ## 第二档：「今天要清 N 条，另 M 条在做着」
+ *
+ * 跨天的那几条（`startAt` 到 `due` 那段区间走到中间）现在每一天都在这一排里，
+ * 于是「12 条」这个数多了一类**不是今天要干完的活**：那条「第 3 天 · 共 8 天」
+ * 跟「今天必须清掉的一条」并排数进同一个数，等于把进度和欠账混报。所以那一排
+ * 分两档报：**今天要清的**（含欠着的债）和**在做着的**。
+ *
+ * 没有跨天的那几条时**整句和原来一字不差**——这一档只在真的有两档时才出现，
+ * 「12 条（今天要清 12 条）」是给不需要这句话的日子每天多印六个字。
+ *
+ * 两档不会重叠：在做着的那几条必然还没到截止那天（区间不含截止那天，见
+ * `taskView.ts` 的 `spanOf`），而过期只看 `due`，所以「已过期」永远数在
+ * 今天要清的那一档里。
+ *
  * 口径复用 `countStale`（`isTaskOverdue`），跟卡片上那个红标签、跟「可以让 AI
  * 回顾一遍」那句提示是同一条判据，不新造一个「算不算过期」。
  */
 export function todayMetaLabel(tasks: Task[], now: Date): string {
   const n = tasks.length;
-  const stale = countStale(tasks, now);
-  const head = stale === 0 ? `${n} 条`
-    : stale === n ? `${n} 条，都已经过期`
-      : `${n} 条（${stale} 条已过期）`;
-  const load = workloadLabel(tasks);
+  const doing = tasks.filter((t) => isMultiDayToday(t, now));
+  const clear = tasks.filter((t) => !isMultiDayToday(t, now));
+  const stale = countStale(clear, now);
+  const head = doing.length === 0
+    ? (stale === 0 ? `${n} 条`
+      : stale === n ? `${n} 条，都已经过期`
+        : `${n} 条（${stale} 条已过期）`)
+    : clear.length === 0
+      ? `${n} 条，都在做着`
+      : `${n} 条（今天要清 ${clear.length} 条${stale ? `，${stale} 条已过期` : ''}），另 ${doing.length} 条在做着`;
+  const load = workloadLabel(clear);
   return load ? `${head} · ${load}` : head;
 }

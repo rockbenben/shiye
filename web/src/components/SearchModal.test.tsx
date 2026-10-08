@@ -56,6 +56,21 @@ describe('SearchModal', () => {
     expect(screen.getByRole('button', { name: /工作/ })).toBeTruthy();
   });
 
+  /**
+   * 标题在窄屏上要按 `title` 才读得到全名（手机上 390 宽，一行装得下的字比想的
+   * 少，CSS 那边折到两行还是会有装不下的那种）。
+   *
+   * 第二条断言钉的是**挂在哪一层**：挂到里面那个 `<span>` 上，`getByTitle` 照样
+   * 找得到，但那会在整颗可点的按钮上挖出一块悬停读不到标题的死区（任务行
+   * 那边同一条理由，见 `TaskRow.tsx` 里 `title={t.title}` 的注释）。
+   */
+  it('全名挂在那颗按钮的 title 上，不挂在里面的 span 上', () => {
+    const 长 = '把这条特别特别长的中文任务标题用来验证窄卡上正文怎么折行以及右边那串元数据会不会被挤下去';
+    show({ hits: [task({ id: 'L', title: 长 })] });
+    expect(screen.getByTitle(长)).toBeTruthy();
+    expect(screen.getByTitle(长).classList.contains('ink-searchmodal-hit')).toBe(true);
+  });
+
   it('**回车 = 看全部结果**，去「搜索结果」那个去处', () => {
     const { onSeeAll, onClose } = show({ hits: [hit(1)] });
     fireEvent.keyDown(box(), { key: 'Enter' });

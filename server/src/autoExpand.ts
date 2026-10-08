@@ -34,8 +34,8 @@ export interface AutoExpand {
  * 试一次通常是对的」）。之所以不落盘、不挂在 `InboxItem` 上加一个字段：`attempted`
  * 记的是「自动调度器有没有为这个 id 花过一次额度」，这件事跟 `processed` 是两个
  * 独立的维度（一条可以不 processed 但已经 attempted，也可以 processed 但从没被
- * 自动尝试过——比如全程都是手动触发）。放进 `tasks.json`/`inbox.json` 会让这两个
- * 文件多一个只有服务自己关心、AI 和用户都不关心的字段，还得额外考虑「AI 写
+ * 自动尝试过——比如全程都是手动触发）。放进 `data/tasks/`/`data/inbox/` 里那条
+ * 记录会让它多一个只有服务自己关心、AI 和用户都不关心的字段，还得额外考虑「AI 写
  * outbox 的时候要不要保留它」——真正的收益只是「重启也不清空」，跟设计明确要的
  * 「重启清空」正好反着。内存变量不写盘，天然满足「重启清空」，也天然不会跟
  * 数据文件产生第二份互相矛盾的状态。
@@ -59,12 +59,25 @@ export function createAutoExpand(bus: Bus | undefined, runner: ExpandRunner): Au
     timer = null;
     scheduledSince = null;
     try {
+      /**
+       * **到点这一刻再问一次「还有东西要拆吗」。** 排期时判过一次不等于这一刻
+       * 还成立：中间那几十秒里他可能自己点了「立即拆解」（条目已经处理完）、
+       * 把那条删了、或者从别的设备上改掉了。不重判就是白起一个 AI 进程对着
+       * 一份空收件箱跑一趟（烧一次额度），而跑完屏幕上还会冒出一条绿色的
+       * 「拆解完成」——那是凭空报功，比不响更坏。
+       *
+       * 补 `idle` 而不是什么都不发：这条排期在界面上是有倒计时的（那条横幅），
+       * 不发的话它会一直挂着「N 秒后拆解」，而那一趟永远不会来。
+       */
+      const pending = readInbox().filter((x) => !x.processed);
+      if (pending.length === 0) {
+        emitAgentStatus(bus, { state: 'idle' });
+        return;
+      }
       // 这一轮会处理收件箱里所有还没处理的条目（AGENTS.md 的约定），不只是「没
       // 被尝试过」的那几条——把它们全标成「尝试过」才如实：这次自动触发之后，
       // 不管结果如何，它们都不该再无条件地引发下一次自动触发。
-      for (const x of readInbox()) {
-        if (!x.processed) attempted.add(x.id);
-      }
+      for (const x of pending) attempted.add(x.id);
       // **这个分支是真会走到的**（这句话原来写着「当前代码走不到」，加了「调接口」
       // 那条路之后不成立了）：设置成 api 模式、但地址或模型没填全时，`start()`
       // 当场返回 `ok:false`。剩下三种也各自真实——单飞锁挡住、spawn 同步抛错、

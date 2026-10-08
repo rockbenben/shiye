@@ -31,7 +31,7 @@ export const isSettled = (status: Status): boolean =>
  * `order` 在这份白名单里，但**这只是形状校验**——它允许 PATCH /api/tasks/:id
  * （人经网页发起的写）设置 order，也允许 outbox 里的原始任务对象带这个字段
  * 通过形状检查。真正「AI 写的 order 一律不算数」这条规矩不在这里做，在
- * `outbox.ts` 的 `toTask()` 里强制覆盖成 null——跟 `source` 字段是同一个套路：
+ * `outbox.ts` 的 `checkTask()` 里强制覆盖成 null——跟 `source` 字段是同一个套路：
  * 校验器只管「形状对不对」，「这个字段该不该由谁来写」是外面信任边界的事。 */
 export type TaskPatch = Partial<Pick<Task,
   'title' | 'notes' | 'status' | 'due' | 'startAt' | 'endAt' | 'reminders' | 'persistentReminder'
@@ -99,7 +99,7 @@ export function checkTaskPatch(body: unknown): SanitizeResult<TaskPatch> {
     out.notes = b.notes;
   }
   if ('status' in b) {
-    if (!STATUSES.includes(b.status as Status)) return bad('status', '要是 todo / doing / done / later 之一');
+    if (!STATUSES.includes(b.status as Status)) return bad('status', `要是 ${STATUSES.join(' / ')} 之一`);
     out.status = b.status as Status;
   }
   if ('due' in b) {
@@ -140,7 +140,7 @@ export function checkTaskPatch(body: unknown): SanitizeResult<TaskPatch> {
     out.subtasks = subs;
   }
   if ('source' in b) {
-    if (b.source !== 'ai' && b.source !== 'user') return bad('source', '要是 "ai" 或 "user" 之一');
+    if (b.source !== 'ai' && b.source !== 'user') return bad('source', '要是「ai」或「user」之一');
     out.source = b.source;
   }
   if ('aiComment' in b) {
@@ -280,7 +280,7 @@ export function checkTaskPatch(body: unknown): SanitizeResult<TaskPatch> {
   // 是校验器在只看得见这一份 patch 时唯一能守住不变量的做法。
   if (out.habit === true && 'repeat' in b
     && !HABIT_EVERY.includes(out.repeat?.every as never)) {
-    return bad('habit', '要是 true，必须配 repeat.every === "day" 或 "week"——习惯是「每天做」或者「每周做几次」');
+    return bad('habit', '要是 true，必须配 repeat.every ===「day」或「week」——习惯是「每天做」或者「每周做几次」');
   }
   if (out.habit === true && !('repeat' in b)) {
     return bad('habit', '要是 true，必须同时带上 repeat（每天做或每周做几次）——单独改 habit 判断不了原任务的重复档');
@@ -311,7 +311,7 @@ export function sanitizeTaskPatch(body: unknown): TaskPatch | null {
 function checkRepeat(v: unknown): SanitizeResult<Repeat | null> {
   // 档位名单拼进错误文案，不手抄第二份——手抄的那份加档时不会跟上，
   // 而它正是 400 里唯一告诉对方「合法值有哪些」的地方。
-  const fail = bad('repeat', `every 要是 ${REPEAT_KINDS.join(' / ')} 之一；interval 要是正整数；weekdays 里每个数字要在 0-6 之间；until 要是 ISO 时间或 null；from 要是 due / done 之一；count 要是非负整数或 null；step 要是非负整数；monthDay 要是 1-31 的整数或 null`);
+  const fail = bad('repeat', `every 要是 ${REPEAT_KINDS.join(' / ')} 之一；interval 要是正整数；weekdays 里每个数字要在 0～6 之间；until 要是 ISO 时间或 null；from 要是 due / done 之一；count 要是非负整数或 null；step 要是非负整数；monthDay 要是 1～31 的整数或 null`);
   if (v === null) return { ok: true, value: null };
   if (typeof v !== 'object') return fail;
   const r = v as Record<string, unknown>;
@@ -361,7 +361,7 @@ function checkRepeat(v: unknown): SanitizeResult<Repeat | null> {
  *
  * 为什么这几个不给 AI 提：
  * - `status` / `order`：是人的字段。完成与否、先做哪个，是纯粹的意志表达，
- *   不是能被论证的东西（见 2026-08-12-today-view.md）
+ *   不是能被论证的东西
  * - `source`：改了它就等于篡改「这条是谁写的」，双色墨水整套都靠它
  * - `aiComment`：拆解当时的记录，是历史事实，不该被后来的分析改写
  * - `completedAt` / `postponeCount` / `focusSessions`：服务端自己盖章、自己数，
@@ -373,7 +373,7 @@ function checkRepeat(v: unknown): SanitizeResult<Repeat | null> {
  * 重复做一层字段级校验；`applyTaskPatch` 接受后会按时刻重算，AI 写的
  * `firedAt` 值本来就不会被采纳。
  *
- * `priority` **在白名单里，但 AI 拆解时不能直接写**（outbox.ts 的 toTask 强制
+ * `priority` **在白名单里，但 AI 拆解时不能直接写**（outbox.ts 的 checkTask 强制
  * 归 0）。这看着矛盾，其实正是建议机制存在的意义：AI 有根据地提（「这条卡了
  * 三周，四条别的任务在等它」），人点了才算数。
  */
@@ -410,7 +410,7 @@ export function checkProposalPatch(body: unknown): SanitizeResult<TaskPatch> {
   // 白名单之外出现任何一个键就整条拒收，不是悄悄过滤掉。`!== undefined`，
   // 不是判真值——键名 `""` 是合法但不在白名单里的键，见 list.ts 同一处的教训。
   const badKey = keys.find((k) => !(PROPOSABLE as readonly string[]).includes(k));
-  if (badKey !== undefined) return bad(badKey, `不是能建议修改的字段——白名单只有 ${PROPOSABLE.join(' / ')}，你传的是 "${badKey}"`);
+  if (badKey !== undefined) return bad(badKey, `不是能建议修改的字段——白名单只有 ${PROPOSABLE.join(' / ')}，你传的是「${badKey}」`);
   return checkTaskPatch(b);
 }
 

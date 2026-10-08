@@ -84,9 +84,9 @@ function singleBody(t: Task): string {
 export const MERGE_LIST_MAX = 3;
 
 /**
- * 未完成（不是 done/later——搁置跟完成一样不提醒，服务端 dueTasks 同一条
- * 规矩）+ 没发过 + 解析得出来，按时间切成两堆：未来的按时间近的取前 limit 条
- * 排上，已经过去的数进 `missed`。
+ * 未完成（不是 done/later/abandoned——搁置和放弃跟完成一样不提醒，服务端
+ * `isSettled`（`server/src/task.ts`）同一条规矩）+ 没发过 + 解析得出来，按时间切成两堆：
+ * 未来的按时间近的取前 limit 条排上，已经过去的数进 `missed`。
  *
  * 32 的理由：安卓待定闹钟有数量上限（各 OEM 不同，这里不依赖具体数字），
  * 32 离任何已知红线都差一个数量级；个人量级下「未来最近 32 条」覆盖几周

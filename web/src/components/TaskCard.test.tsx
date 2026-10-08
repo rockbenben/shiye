@@ -2,9 +2,10 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { App as AntApp, Checkbox, ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { List, Task } from '../types.js';
-import { FOCUS_ABANDON_TAIL, MOVES, SWIPE, TaskCard, type DragHandleProps } from './TaskCard.js';
+import { FOCUS_ABANDON_TAIL, SWIPE, TaskCard, type DragHandleProps } from './TaskCard.js';
+import { STATUS_MOVES } from '../lib/taskView.js';
 import { readFileSync } from 'node:fs';
-import { btnIn, deleteCard, pickCardMenu } from '../test-utils.js';
+import { addField, btnIn, deleteCard, pickCardMenu } from '../test-utils.js';
 import { ink, theme as appTheme } from '../theme.js';
 import { POSTPONE_MIN } from '../lib/suggest.js';
 import { whenText } from '../lib/dueChip.js';
@@ -645,9 +646,9 @@ describe('TaskCard：保存编辑不会删掉后面的提醒', () => {
  * 已经有的，否则会长成「按钮能做的和手势能做的不一样」。
  */
 describe('TaskCard：左右拖拽', () => {
-  it('每个方向的落点都必须是 MOVES 里已有的那一步', () => {
+  it('每个方向的落点都必须是 STATUS_MOVES 里已有的那一步', () => {
     for (const [from, dirs] of Object.entries(SWIPE)) {
-      const allowed = MOVES[from as keyof typeof MOVES];
+      const allowed = STATUS_MOVES[from as keyof typeof STATUS_MOVES];
       for (const t of [dirs.left, dirs.right].filter(Boolean)) {
         expect(
           allowed.some((m) => m.to === t!.to && m.label === t!.label),
@@ -1052,6 +1053,8 @@ describe('TaskCard：重复规则', () => {
     );
 
     await pickCardMenu('编辑');
+    // 这条任务的 repeat 本来是 null，那一格还没上屏——真人也得先「＋ 加一项」。
+    addField('重复');
     fireEvent.change(screen.getByLabelText('重复'), { target: { value: 'week' } });
     fireEvent.click(screen.getByRole('button', { name: '周一' }));
     fireEvent.click(byText('保存')!);
@@ -1608,7 +1611,7 @@ describe('TaskCard：番茄钟（接线）', () => {
       </AntApp>,
     );
 
-    fireEvent.click(byText('开始专注')!);
+    fireEvent.click(byText('番茄钟')!);
     act(() => { vi.advanceTimersByTime(60_000); });
 
     expect(onPatch).toHaveBeenCalledTimes(1);
@@ -1635,8 +1638,8 @@ describe('TaskCard：番茄钟（接线）', () => {
       </AntApp>,
     );
 
-    fireEvent.click(byText('开始专注')!);
-    fireEvent.click(byText('取消专注')!);
+    fireEvent.click(byText('番茄钟')!);
+    fireEvent.click(byText('取消计时')!);
     // 取消之后就算时间继续往前走（比如浏览器标签页留在后台没关），也不该
     // 迟到地补发一次——取消是彻底放弃，不是暂停。
     act(() => { vi.advanceTimersByTime(5 * 60_000); });
@@ -1655,7 +1658,7 @@ describe('TaskCard：番茄钟（接线）', () => {
       </AntApp>,
     );
 
-    fireEvent.click(byText('开始专注')!);
+    fireEvent.click(byText('番茄钟')!);
 
     expect(screen.getByText('25:00')).toBeTruthy();
   });
@@ -1665,11 +1668,11 @@ describe('TaskCard：番茄钟（接线）', () => {
    * 视图里（切走只是 hidden，不卸载），也就是同一个 t.id 会同时渲染出两个
    * TaskCard、两个 FocusTimer 实例。不用搭出整棵 App 树来复现——直接渲染
    * 两份同样的 `t` 就是这个处境。旧实现（FocusTimer 的锁按 taskId 建）在这里
-   * 两个「开始专注」都可点：点开两个各自倒计时，走完各发一条内容相同的
+   * 两个「番茄钟」都可点：点开两个各自倒计时，走完各发一条内容相同的
    * PATCH，第二条覆盖第一条，静默丢掉一条 focusSession（见 C1「PROBE 1」）。
    * 锁改成按组件实例建之后，第二个必须被挡住。
    */
-  it('同一个 t.id 同时渲染两张卡（模拟两个 keepMounted 视图）：第一张开始专注之后，第二张也被挡住', () => {
+  it('同一个 t.id 同时渲染两张卡（模拟两个 keepMounted 视图）：第一张番茄钟之后，第二张也被挡住', () => {
     vi.useFakeTimers();
     const t = task({ id: 'same-task' });
     render(
@@ -1679,7 +1682,7 @@ describe('TaskCard：番茄钟（接线）', () => {
       </AntApp>,
     );
 
-    const buttons = screen.getAllByRole('button').filter((b) => b.textContent === '开始专注') as HTMLButtonElement[];
+    const buttons = screen.getAllByRole('button').filter((b) => b.textContent === '番茄钟') as HTMLButtonElement[];
     expect(buttons).toHaveLength(2);
     expect(buttons[1].disabled).toBe(false);
 
@@ -1918,6 +1921,153 @@ describe('TaskCard：过期说清多久', () => {
     const { container } = setup({ due: new Date(NOW.getTime() + H).toISOString() });
     expect([...container.querySelectorAll('.ink-overdue-mark')].map((e) => e.textContent))
       .not.toContain('刚过期');
+  });
+});
+
+/**
+ * **过期的卡上只留「过期多久」，不再并排一句「截止 当时」。**
+ *
+ * 两句说的是同一件事：「欠了 3 天」和「截止 10月5日 21:00」互为换算，
+ * 而这一屏真正要用来排序的是左边那一句。并排摆着，眼睛得分两次确认它们
+ * 不矛盾——实测过，就是那句多余的话把一行撑长、逼得旁边的记号进右缘渐隐。
+ *
+ * **两档必须一致**：行档的到期 chip 一直是「有 chip 画 chip、没有而过期就画
+ * 『已过期』」，二选一（`TaskRow.tsx` 的 `chip ? … : overdueStyle && …`）。
+ * 卡片档以前两样都画，于是同一条任务换个密度就多说一句——`CONTRIBUTING.md`
+ * 点名过这个形状（`waitingFor`、`startAt` 都是那么漏的）。
+ */
+describe('TaskCard：过期的卡不重复说截止时间', () => {
+  const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
+  const H = 60 * 60 * 1000;
+
+  it('欠了三天：只说「过期 3 天」，不说「截止 …」', () => {
+    const { container } = setup({ due: ago(3 * 24 * H) });
+    expect(container.querySelector('.ink-overdue-mark')?.textContent).toBe('过期 3 天');
+    expect(container.textContent).not.toContain('截止');
+  });
+
+  it('**没过期的那一条照旧说截止**——去重的只是过期时的重复，不是砍掉截止本身', () => {
+    const { container } = setup({ due: new Date(NOW.getTime() + 3 * H).toISOString() });
+    expect(container.textContent).toContain('截止');
+    expect(container.querySelector('.ink-overdue-mark')).toBeNull();
+  });
+
+  it('精确时刻没有丢：详情面板（detail）顶上那颗药丸说的就是这个字段', () => {
+    // detail 档这一行本来就不画截止（见渲染处那段），改的是卡档那条分支。
+    const due = ago(3 * 24 * H);
+    const { container } = render(
+      <AntApp>
+        <TaskCard
+          t={task({ due })} now={NOW} lists={[]}
+          onPatch={vi.fn()} onEditTask={async () => {}} onDelete={vi.fn()} onEditingChange={() => {}}
+          detail
+        />
+      </AntApp>,
+    );
+    expect(container.querySelector('.ink-overdue-mark')?.textContent).toBe('过期 3 天');
+    expect(container.textContent).not.toContain('截止');
+  });
+});
+
+/**
+ * **已经响过的提醒，不再跟「过期 N 天」挤在同一行。**
+ *
+ * `displayReminderAt` 在全都响过时返回**最后那个**（最近刚响的一次），于是欠了
+ * 三天的卡上并排摆着「过期 3 天」和「提醒 10月5日 19:00」：左边是这一屏排序要用的
+ * 「你欠了多久」，右边是一个已经过去、已经响完、什么都提醒不了你的时刻。
+ *
+ * **只藏已经响过的，没到的那半个字都不动**——提醒若还在将来，它仍然是「什么时候
+ * 会再响我一次」，那半句是这个人改期或删掉提醒的唯一依据。
+ */
+describe('TaskCard：过期的卡不显示已经响过的提醒', () => {
+  const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
+  const ahead = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
+  const H = 60 * 60 * 1000;
+  /** 只看「提醒」那一行的字，别被别处的时刻串扰。 */
+  const reminderLine = (c: HTMLElement) =>
+    c.querySelector('.ink-task-times')?.textContent ?? '';
+
+  it('提醒早就响过：不画「提醒 …」', () => {
+    const { container } = setup({
+      due: ago(3 * 24 * H),
+      reminders: [{ at: ago(2 * 24 * H), firedAt: ago(2 * 24 * H) }],
+    });
+    expect(container.querySelector('.ink-overdue-mark')?.textContent).toBe('过期 3 天');
+    expect(reminderLine(container)).not.toContain('提醒');
+  });
+
+  it('**还没到的那半个字都不少**——过期但提醒仍在将来，那半句还管用', () => {
+    const { container } = setup({
+      due: ago(3 * 24 * H),
+      reminders: [{ at: ahead(H), firedAt: null }],
+    });
+    expect(reminderLine(container)).toContain('提醒');
+  });
+
+  it('没过期时照旧画提醒——这条跟过期无关', () => {
+    const { container } = setup({
+      due: ahead(3 * H),
+      reminders: [{ at: ahead(H), firedAt: null }],
+    });
+    expect(reminderLine(container)).toContain('提醒');
+  });
+});
+
+/**
+ * 同一颗记号在**「已过期」那一组里**只报时长（`briefTime`，谁该带这个字段
+ * 判在 `lib/agenda.ts` 的 `dueSectionExtras`，那边测）。
+ *
+ * 省的是视线，不是信息：完整那句留在 `title` 和 `.ink-sr-only` 两份里。
+ * 只靠 `title` 不够——那个要悬停，触屏没有悬停、读屏也不念 title（四象限那句
+ * 说明为什么常驻，同一条理由）。
+ */
+describe('TaskCard：组头说过「过期」，卡上只报多久', () => {
+  const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
+  const H = 60 * 60 * 1000;
+  const show = (briefTime?: boolean) => render(
+    <AntApp>
+      <TaskCard
+        t={task({ due: ago(3 * 24 * H) })} now={NOW} lists={[]}
+        onPatch={vi.fn()} onEditTask={async () => {}} onDelete={vi.fn()} onEditingChange={() => {}}
+        briefTime={briefTime}
+      />
+    </AntApp>,
+  );
+  const mark = (c: HTMLElement) => c.querySelector('.ink-overdue-mark') as HTMLElement;
+  /** 屏幕上真正看得见的那半句：读屏专用那份不算进去（jsdom 不跑 CSS）。 */
+  const visible = (m: HTMLElement) => [...m.childNodes]
+    .filter((n) => !(n instanceof HTMLElement && n.classList.contains('ink-sr-only')))
+    .map((n) => n.textContent ?? '').join('').trim();
+
+  it('不传（「今天」、别的分组）：照旧一句「过期 3 天」，不藏字', () => {
+    const { container } = show();
+    expect(mark(container).textContent).toBe('过期 3 天');
+    expect(container.querySelector('.ink-sr-only')).toBeNull();
+  });
+
+  it('传了：屏幕上只剩「3 天」，那两个字进读屏，完整那句进 title', () => {
+    const { container } = show(true);
+    const m = mark(container);
+    expect(visible(m)).toBe('3 天');
+    const sr = m.querySelector('.ink-sr-only');
+    expect(sr, '省掉的那两个字没留给读屏——只剩 title 的话，触屏和读屏都拿不到').toBeTruthy();
+    expect(sr!.textContent).toBe('过期 ');
+    expect(m.getAttribute('title')).toBe('过期 3 天');
+  });
+
+  it('「刚过期」那一档不省：抠掉「过期」两个字就什么都不剩了', () => {
+    const { container } = render(
+      <AntApp>
+        <TaskCard
+          t={task({ due: ago(10 * 60 * 1000) })} now={NOW} lists={[]}
+          onPatch={vi.fn()} onEditTask={async () => {}} onDelete={vi.fn()} onEditingChange={() => {}}
+          briefTime
+        />
+      </AntApp>,
+    );
+    const m = mark(container);
+    expect(m.textContent).toBe('刚过期');
+    expect(m.querySelector('.ink-sr-only'), '这一档两半是同一句话，不该再补一份').toBeNull();
   });
 });
 
@@ -2323,7 +2473,7 @@ describe('TaskCard：双击改它、右键弹菜单', () => {
 
 /**
  * 卡片上的一键完成。**在这之前卡片档要完成一条待办得走两步**（「开始」→
- * 「完成」：`MOVES.todo` 只有开始/搁置，划动手势和 ⋯ 菜单里也都没有「完成」）
+ * 「完成」：`STATUS_MOVES.todo` 只有开始/搁置，划动手势和 ⋯ 菜单里也都没有「完成」）
  * ——而同一个动作在行档是点一下勾选圈、在详情面板也是、批量是一个 D 键。
  * 同一件事在四个地方三种代价，而卡片档还是默认那一档。
  */
@@ -2343,6 +2493,67 @@ describe('TaskCard：卡片上的勾选圈', () => {
   it.each(['doing', 'later', 'abandoned'] as const)('%s 状态也有这个圈——每条任务在哪儿都有一个', (status) => {
     setup({ id: 't1', title: '换纱窗', status });
     expect(screen.getByRole('button', { name: '把「换纱窗」标记完成' })).toBeTruthy();
+  });
+});
+
+/**
+ * **卡面只留「此刻最可能按的那一颗」。** 一张卡原来摆着 ↑ ↓ 勾选 开始 搁置
+ * 番茄钟 正计时 ⋯ 八颗，「今天」十二张卡下来是几十颗，同一份数据在紧凑行档
+ * 只有三颗——密度差让卡档读起来像一排工具条，不像一列任务。
+ *
+ * 这一组盯的是「收起来的那几步还够得着」：其余状态动作全部落在 `⋯` 的
+ * 「改状态」那一组里（`lib/taskMenu.ts`，跟 `STATUS_MOVES` 一字不差）。
+ * 只测卡面少了几颗而不测菜单里有没有，等于把能力删掉了还测不出问题。
+ */
+describe('TaskCard：卡面只摆一颗状态按钮', () => {
+  it('待办卡上有「开始」、没有裸露的「搁置」，而「搁置」从 ⋯ 点得到——patch 就那一个字段', async () => {
+    const { onPatch } = setup({ status: 'todo' });
+    expect(byText('开始')).toBeTruthy();
+    expect(byText('搁置')).toBeUndefined();
+
+    await pickCardMenu('搁置');
+    await waitFor(() => expect(onPatch).toHaveBeenCalledWith('t1', { status: 'later' }));
+  });
+
+  it.each(['doing', 'done'] as const)('%s 的卡面一颗状态按钮都不摆：那一步正是标题行那颗圈在做的事', (status) => {
+    setup({ id: 't1', title: '换纱窗', status });
+    // 进行中的「完成」= 圈；已完成的「重开」= 圈的逆。同一张卡上画两个同名动作，
+    // 正是这次要消掉的东西；菜单里那组照旧全摆（见 taskMenu.test.ts）。
+    for (const label of ['完成', '重开', '退回', '搁置']) expect(byText(label), label).toBeUndefined();
+  });
+
+  it('搁置的卡摆「恢复待办」，「放弃」收在菜单里——两步不是一条路，各走各的入口', async () => {
+    const { onPatch } = setup({ status: 'later' });
+    expect(byText('恢复待办')).toBeTruthy();
+    expect(byText('放弃')).toBeUndefined();
+
+    await pickCardMenu('放弃');
+    await waitFor(() => expect(onPatch).toHaveBeenCalledWith('t1', { status: 'abandoned' }));
+  });
+
+  /**
+   * 番茄钟那两颗开始键交给 CSS 收起（见 theme.css 的 `.ink-hover-only`）。
+   * **jsdom 不算样式，所以这里钉的是「类挂上没有」和「跑起来之后类跟着消失」**：
+   * 前者没了，收起这件事静默失效（回到八颗按钮）；后者没了，正在走的倒计时
+   * 会跟着一起看不见——那才是这一条真正要防的。
+   */
+  it('闲置的两颗开始键带 `.ink-hover-only`；一旦跑起来就不带，倒计时常驻', () => {
+    const { container } = setup();
+    expect(container.querySelector('.ink-hover-only')).toBeTruthy();
+
+    fireEvent.click(byText('番茄钟')!);
+
+    expect(container.querySelector('.ink-hover-only')).toBeNull();
+    expect(screen.getByText('25:00')).toBeTruthy();
+  });
+
+  /** 卡片那颗 ⋯ 实测 **23×24**，差的 1px 由 theme.css 里 `.ink-task-more` 补到
+   *  全站 24px 点击下限。jsdom 量不到盒，所以这里钉的是「那颗按钮真的挂上了
+   *  这个类」——类名掉了，下限静默失效，而 CSS 那条守卫只认声明、照样绿。 */
+  it('卡片那颗 ⋯ 挂着 `.ink-task-more`（24px 下限写在那个类上）', () => {
+    const { container } = setup();
+    const more = container.querySelector('button[aria-label*="更多操作"]');
+    expect(more?.classList.contains('ink-task-more'), '类名没了：CSS 那条 min-width 就没人接了').toBe(true);
   });
 });
 
@@ -2407,5 +2618,95 @@ describe('卡片：父任务还没开始时说出是谁挡着', () => {
   it('没给 `allTasks` 就不画——跟旁边两个层级记号同一条约定', () => {
     const { container } = setup({ id: 'c', parentId: 'p' });
     expect(mark(container)).toEqual([]);
+  });
+});
+
+/**
+ * **跨天的那一条，卡片要说走到第几天。**
+ *
+ * 一条 8/10 开始、8/20 截止的活，中间那几天以前只在 8/10 露一次脸；现在它每天
+ * 都在「今天」里，光靠「截止 8月20日」答不了这一屏真正要问的那句——今天该往它
+ * 身上投多少力气，取决于进度是 3/10 还是 9/10。判据在 `lib/taskView.ts` 的
+ * `dayInSpan`（含「为什么截止那天不算在内」）。NOW 是 8/12 中午。
+ */
+describe('卡片：跨天的那一条说走到第几天', () => {
+  const START = new Date(2026, 7, 10, 9).toISOString();
+  const DUE = new Date(2026, 7, 20, 18).toISOString();
+  const mark = (c: HTMLElement) => c.querySelector('.ink-span-mark')?.textContent ?? null;
+
+  it('区间中间那天挂着整句', () => {
+    const { container } = setup({ startAt: START, due: DUE });
+    expect(mark(container)).toBe('第 3 天 · 共 10 天');
+  });
+
+  it('截止那天不挂——那天它是「今天要清掉的一条」，挂上去是在说「还早」', () => {
+    const { container } = setup({ startAt: START, due: new Date(2026, 7, 12, 18).toISOString() });
+    expect(mark(container)).toBeNull();
+  });
+
+  it('过期了不挂——那时候该说的是「过期几天了」，不是进度', () => {
+    const { container } = setup({ startAt: new Date(2026, 6, 20, 9).toISOString(), due: new Date(2026, 7, 5, 18).toISOString() });
+    expect(mark(container)).toBeNull();
+  });
+
+  it('还没到开始那天不挂', () => {
+    const { container } = setup({ startAt: new Date(2026, 7, 15, 9).toISOString(), due: DUE });
+    expect(mark(container)).toBeNull();
+  });
+
+  it('只有一端时不挂——那是一条普通任务，不是「要做好几天」的那一种', () => {
+    expect(mark(setup({ startAt: START }).container)).toBeNull();
+    expect(mark(setup({ due: DUE }).container)).toBeNull();
+  });
+
+  it('做完了不挂——已完成那一列里写着「在做第 3 天」是句假话', () => {
+    const { container } = setup({ startAt: START, due: DUE, status: 'done' });
+    expect(mark(container)).toBeNull();
+  });
+
+  /**
+   * **详情面板里也得画，所以那一行的开关要认这句话。** 那一屏不重复「截止」（顶上
+   * 那颗日期药丸就是它），于是除了这句，整行没有任何东西要渲染——开关里少这一项，
+   * 整行不出现，这句跟着一起没（同 `blocker` 那条：注释里写着「测试实测过」）。
+   */
+  it('详情面板（`detail`）里照样画', () => {
+    const { container } = render(
+      <AntApp>
+        <TaskCard t={task({ startAt: START, due: DUE })} now={NOW} lists={[]} detail
+          onPatch={vi.fn()} onEditTask={async () => {}} onDelete={vi.fn()} onEditingChange={() => {}} />
+      </AntApp>,
+    );
+    expect(container.querySelector('.ink-span-mark')?.textContent).toBe('第 3 天 · 共 10 天');
+  });
+});
+
+/**
+ * **被别的卡占着时点那两颗，屏幕上得有一句话说出口。**
+ *
+ * 那句话原来有两条通道：外层 span 的 `title`（鼠标 hover）和每颗按钮自己的
+ * `title`（读屏的 accessible description）——**触屏两条都没有**，而安卓包上这
+ * 两颗还是常驻可见的（`.ink-hover-only` 那个 `@media (hover: hover)` 闸门）。
+ * 于是手机上点一下：按钮 disabled 不派发事件，span 的 title 没有 hover 去揭，
+ * 一个字都不动。这一族断的是整条链，不是组件那个回调（`FocusTimer.test.tsx`
+ * 里钉的是「组件会把话交出去」，这里钉「交出去之后真的上屏」）。
+ */
+describe('番茄钟被别的卡占着那颗：点一下要有回执', () => {
+  it('点被占着那层外壳，那句现成的话以 info 上屏', async () => {
+    const a = setup({ id: 'fa', title: '跑着的那件' });
+    const b = setup({ id: 'fb', title: '被挡住的那件' });
+    fireEvent.click(within(a.container).getByRole('button', { name: '番茄钟' }));
+
+    const wrap = b.container.querySelector('.ink-focus-blocked');
+    expect(wrap, '第二颗没被占着——锁没跨卡片生效').toBeTruthy();
+    fireEvent.click(wrap!);
+
+    await waitFor(() => expect(document.querySelector('.ant-message-info')).toBeTruthy());
+    expect(document.querySelector('.ant-message-info')?.textContent).toContain('一次只能跑一个');
+  });
+
+  it('没被占着时点那颗按钮：开始跑，不弹任何回执', () => {
+    const { container } = setup({ id: 'fc', title: '没人抢' });
+    fireEvent.click(container.querySelector('.ink-hover-only, span')!);
+    expect(document.querySelector('.ant-message-info')).toBeNull();
   });
 });

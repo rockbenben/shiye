@@ -102,6 +102,42 @@ describe('createAutoExpand：去抖', () => {
 
     autoExpand.dispose();
   });
+
+  /**
+   * **到点这一刻要重判一次。** 排上之后的那几十秒里他自己点了「立即拆解」
+   * （或者把那条删了、从别的设备上改掉了），到点时收件箱其实已经空了——
+   * 不重判就是白起一个 AI 进程去读一份空收件箱：烧一次额度，跑完屏幕上还冒
+   * 一条绿色的「拆解完成」，那是凭空报功。
+   *
+   * 这条用例故意**不发** `data-changed`：真实世界里「他拆完了」这件事发生在
+   * 另一台设备/另一次请求里，调度器收不到通知，只有到点重读盘才能发现。
+   */
+  it('排上之后那条已经拆掉了：到点一个进程都不起，倒计时横幅收回去', () => {
+    const { bus, seen, spawnFn, autoExpand } = setup();
+    writeInbox([inboxItem({ id: 'a' })]);
+    inboxChanged(bus);
+
+    writeInbox([inboxItem({ id: 'a', processed: true, taskIds: ['t1'] })]);
+    vi.advanceTimersByTime(60_000);
+
+    expect(spawnFn).not.toHaveBeenCalled();
+    // 横幅收回去（`idle`）而不是挂着「N 秒后拆解」——那一趟永远不会来了。
+    expect(seen[seen.length - 1]).toEqual({ state: 'idle' });
+
+    autoExpand.dispose();
+  });
+
+  it('排上之后那条被删了：同样不起进程', () => {
+    const { bus, spawnFn, autoExpand } = setup();
+    writeInbox([inboxItem({ id: 'a' })]);
+    inboxChanged(bus);
+
+    writeInbox([]);
+    vi.advanceTimersByTime(60_000);
+
+    expect(spawnFn).not.toHaveBeenCalled();
+    autoExpand.dispose();
+  });
 });
 
 describe('createAutoExpand：重试限制（这个任务存在的理由）', () => {

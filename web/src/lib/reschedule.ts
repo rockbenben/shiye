@@ -35,8 +35,11 @@ export function shiftTimesPatch(t: Task, shift: number): Partial<Task> {
 
 /**
  * 「改期」的四个去处。仿滴答清单：右键任务 →「日期」→ 今天 / 明天 / 下周 /
- * 自定义。**没有「自定义」这一档**——那是编辑表单里的 DatePicker，已经有了，
+ * 自定义。**菜单里没有「自定义」这一档**——单条有编辑表单里的 DatePicker 兜着，
  * 菜单里再放一个入口只是把同一个控件包两层。
+ *
+ * **批量条上有，而且只能有在那儿**：一次选中八条想都挪到 12 号，没有「八条各
+ * 开一次表单」以外的路。判据和理由写在 `rescheduleDayPatch` 上面。
  */
 export type RescheduleTo = 'today' | 'tomorrow' | 'nextWeek' | 'clear';
 
@@ -108,11 +111,37 @@ export function reschedulePatch(t: Task, to: RescheduleTo, now: Date): Partial<T
   // **也不碰时间段**：清掉的是「什么时候之前要做完」这句话，不是那场会。
   if (to === 'clear') return { due: null };
 
+  const target = new Date(now.getFullYear(), now.getMonth(), now.getDate() + DAYS[to]);
+  // ③ 只对「今天」这一档兜底：明天/下周永远算不出已经过去的时刻，而**日期
+  // 选择器那一档也不兜**——见 `rescheduleDayPatch`。
+  return moveToDayPatch(t, target, now, to === 'today');
+}
+
+/**
+ * 「改到某一天」——批量操作条那颗日期选择器走这里。
+ *
+ * **上面那段「没有『自定义』这一档」的理由在这里不成立，不是打脸**：那句说的
+ * 是单条任务的 ⋯ 菜单——单条有编辑表单里那个 DatePicker 兜着，菜单里再放一个
+ * 只是把同一个控件包两层。而**批量没有那个兜**：一次选中八条想都挪到 12 号，
+ * 只能八条各开一次表单。所以这一档只在批量条上有，菜单里没有。
+ *
+ * 别的规矩跟 `reschedulePatch` 一字不差（同一个 `moveToDayPatch`）：原来几点
+ * 还是几点、没钟点的落 23:59、时间段跟着整条平移、提醒跟着挪同样的量。
+ *
+ * **不走「算出来已经过去了就落当天 23:59」那一条兜底**：那一条是给「改到今天」
+ * 这句含糊的话兜的（他要的是「今天之内做」）。日期选择器里他明明白白选了那天，
+ * 选了昨天就是要昨天——把钟点改写成 23:59 是替他改写他刚做的选择。
+ */
+export function rescheduleDayPatch(t: Task, day: Date, now: Date): Partial<Task> {
+  return moveToDayPatch(t, new Date(day.getFullYear(), day.getMonth(), day.getDate()), now, false);
+}
+
+/** `reschedulePatch` 和 `rescheduleDayPatch` 共用的那一段，规矩全写在上面两处。 */
+function moveToDayPatch(t: Task, target: Date, now: Date, pastToDayEnd: boolean): Partial<Task> {
   const block = hasTimeBlock(t);
   const prev = calendarAnchor(t);
   const hasClock = prev !== null && (prev.getHours() !== 0 || prev.getMinutes() !== 0);
 
-  const target = new Date(now.getFullYear(), now.getMonth(), now.getDate() + DAYS[to]);
   const dayEnd = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 23, 59);
   const kept = new Date(
     target.getFullYear(), target.getMonth(), target.getDate(),
@@ -121,7 +150,7 @@ export function reschedulePatch(t: Task, to: RescheduleTo, now: Date): Partial<T
   );
   // ③ 见上面。`<=` 不是 `<`：正好等于此刻的那个时刻，下一秒就是过去。
   // 有时间段的不走这一支，理由见上面 ③ 末尾那段。
-  const at = !block && kept.getTime() <= now.getTime() ? dayEnd : kept;
+  const at = pastToDayEnd && !block && kept.getTime() <= now.getTime() ? dayEnd : kept;
 
   // 锚点算不出来（没有时间段、`due` 也空着或坏着）：没有可平移的东西，
   // 「改到明天」就是给它一个明天的截止时间——跟改动前一字不差。

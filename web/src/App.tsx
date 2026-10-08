@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Alert, App as AntApp, Button, Col, ConfigProvider, Dropdown, Input, Modal, Row, Space } from 'antd';
 import { api, subscribe, type AgentStatus, type DataFile } from './api.js';
 import { BatchBar } from './components/BatchBar.js';
@@ -21,6 +21,7 @@ import { ColGrip, clampWidth } from './components/ColGrip.js';
 import { Sidebar, SKIP_IN_NAV } from './components/Sidebar.js';
 import { isNarrowNow, useIsNarrow, useIsTight } from './lib/narrow.js';
 import { agentWord } from './lib/agentWord.js';
+import { aiBlockedReason } from './lib/aiReady.js';
 import { setBaseTitle } from './lib/pageTitle.js';
 import { SettingsModal } from './components/SettingsModal.js';
 import { ShortcutHelp } from './components/ShortcutHelp.js';
@@ -30,7 +31,7 @@ import { QuickAdd } from './components/QuickAdd.js';
 import { TaskDetail } from './components/TaskDetail.js';
 import { Rail } from './components/Rail.js';
 import { SearchModal } from './components/SearchModal.js';
-import { emptyDraft, type TaskDraft } from './components/TaskFields.js';
+import { emptyDraft, PRI_MENU, type TaskDraft } from './components/TaskFields.js';
 import { TaskGrid, type GridSection } from './components/TaskGrid.js';
 import { groupProposals } from './components/ProposalNote.js';
 import { TodayView } from './components/TodayView.js';
@@ -45,14 +46,15 @@ import { kanbanCells, quadrantCells, priorityOfQuadrant } from './lib/cells.js';
 import { scopedSections } from './lib/scoped.js';
 import { searchLists, searchTags, searchTasks } from './lib/search.js';
 import { applyFilter, emptyFilter, isFilterEmpty, normalizeFilter } from './lib/smartFilter.js';
-import { type SelState } from './lib/selection.js';
-import { allTags, asArray, countStale, isInTodayView, isSettled, isTaskOverdue, sortByUrgency, CONTEXT_LABEL } from './lib/taskView.js';
-import { undoDonePlan } from './lib/undoDone.js';
+import { cursorOf, moveSelection, selectAllIn, type SelState } from './lib/selection.js';
+import { allTags, asArray, countStale, isInTodayView, isSettled, isTaskOverdue, longestOverdueHint, sortByUrgency, CONTEXT_LABEL, STATUS_LABEL } from './lib/taskView.js';
+import { undoPlan } from './lib/undoStatus.js';
 import { dueChip } from './lib/dueChip.js';
 import { archiveNote } from './lib/archiveNote.js';
 import { deleteManyConfirm } from './lib/deleteConfirm.js';
 import { duplicateDraft } from './lib/duplicate.js';
 import { getDensity, setDensity, type Density } from './lib/density.js';
+import { readHint } from './lib/firstRun.js';
 import { getListMode, setListMode, type ListMode } from './lib/listMode.js';
 import { parentCandidates, promoteSubtask } from './lib/hierarchy.js';
 import { composeDefaults, smartDraft, splitCapture } from './lib/composeDefaults.js';
@@ -60,7 +62,7 @@ import { presetToRemindAt } from './lib/remindPreset.js';
 import { LIST_COLORS } from './lib/listIcon.js';
 import { deleteTagPatches, renameTagPatches, TAG_SEP } from './lib/tagTree.js';
 import {
-  POSTPONE_MINUTES, postponePatch, reschedulePatch, snoozePatch, snoozeLabel, SNOOZE_CHOICES,
+  POSTPONE_MINUTES, postponePatch, rescheduleDayPatch, reschedulePatch, snoozePatch, snoozeLabel, SNOOZE_CHOICES,
   RESCHEDULE_KEYS, RESCHEDULE_LABEL, type RescheduleTo,
 } from './lib/reschedule.js';
 import {
@@ -68,7 +70,7 @@ import {
   setGroupSort, setKanbanAxis, type GroupSort, type KanbanAxis,
   sectionNames,
 } from './lib/grouping.js';
-import { canAuto, getNavModes, setNavModes, visibleViews, type NavModes } from './lib/navVisibility.js';
+import { canAuto, initialNavModes, setNavModes, visibleViews, type NavModes } from './lib/navVisibility.js';
 import { getCalendarPrefs, setCalendarPrefs, type CalendarPrefs } from './lib/calendarPrefs.js';
 import { calendarAnchor } from './lib/calendar.js';
 import {
@@ -199,16 +201,28 @@ const EMPTY_NO_TASKS = '还没有任务。新建一条，它就会出现在这�
 //   之间夹三行控件，看起来就不像是同一件事了。
 const QUICKADD_AT_TOP = new Set(['today', 'source']);
 
-// `1..9` 快捷键要切到的去处，顺序**从 VIEW_SPECS 推导**，跟 Sidebar 导航上
-// 显示的顺序同源——用同一个 SKIP_IN_NAV 过滤同一份 VIEW_SPECS，不是另外
-// 手写一份键位表。手写的话，下次有人往 VIEW_SPECS 里插一项，导航变了而
-// 快捷键没跟着变，两套顺序会悄悄分叉，见 keyboard 计划文档第 ③ 条。
-// 只有 9 个数字键：VIEW_SPECS 里排在第 10 个之后的去处（四象限、习惯、专注统计、
-// 纪念日、回顾）数字键够不到，命令面板才是它们的入口（见下面 commands 那段构造）。
-// **前九个是**：收件箱 / 今天 / 接下来 / 全部 / 未归类 / 按来源 / 已完成 /
-// 垃圾箱 / 日历——这份名单 README 也抄了一份，`views.test.tsx` 拿 VIEW_SPECS
-// 现算的那份去比，两边飘了会红（原来那份漏了「未归类」、还留着早就不是去处的
-// 「看板」，而且这条注释自己把「垃圾箱」写成了够不到的，它其实是第 8）。
+// 导航上**可能出现**的去处清单，顺序从 VIEW_SPECS 推导，用同一个 SKIP_IN_NAV
+// 过滤同一份 VIEW_SPECS，不是另外手写一份表。手写的话，下次有人往 VIEW_SPECS 里
+// 插一项，导航变了而快捷键没跟着变，两套顺序会悄悄分叉，见 keyboard 计划文档第 ③ 条。
+//
+// **但它现在只管「有哪些」，不管「按几」。** 数字键绑的是**屏幕上真看得见的那几项**
+// （组件体里的 `navOrderRef`，判据是 `navDefs`），命令面板的数字 hint 也一样
+// （`navHints`）。原来两者都按这份全量表数序号，于是用户在设置里把任何一项设成
+// 「隐藏」之后，侧栏少了一行、数字键却还按老序号跳——按 `3` 跳到一个不在导航上的
+// 去处，而面板上标着「3」的那条屏幕上找不到对应行。
+// 滴答那边数字键绑的是侧栏上真实存在的条目：它是侧栏那一列的快捷方式，
+// 侧栏显示什么就直接决定键位（`docs/dida365/用清单管理任务.md`）。
+//
+// **这份全量表仍然是命令面板的条目来源**——「什么都能去」是对的，被设成隐藏的
+// 那个去处照样跳得过去，只是不带数字号。
+//
+// 只有 9 个数字键（`keymap.ts` 只认 '1'..'9'），排在第 10 个之后的去处
+// （四象限、习惯、专注统计、纪念日、回顾）数字键够不到，命令面板才是它们的入口。
+// 默认全显示时**前九个是**：收件箱 / 今天 / 接下来 / 全部 / 未归类 / 按来源 /
+// 已完成 / 垃圾箱 / 日历——这份名单 README 也抄了一份，`views.test.tsx` 拿
+// VIEW_SPECS 现算的那份去比，两边飘了会红（原来那份漏了「未归类」、还留着早就不是
+// 去处的「看板」，而且这条注释自己把「垃圾箱」写成了够不到的，它其实是第 8）。
+// **一旦有项被隐藏，这份名单就变短、后面往前挪**——README 那份说的是默认状态。
 const NAV_VIEW_SPECS = VIEW_SPECS.filter((v) => !SKIP_IN_NAV.has(v.key));
 
 // 冲突横幅说人话用的——key 是 paths() 的目录名，跟 ConflictFile.kind 一一对应。
@@ -216,6 +230,41 @@ const KIND_LABEL: Record<string, string> = {
   tasks: '任务', inbox: '收件箱', proposals: '建议', lists: '清单',
   folders: '文件夹', insights: '回顾', countdowns: '纪念日', trash: '垃圾箱',
 };
+
+/**
+ * 横幅里点名是哪几个文件：`<目录>/<文件名>`。
+ *
+ * 原来只说「去数据目录看一眼那几个文件」——数据目录里动辄几百个文件，让人
+ * 自己去找出那两份，等于把「明确说出来」又退回成一次搜寻。文件名本身就是要人
+ * 拿去动的那个东西（修格式或删掉），所以直接列出来；超过六个只留前六个，
+ * 后面那句「等 N 个」说的是**还有几个没列出来**（不是总数——写总数会让人以为
+ * 屏幕上那串就是全部），不然一条横幅能自己占掉半屏。
+ */
+const bannerFiles = (rows: ConflictFile[]): string => {
+  const names = rows.map((r) => `${r.kind}/${r.file}`);
+  const head = names.slice(0, 6);
+  return names.length > 6 ? `${head.join('、')} 等 ${names.length - head.length} 个` : head.join('、');
+};
+
+/**
+ * 横幅右上角那颗 ×：样子不变，但**得报名**。
+ *
+ * antd 的 `closable` 渲出来的是一颗不带名字的图标按钮（`button.ant-alert-close-icon`
+ * 里只有一个 SVG 的 ×），读屏走到那儿只念得出「按钮」——而这几条横幅是常驻的
+ * 「知道了/关掉」类提示，那颗 × 常常是唯一的出口（到期提醒那条还有别的按钮，
+ * 拆解失败和总览汇报没有）。`theme.css` 早就为它撑过点击区（12×13 → 24×24），
+ * 名字那半一直没补。
+ *
+ * 走 `closeText` 而不是换掉图标：传进去的东西就渲染在那颗按钮**里面**，
+ * 藏起来的那半句因此算得进可及名字，看得见的那半还是一个 ×。文字 × 而不是
+ * 图标组件，跟这一屏别处同一族写法（「⌄」「✓」都是字）。
+ */
+const BANNER_CLOSE = (
+  <>
+    <span className="ink-sr-only">关闭这条提示</span>
+    <span aria-hidden="true">×</span>
+  </>
+);
 
 export function App() {
   const { message, modal } = AntApp.useApp();
@@ -243,6 +292,15 @@ export function App() {
   // 恰好也变了」——那是一条不写在依赖数组里的隐含约定，哪天 `api.tasks()` 复用
   // 了数组它就静默不排了。多一次渲染，换 React 自己按依赖数组保证这件事。
   const [tasksLoaded, setTasksLoaded] = useState(false);
+  /**
+   * 「这一行试过、抛了」。跟上面那道闸门配成三档，是为了文案那一路：
+   * `tasksLoaded` 为假有两种完全不同的原因——**还在飞**和**已经失败**——
+   * 只用它一个布尔分不出「正在读」跟「读不到」，于是那句「还没有任务」还是
+   * 会在失败的那一段说出口（见 `EMPTY_NOT_READ` 上面那段）。
+   * 只在 `all`/`'tasks'` 那一次跑成功时清回假：局部刷新（SSE 报来的单个文件）
+   * 不该把上一次的成功洗成失败，也不该把上一次的失败洗成成功。
+   */
+  const [tasksFailed, setTasksFailed] = useState(false);
   // AI 提的、还没被接受/忽略的修改建议。渲染在各自对应的任务卡里。
   const [proposals, setProposals] = useState<Proposal[]>([]);
   // **`null` 是「还没成功读到过这台服务的设置」，是一个真实的状态，不是占位**
@@ -284,6 +342,18 @@ export function App() {
   // 判据本身——跟 lib/dataSource.ts 里 api.ts 每个方法内部路由读的是同一个
   // 函数，不是另外发一次探测/另判一套「在不在线」）。
   const [offline, setOffline] = useState(false);
+  /**
+   * **AI 那三颗按钮（立即拆解 / 让 AI 回顾一遍 / AI 总览）现在该不该灰。**
+   *
+   * `null` = 能点；一句话 = 不能点，那句话直接摆到按钮下面。判据在
+   * `lib/aiReady.ts`，三颗共用一份——原先它们只按「有没有活儿」亮着，而配置没配
+   * 或连不上服务时活儿照样在那儿，点下去换一分半钟的等待和一句不知道怎么修的错。
+   *
+   * **放在这儿算而不是在三处各算**：三颗按钮分在两个文件里，各写一份
+   * `settings?.aiMode === 'api' && !activeEndpoint(settings)?.key` 的话，下一个设置项加进来
+   * 就会有人漏掉其中一处。
+   */
+  const aiBlocked = aiBlockedReason(settings, offline);
   // 手机通知权限被拒的记号（本地通知那一批）。**只有 'denied' 挂横幅**：
   // 'not-native'（桌面/浏览器，压根没排过本地通知）和 'ok' 都沉默——桌面有
   // 自己的提醒路（fireReminders → Electron 原生通知 / PowerShell 兜底），
@@ -481,7 +551,19 @@ export function App() {
     setQuadRuleState(r);
   };
 
-  const [navModes, setNavModesState] = useState<NavModes>(() => getNavModes());
+  /**
+   * 启动时读的那一份导航显示方式。
+   *
+   * **「读 → 物化新默认 → 落记号」三步必须按这个顺序发生，全在
+   * `lib/navVisibility.ts` 的 `initialNavModes` 里。** 拆到这儿就断了——
+   * 原来这里是 `ensureNavDefaults()` 在前、`useState(() => getNavModes())` 在后，
+   * 而记号一落，`effectiveDefault` 就再也读不到 `FRESH_NAV_MODES`：这个收窄默认
+   * **一次都没真正生效过**，空的垃圾箱 / 已完成 / 未归类照样杵在导航里。
+   *
+   * 只把两行对调**也修不好**——`visibleViews` 是在同一次渲染的后半段才被调用的，
+   * 记号在那之前就落上了。所以新默认必须物化进返回的那一份，理由写在那一步的注释里。
+   */
+  const [navModes, setNavModesState] = useState<NavModes>(() => initialNavModes());
   const changeNavModes = (m: NavModes) => {
     setNavModes(m);
     setNavModesState(m);
@@ -509,7 +591,19 @@ export function App() {
       if (all || what === 'inbox') setInbox(asArray<InboxItem>(await api.inbox()));
       // 这两句一起写：`tasksLoaded` 的含义就是「这一行成功跑过了」，`api.tasks()`
       // 抛出去的话下面一行不会执行，闸门保持关着（见 tasksLoaded 定义处）。
-      if (all || what === 'tasks') { setTasks(asArray<Task>(await api.tasks())); setTasksLoaded(true); }
+      // 抛的那一支另外记一笔 `tasksFailed` 再**原样抛出去**：外层那个 catch 负责
+      // 那条响亮的 toast，这儿不吞；记这一笔只为了给文案那一路分清「还在飞」和
+      // 「已经失败」（见 tasksFailed 定义处）。
+      if (all || what === 'tasks') {
+        try {
+          setTasks(asArray<Task>(await api.tasks()));
+          setTasksLoaded(true);
+          if (all) setTasksFailed(false);
+        } catch (e) {
+          setTasksFailed(true);
+          throw e;
+        }
+      }
       if (all || what === 'proposals') setProposals(asArray<Proposal>(await api.proposals()));
       if (all || what === 'lists') setLists(asArray<List>(await api.lists()));
       if (all || what === 'folders') setFolders(asArray<Folder>(await api.folders()));
@@ -618,7 +712,7 @@ export function App() {
         // 撞车不是错误（你那份进了冲突副本，去看一眼），但也不是「一切正常」，两者
         // 混成一档就分不出来了。顺带核过颜色：antd 6 的 message 图标色读的是
         // colorSuccess/colorWarning/colorError/colorInfo（`node_modules/antd/es/
-        // notification/style/notification.js` 那张表），theme.ts（56-81 行）把这四个
+        // notification/style/notification.js` 那张表），theme.ts 里这四个
         // 分别压成了你的墨和过期橙，**没有一处读 colorPrimary**——群青是 AI 产出内容
         // 的配额，同步/冲突一点都不许借。
         if (summary && summary.conflicted > 0) {
@@ -990,6 +1084,20 @@ export function App() {
   useEffect(() => {
     clearSelection();
     setEditRequest(null);
+    // 「新任务」表单跟着收掉。**它原来是全局状态、不随视图关**：在「今天」点开
+    // 完整表单，切去「全部」「日历」「习惯」它一路都在——因为没有加任务行的那些
+    // 屏走 `!canQuickAdd(view) && composerNode`（App 末尾）也把它画一份。一张
+    // 半填的表单出现在每一屏顶上，读起来像「这一屏要我先建条任务」。
+    //
+    // 收在这儿而不是写进 `navigate()`：这一处不管变化来自点导航、后退前进
+    // （hashchange）、命令面板还是程序化 navigate，一个口子堵全部路径，
+    // 跟上面那两条同一个理由。
+    //
+    // 不会跟日历那颗「在这天新建」打架：它改的是 `composeDue` + `composing`，
+    // 不动 view（选哪天是 CalendarView 自己的 `selectedKey`），所以这个 effect
+    // 不在那次点击里跑。
+    setComposing(false);
+    setComposeDue(null);
     // clearSelection 是每次渲染新建的箭头函数，不能进依赖数组——那样会让
     // 这个 effect 在每次渲染后都重跑，选中态永远清不掉。只在 view/query/
     // filter 真的变化时触发才是「切视图/改查询词/改筛选清空」该有的语义。
@@ -1047,6 +1155,23 @@ export function App() {
     setComposing(true);
   };
 
+  /**
+   * 加任务行右端那颗 ⌄ 的动作：**开关**，不是单向的「开」。
+   *
+   * 原来它接的是 `openCompose`，于是表单开着的时候再点一下什么都不会发生——
+   * 而这一行上能关那张表单的按钮只有它（`C` 键和命令面板都只会开）。
+   * 关掉顺带清 `composeDue`：那半截「从日历带过来的那一天」是上一次意图的
+   * 残留，下一次从别处开表单不该还带着它（`openCompose` 里清的是同一件事）。
+   */
+  const toggleCompose = () => {
+    if (composing) {
+      setComposing(false);
+      setComposeDue(null);
+      return;
+    }
+    openCompose();
+  };
+
   // 中文输入法那道缝：`isComposing` 在组字第一个 keydown 上是 false（
   // compositionstart 在它之后才派发），今天靠 inField 结构性地堵住第一个键
   // （输入法只能在可编辑元素持有焦点时开始组字）——但那是「这棵 DOM 树今天
@@ -1074,6 +1199,36 @@ export function App() {
   // 一个个函数改成读 `tasksRef` 是在追每一个闭包；这儿改成每次渲染把最新的
   // 处理函数放进 ref，监听器经 ref 调用——闭包永远是最新那份，以后再接什么
   // 进来也不会再有这一类账。
+  /**
+   * 屏幕上这一列任务，按看得见的位置排。**从 DOM 现读，不从 `tasks` 算。**
+   *
+   * 为什么：走位和全选要的「顺序」是**这一屏**的顺序——分组、折叠、筛选、排序
+   * 全都算过之后的那一份。而那份顺序每个视图各算各的（`TaskGrid` 的
+   * `orderedIds`、`TodayView` 手写的那份、日历又是第三种），要接就得每个视图
+   * 往上报一份，「新加一个列表忘了报」正是这一类缺陷的成因（见 `gridWiring`
+   * 那段：两个手写 props 的视图当初就落在了批量功能外面）。DOM 是唯一一处
+   * 「渲染出来什么就是什么」的地方：折叠的、被筛掉的天然不在里面。
+   *
+   * **两件事必须一起处理，不然会挑到看不见的那一棵**：
+   *  - keepMounted 的视图一直挂在树上（上面那段注释），同一批任务在「今天」和
+   *    「全部」两棵子树里各有一份，靠原生 `hidden` 藏着。所以跳过 `hidden` 里
+   *    的——否则光标会走到一个屏幕上看不见的位置上，`D`/`T` 改的还是它。
+   *  - 详情面板开着时，同一条任务在面板里还有一份副本，所以按 id 去重、留第一
+   *    次出现的那一个（列表排在面板之前）。
+   */
+  const visibleTasks = (): { ids: string[]; elById: Map<string, HTMLElement> } => {
+    const ids: string[] = [];
+    const elById = new Map<string, HTMLElement>();
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-task-id]'))) {
+      const id = el.dataset.taskId;
+      if (!id || elById.has(id)) continue;
+      if (el.closest('[hidden]')) continue;
+      elById.set(id, el);
+      ids.push(id);
+    }
+    return { ids, elById };
+  };
+
   const onKeyDownRef = useRef<(e: KeyboardEvent) => void>(() => {});
   onKeyDownRef.current = (e: KeyboardEvent) => {
       if (composingRef.current) return;
@@ -1109,10 +1264,13 @@ export function App() {
           setSearching(true);
           break;
         case 'view': {
-          const spec = NAV_VIEW_SPECS[action.index];
-          // 9 个数字键，VIEW_SPECS 里第 10 项之后（回顾、垃圾箱）够不到，
-          // 不是 bug——命令面板才是它们的入口，见 NAV_VIEW_SPECS 上面的注释。
-          if (spec) navigate(spec.key);
+          // 顺序取自 `navOrderRef`（= 屏幕上真看得见的那几项），不是整份注册表。
+          // 理由见它定义处那段——原来是 `NAV_VIEW_SPECS[action.index]`，隐藏任一项
+          // 之后序号就不收缩，按 `3` 会跳到一个不在导航上的去处。
+          // 第 9 项往后够不到不是 bug——`keymap.ts` 只认 '1'..'9'，而命令面板是
+          // 它们的入口（见下面 commands 那段）。
+          const key = navOrderRef.current[action.index];
+          if (key) navigate(key);
           break;
         }
         case 'escape':
@@ -1160,6 +1318,49 @@ export function App() {
         case 'due':
           if (selectionRef.current.ids.size > 0) batchReschedule(action.to);
           break;
+        case 'move': {
+          // 不拦的话这一下同时干两件事：光标挪一条、页面滚一行。
+          e.preventDefault();
+          const { ids, elById } = visibleTasks();
+          const next = moveSelection(selectionRef.current, ids, action.dir, action.extend);
+          // 焦点跟着**光标**走（扩选时锚点不动，动的是另一头）。不跟的话
+          // 「空格选中焦点所在那一条」里的「焦点所在那一条」和屏幕上的光标是
+          // 两条任务，按下去改的是那个没亮着的。
+          const to = cursorOf(next, ids);
+          if (to && to !== cursorOf(selectionRef.current, ids)) {
+            const el = elById.get(to);
+            el?.focus({ preventScroll: true });
+            // `?.()` 不是保守：jsdom 压根没实现 scrollIntoView，直接调会抛，
+            // 而这个组件有一整片测试在 jsdom 下跑（同 NotesEditor 里那句）。
+            el?.scrollIntoView?.({ block: 'nearest' });
+          }
+          setSelection(next);
+          break;
+        }
+        case 'selectAll': {
+          // 浏览器自己的 Ctrl+A 是「选中页面上的文字」，不拦的话选中的同时
+          // 整屏文字也蓝了。
+          e.preventDefault();
+          const { ids, elById } = visibleTasks();
+          // 「光标所在那一组」：往上找最近的一个 `<section>`（TaskGrid 每个分组
+          // 一个）。没有光标、或者这一屏压根没有分组容器（「今天」那一屏是手写
+          // 的、日历是第三种），就退回整屏——第一次按 Ctrl+A 选中的就是看得见的
+          // 全部，那是通用预期。
+          const c = cursorOf(selectionRef.current, ids);
+          const host = c ? elById.get(c)?.closest('section') : null;
+          // 用集合比对，不把 id 拼进选择器：id 是文件里读出来的字符串，一个带
+          // 引号的 id 就能让 `querySelector` 抛异常（服务端拒的是路径穿越那类，
+          // 不管引号）。
+          const inGroup = host
+            ? new Set(Array.from(host.querySelectorAll<HTMLElement>('[data-task-id]')).map((n) => n.dataset.taskId))
+            : null;
+          const group = inGroup ? ids.filter((id) => inGroup.has(id)) : ids;
+          const next = selectAllIn(selectionRef.current, group);
+          // 一屏都没有任务时不写：把选中集合换成空的，跟什么都不做是一回事，
+          // 没必要为此重渲染一次。
+          if (next.ids.size > 0) setSelection(next);
+          break;
+        }
         case 'help':
           // 不用 preventDefault：`?` 在浏览器里没有默认动作，而 keyAction 已经
           // 挡掉了输入框（那里按 `?` 是在打字）。开着再按一次是幂等的。
@@ -1214,7 +1415,7 @@ export function App() {
    *
    * 撤销这件事本身仿的是滴答清单：点完成，屏幕下方那条提示里有个「撤销」。
    * 判据（算不算勾完、撤销该改回哪个状态、这一下有没有连带）全在
-   * `lib/undoDone.ts`，这里只接线。
+   * `lib/undoStatus.ts`，这里只接线。
    */
   /**
    * 刚勾完的那几条**先留在原地划着删除线，停一下再移走**（仿滴答清单）。
@@ -1255,7 +1456,7 @@ export function App() {
     // 勾完先留一会儿再让它走，见 startLinger。**在发请求之前就挂上**：请求
     // 回来之后 SSE 会立刻推一份新数据，那时候再挂就已经晚了一帧。
     if (patch.status === 'done') startLinger(id);
-    const undo = undoDonePlan(tasks.find((t) => t.id === id), patch, tasks, now);
+    const undo = undoPlan(tasks.find((t) => t.id === id), patch, tasks, now);
     guard(async () => {
       await api.patchTask(id, patch);
       if (!undo) return;
@@ -1272,10 +1473,15 @@ export function App() {
                 去猜是哪一条被动了。现在重复的报「下次 9月1日」（日期用
                 `dueChip` 拼，跟行上那颗到期 chip 同一套说法，不另发明第二种
                 写法），子任务的报「连带做完了 3 条子任务」，父任务的报
-                「「装修」也跟着完成了」。判据全在 `lib/undoDone.ts`。
+                「「装修」也跟着完成了」。判据全在 `lib/undoStatus.ts`。
                 `partial` 为真时上面那几句一定至少有一句能说，所以括号里只剩
-                「撤销只把这一条改回来」——那才是这句话真正要提醒的事。 */}
-            已完成「{undo.title}」{nextText ? `，下次 ${nextText}` : ''}{undo.cascades.length > 0 ? `，${undo.cascades.join('，')}` : ''}{undo.partial ? '（撤销只把这一条改回来）' : ''}
+                「撤销只把这一条改回来」——那才是这句话真正要提醒的事。
+
+                **动词跟着刚落的那一档走**（`undo.to`），不写死「已完成」——
+                搁置和放弃现在也走同一条撤销（`lib/undoStatus.ts` 里那段说明为什么
+                「菜单也会点错」），写死的话点「搁置」弹出来的提示会说「已完成」，
+                而他刚做的恰恰不是完成。`STATUS_LABEL` 是那五个字的单一出处。 */}
+            {STATUS_LABEL[undo.to]}「{undo.title}」{nextText ? `，下次 ${nextText}` : ''}{undo.cascades.length > 0 ? `，${undo.cascades.join('，')}` : ''}{undo.partial ? '（撤销只把这一条改回来）' : ''}
             <button type="button" onClick={() => patchOne(id, undo.patch)}>撤销</button>
           </span>
         ),
@@ -1415,13 +1621,13 @@ export function App() {
      * 把二十条标成完成、却一点退路都没有——**风险大的那一边反而没有兵器**。
      *
      * 跟单条那条规矩一样，**只认「完成」**：搁置/放弃是从下拉里挑出来的，
-     * 是想过才点的；`D` 是一个按键。判据直接复用 `undoDonePlan`（连「还连带改了
+     * 是想过才点的；`D` 是一个按键。判据直接复用 `undoPlan`（连「还连带改了
      * 别的」那半句一起），不在这儿另写一份。
      */
     const plans = ids
       .map((id) => tasks.find((t) => t.id === id))
       .filter((t): t is Task => t !== undefined)
-      .map((t) => ({ id: t.id, plan: undoDonePlan(t, { status }, tasks, now) }))
+      .map((t) => ({ id: t.id, plan: undoPlan(t, { status }, tasks, now) }))
       .filter((x): x is { id: string; plan: NonNullable<typeof x.plan> } => x.plan !== null);
 
     guard(async () => {
@@ -1434,7 +1640,7 @@ export function App() {
         duration: 6,
         content: (
           <span className="ink-undo">
-            {plans.length} 条标成了已完成
+            {plans.length} 条标成了{STATUS_LABEL[status]}
             {plans.some((x) => x.plan.partial) ? '（还连带改了别的，撤销只把这几条改回来）' : ''}
             <button
               type="button"
@@ -1456,13 +1662,26 @@ export function App() {
     clearSelection();
   });
 
+  /** 「改到某一天」（批量条那颗日期选择器）。逐条一份 patch——每条原来几点
+   *  还是几点，各自的位移不一样，跟 `batchReschedule` 同一条理由。 */
+  const batchRescheduleDay = (day: Date) => guard(async () => {
+    const patches = [...selectionRef.current.ids]
+      .map((id) => tasks.find((x) => x.id === id))
+      .filter((t): t is Task => t !== undefined)
+      .map((t) => ({ id: t.id, patch: rescheduleDayPatch(t, day, now) }));
+    if (patches.length === 0) return;
+    await api.patchTasksEach(patches);
+    clearSelection();
+  });
+
   /**
    * 「已过期」那一组的组头上那颗「全部改到今天」（仿滴答清单：右键分组 →
    * 全部延期到今天）。
    *
-   * 存在的理由是这个应用里没有「全选」：想把八条过期任务一起推到今天，得先
-   * 点八下把它们一条条选中，才轮得到批量改期。而「已过期」正是最常被整组顺延
-   * 的那一组——那八下点的全是同一个意思。
+   * 写下它的时候这个应用里还没有「全选」，那八下点的全是同一个意思。现在
+   * `Ctrl + A` 能选中一组了（见 `keymap.ts` 的 `selectAll`），这颗留着：它省的
+   * 是「先要想到去选、再去挑一颗按钮」那两步，而组头那个位置本来就写着
+   * 「这一组有几条过期」。
    *
    * **推的是屏幕上那几条**，不是「所有过期的」：调用方传进来的是筛选之后、
    * 组头计数所数的那一批（见 `withDeferAll` 挂进去的位置）。一颗按钮改掉几条
@@ -1509,6 +1728,18 @@ export function App() {
     });
   };
 
+  /**
+   * 「已过期」那一组的组头补半句「最久的 20 天」。**在筛选之后算**：卡上省掉的
+   * 那两个字是组头担下来的，那句「最久的」说的就必须是屏幕上这一组，不是筛掉
+   * 之前那一堆——跟下面 `withDeferAll` 那颗按钮同一条范围规矩（计数是多少就是
+   * 多少条）。分档那一层只留 `briefTime` 这个记号（见 `agenda.ts` 的
+   * `dueSectionExtras`），算的时候按它挑组，不按 `key === 'overdue'` 猜：
+   * 分组轴会加 `g:` 前缀，而将来再多一处按时间分组，标上记号这句就自动跟上。
+   */
+  const withOverdueHint = (sections: GridSection[]): GridSection[] => sections.map((s) => (
+    s.briefTime ? { ...s, hint: longestOverdueHint(s.tasks, now) } : s
+  ));
+
   const withDeferAll = (sections: GridSection[]): GridSection[] => sections.map((s) => (
     // 空组不挂：那一组这时候整个不渲染，挂了也看不见，但 `s.tasks.length === 0`
     // 这一条要写出来——将来空组改成渲染成一句「没有过期的」，一颗点了什么都
@@ -1517,12 +1748,61 @@ export function App() {
       ...s,
       action: (
         <button type="button" className="ink-grid-action" onClick={() => deferAll(s.tasks)}>
-          {/* 跟 TodayView 那颗同一个名字、同一条理由，见那里的注释。 */}
-          全部改到今天
+          {/* 数字写在脸上，不写「全部」。这一颗挂在「已过期」那一组的组头上，组里
+              数出来的就是过期的那几条，「全部」在这儿不算错；但 TodayView 上同名
+              那颗挂在「4 条（1 条已过期）」那一行旁边，「全部」就读成了「这 4 条
+              都挪」——而它只推那 1 条。两处统一成「N 条」，跟确认框、命令面板、
+              事后提示同一口径。 */}
+          {`${s.tasks.length} 条改到今天`}
         </button>
       ),
     }
   ));
+
+  /** 把这一格里所有任务的 `priority` 定成同一档。逐条 patch，跟 `deferAll`
+   *  同一个写法：这一档没有「跟着平移」之类的连带判据，一条 `patchTasks`
+   *  就够，但每条各自一次写，坏一条不影响其余。 */
+  const setAllPriority = (ts: Task[], p: Task['priority'], label: string) => guard(async () => {
+    await api.patchTasksEach(ts.map((t) => ({ id: t.id, patch: { priority: p } })));
+    void message.success(`${ts.length} 条定成了${label}优先级`);
+  });
+
+  /**
+   * 「没定优先级」那一格挂一颗**「定优先级」**：这一格里没表过态的任务，一次
+   * 定成高 / 中 / 低。管的就是格头上那个计数数出来的几条，跟上面
+   * `withDeferAll` 同一条范围规矩——一颗按钮不许改屏幕上看不见的任务。
+   *
+   * 三个「只在……才有」，缺一个就会多出一个点了没反应的入口：
+   * - **只在默认那套规则下**。`time-priority` 的四格是二维坐标，那一格里坐着
+   *   的是「优先级低 + 时间不急」两件事，「没定优先级」那个说法在那套不成立。
+   * - **只在那一格非空时**。
+   * - **选项里没有「无」**：那正是这一格本身，点一下什么都不会变。
+   *
+   * 这一格存在的意义是把「一次能处理完的一件事」摆出来：`priority` 一律 0 是
+   * 这个应用的规矩（AI 不许替他定，见 AGENTS.md），所以这一格常常是四格里最大
+   * 的那一格——原来它叫「不重要也不紧急」，是在替他下一个他没下过的判断。
+   */
+  const withQuadrantTriage = (sections: GridSection[], rule: QuadrantRule): GridSection[] => (
+    rule !== 'priority' ? sections : sections.map((s) => (
+      s.key !== 'min-later' || s.tasks.length === 0 ? s : {
+        ...s,
+        action: (
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: PRI_MENU.filter((p) => p.v > 0).map((p) => ({ key: String(p.v), label: p.label })),
+              onClick: ({ key }) => {
+                const p = PRI_MENU.find((x) => String(x.v) === key);
+                if (p) setAllPriority(s.tasks, p.v, p.label);
+              },
+            }}
+          >
+            <button type="button" className="ink-grid-action">定优先级</button>
+          </Dropdown>
+        ),
+      }
+    ))
+  );
 
   const batchPostpone = (minutes: number) => guard(async () => {
     const patches = [...selectionRef.current.ids]
@@ -1758,6 +2038,24 @@ export function App() {
     offline,
   };
 
+  /**
+   * 「还没有任务」是一句**只有读到过一次之后才有资格说**的话。
+   *
+   * `tasks` 的初值是 `[]`，跟「这人真的把任务删光了」在类型上一模一样——所以
+   * 服务还没回话（慢、挂了、地址填错）的那一段，屏幕上写的是「还没有任务。新建
+   * 一条」，而设备上可能正躺着几百条。这跟 `tasksLoaded` 那道闸门防的是同一件事
+   * （见它的定义：拿 `[]` 去重排本地通知等于把手机清空），只是当时只堵了重排
+   * 那一路，没堵文案这一路。打磨稿拿离线夹具量「今天」那一屏时现形：本地快照里
+   * 有 18 条，屏幕上那句是「还没有任何任务」。
+   *
+   * `preRead` 非空的时候，**任何一句「有没有」都先别说**：网格那一路走
+   * `noTasksNote`，「今天」和「按来源」两屏各自有自己的空态措辞，所以把这一句
+   * 原样递给它们（`TodayView` / `TaskBoard` 的 `preRead`）。三处共用一份判据，
+   * 不在三个文件里各写一句——这个仓库为「同一个概念两处文案」栽过好几次。
+   */
+  const preRead = readHint(tasksLoaded, tasksFailed);
+  const noTasksNote = preRead ?? EMPTY_NO_TASKS;
+
   /** 上面那一份，加上只有网格才有的四个（选中、'E' 键的落点）。 */
   const gridWiring = {
     ...cardWiring,
@@ -1895,6 +2193,9 @@ export function App() {
    */
   const composerNode = composing ? (
     <TaskComposer
+      // 跟上面那行 `QuickAdd` 的 `wide` 同一个表达式：行铺满整列时表单也得铺满，
+      // 不然点开行右端那颗 ⌄、冒出来的东西右边界短一截。
+      wide={view === 'source' || density !== 'row'}
       view={view}
       boardFilter={boardFilter}
       now={now}
@@ -1903,6 +2204,10 @@ export function App() {
       // 整个不传，让表单什么都不预填，不在这里编一份默认值出来（跟
       // SettingsModal 收 null 同一条道理）。
       defaults={composeDefaults_}
+      // 「点了日历上某一天才开表单」这件事单独传出去：`defaults.due` 分不出它
+      // 和设置里的默认截止，而恢复一份旧草稿时这两者答案相反（点了的那天是
+      // 这一刻说的话，默认值只是给空白表单的预填）。
+      pinnedDue={composeDue}
       // 能挂到哪条任务下面。新任务还没有 id，`parentCandidates` 的第一个参数
       // 传 null——排除「自己」那一条对它不适用。
       parentOptions={parentCandidates(tasks, null).map((t) => ({ id: t.id, title: t.title }))}
@@ -1923,6 +2228,9 @@ export function App() {
         boardFilter={boardFilter}
         now={now}
         defaults={composeDefaults_}
+        // 右边那颗「清单」chip 的候选。判据（去掉归档的、去掉智能清单）在
+        // QuickAdd 里，跟表单那个下拉框同源。
+        lists={lists}
         // 「今天」的行左边常驻一段抓手位（那个视图能拖着排序），这一行跟着让
         // 一样多才对得齐——判据和度量在 QuickAdd 的 `indent` 上。
         indent={view === 'today'}
@@ -1931,7 +2239,8 @@ export function App() {
         // **不在 `DENSITY_VIEWS` 里**：那一屏是瀑布流、没有密度开关，不管全局
         // 密度是什么，它下面永远是铺满整列的那一档。
         wide={view === 'source' || density !== 'row'}
-        onOpenForm={openCompose}
+        onToggleForm={toggleCompose}
+        formOpen={composing}
       />
       {composerNode}
     </>
@@ -2033,7 +2342,7 @@ export function App() {
                 : cellPatch(kanbanAxis, key, t, now);
               if (patch) gridWiring.onPatch(id, patch);
             }}
-            empty={EMPTY_NO_TASKS}
+            empty={noTasksNote}
             emptyFiltered={matched === 0 && total > 0 ? `这 ${total} 条都被筛选挡住了——清掉筛选就看得到` : undefined}
           />
         </>
@@ -2057,7 +2366,7 @@ export function App() {
             在这时候是一句假话——你有 N 条，只是这个筛选一条都没匹配上，而这
             句话还刚好长得像「数据没了」。 */}
         {renderGrid(
-          (editing) => shape(filterSections(buildRaw(editing), editing)),
+          (editing) => withOverdueHint(shape(filterSections(buildRaw(editing), editing))),
           matched === 0 && total > 0 ? `这 ${total} 条都被筛选挡住了——清掉筛选就看得到` : undefined,
         )}
       </>
@@ -2097,7 +2406,8 @@ export function App() {
               实测过：这一屏只剩那五个字，既不解释也不给出路，是全应用唯一一处
               「只有断言、没有下一步」的空状态。
               分档照「未归类」那处的现成做法（见下面 `nolist`）：真的还没有 →
-              `EMPTY_NO_TASKS`；有任务、只是没搜着 → 说清是没命中，并提示换个词。 */}
+              `noTasksNote`（读到过之后才是那句「还没有任务」）；有任务、只是没
+              搜着 → 说清是没命中，并提示换个词。 */}
           {/* **补上第三档：还没搜。** 上面那两档少了「query 是空的」这一种，
               而这一屏**自己不带输入框**——输入框只长在 `/` 弹出的搜索弹层里
               （`SearchModal` 的 `onQuery`，见文件末尾那段），这一屏是那个弹层
@@ -2112,7 +2422,7 @@ export function App() {
             sections={sections}
             empty={
               tasks.length === 0
-                ? EMPTY_NO_TASKS
+                ? noTasksNote
                 : query.trim() === ''
                   ? '还没搜。按 / 打开搜索框——标题、备注、标签、子任务都会搜。'
                   : '没有匹配的任务。换个词试试——标题、备注、标签、子任务都会搜。'
@@ -2127,6 +2437,9 @@ export function App() {
       <InboxSidebar
         items={inbox}
         now={now}
+        // 「有活儿」不等于「能干活」：配置没配、连不上服务时那颗「立即拆解」也
+        // 灰着，并把原因摆在按钮下面。判据三颗 AI 按钮共用一份（lib/aiReady.ts）。
+        aiBlocked={aiBlocked}
         onDelete={(id) => guard(() => api.deleteInbox(id))}
         // **不经 guard()**：失败必须让 RedoButton 自己 await 到，把他刚打的那句
         // 要求留在框里——跟下面 onEditText 是同一条理由。成功那句话在这儿说，
@@ -2156,6 +2469,7 @@ export function App() {
             没有推荐时整个组件返回 null，见 SuggestPanel.tsx。 */}
         <SuggestPanel tasks={tasks} now={now} onPatch={patchOne} onOpen={openTask} />
         <TodayView
+          preRead={preRead}
           proposals={proposalWiring}
           // 每周那种习惯的「本周 N/M」跟日历那七列、专注统计的「本周」
           // 读同一个设置。
@@ -2303,9 +2617,12 @@ export function App() {
             // 点「在这天新建」：把那天的 23:59 预填进顶上那个表单再展开它。
             // 落 23:59 跟自然语言识别「只说了哪天」是同一条——零点会被
             // `isOverdue` 当成一个真实时刻，那天 00:01 就标成过期，红一整天。
-            onComposeOn={(key) => {
+            // **但周/日视图里点的是某个小时格**（`hour` 从那儿来）：那就是
+            // 一个明确的时刻，别再拿 23:59 覆盖它——你点的是 14 点那一格。
+            onComposeOn={(key, hour) => {
               const [y, m, d] = key.split('-').map(Number);
-              setComposeDue(new Date(y, m - 1, d, 23, 59).toISOString());
+              const at = hour === undefined ? new Date(y, m - 1, d, 23, 59) : new Date(y, m - 1, d, hour);
+              setComposeDue(at.toISOString());
               setComposing(true);
             }}
             {...gridWiring}
@@ -2347,15 +2664,10 @@ export function App() {
                 出来的。上面那句 `allFilteredOut` 补不了：它明写着 `tasks.length
                 > 0`，专管「有任务但都被滤掉了」，真空手时不该说「都做完了」。
                 两句互斥，一次只出一句。 */}
-            {tasks.length === 0 && <p className="ink-empty-note">{EMPTY_NO_TASKS}</p>}
+            {tasks.length === 0 && <p className="ink-empty-note">{noTasksNote}</p>}
             {allFilteredOut && (
               <p className="ink-empty-note">都做完、搁置，或者还没到开始时间——四象限只看现在能做的</p>
             )}
-            {/* **怎么读这一屏**：格子按的是优先级，不是截止时间。不说的话，一条
-                「今天 20:00」到期的任务坐在「不紧急」格里看起来就是算错了。
-                单独一个类名、不蹭 `.ink-empty-note`：那个专指「这里空空如也」，
-                而这句话不管有没有任务都要在（理由跟 `.ink-trash-note` 那处一字
-                不差，口吻也照它）。 */}
             {/* 两套规则的切换。滴答那边收在「···」-「编辑」里，这里直接摆出来，
                 理由跟日历那排勾选框一字不差：一共就两档，收起来要多点两下才知道
                 「四象限还能按时间分」这件事存在——而这正是最没人知道的那一件。
@@ -2375,36 +2687,34 @@ export function App() {
                 </label>
               ))}
             </div>
-            <p className="ink-quadrant-note">
-              {quadRule === 'time-priority'
-                ? '纵轴是优先级（高 / 中算重要），横轴按截止时间算出来：3 天内到期、含已过期算紧急。横轴拖不动。'
-                : '四格就是四档优先级（高 / 中 / 低 / 无），跟截止时间无关。'}
-            </p>
-            {/* 这句提示为什么在原生 `title` 里（悬停才弹出），不常驻占一行：
-                task-4-brief 修复轮 1 · B，跟日历那句「拖动任务到别的日期……」
-                同一个待遇。**当时的理由是**：它描述的是拖拽这个鼠标独占的动作
-                （HTML5 drag-and-drop，触屏不触发、没有键盘路径），看不到这句话
-                的人本来就做不了这个动作。不用群青：这是写给人看的界面文案，
-                不是 AI 产出，跟 .ink-trash-note 同一个「安静次要文字」的角色。
+            {/* **这句只在 `time-priority` 下需要**：那一套的格子叫「重要 / 紧急」，
+                而这两个词分别是从哪根轴算出来的，光看格子看不出来。默认那套的
+                四格现在直接叫 高 / 中 / 低 / 没定优先级——名字本身就是那句话，
+                原来常驻的「四格就是四档优先级，跟截止时间无关」跟着删了：
+                需要一句说明来纠正格名，说明的是格名在说谎，不是说明多余。
+                判据和整段考证在 `lib/cells.ts` 的 `QUADRANT_TITLE`。
+                单独一个类名、不蹭 `.ink-empty-note`：那个专指「这里空空如也」，
+                而这句话不管有没有任务都要在（理由跟 `.ink-trash-note` 那处一字
+                不差，口吻也照它）。 */}
+            {quadRule === 'time-priority' && (
+              <p className="ink-quadrant-note">
+                纵轴是优先级（高 / 中算重要），横轴按截止时间算出来：3 天内到期、含已过期算紧急。横轴拖不动。
+              </p>
+            )}
+            {/* 这句拖拽说明留在原生 `title` 里（悬停才弹出），不常驻占一行：它
+                描述的是拖拽这个鼠标独占的动作（HTML5 drag-and-drop，触屏不触发、
+                没有键盘路径），看不到这句话的人本来就做不了这个动作。不用群青：
+                这是写给人看的界面文案，不是 AI 产出，跟 .ink-trash-note 同一个
+                「安静次要文字」的角色。
 
-                **这段解释以前还写着「横轴（紧急与否）是按 due 算出来的只读坐标，
-                拖不动」——那已经不成立了。** 那个二维模型（重要 = priority >= 2，
-                紧急 = due 三天内）在向滴答清单靠齐那一轮整个退役：现在四格就是
-                四档优先级，`due` 不参与分格，四个格子都拖得动。见 lib/cells.ts
-                `QUADRANT_PRIORITY` 上面那段。`title` 的文案当时跟着改了，这段
-                注释没有。
-
-                **那句话原来装着两件事，现在按「鼠标独占与否」切开了：**
-                「拖到哪一格就是设成那一档」留在这个 `title` 里（触屏上根本拖不动，
-                看不到这句话的人本来就做不了这个动作）；而「四格 = 四档优先级」是
-                **怎么读这一屏**，跟输入设备无关，摆成上面那行常驻小字。
-
-                不切开的话，后半句在触屏上完全看不到，而屏幕上摆着看起来自相矛盾的
-                证据：一条「今天 20:00」到期的任务坐在「不紧急」格里，一条「明天」
-                到期的坐在「紧急」格里——只读标题的人有理由认为这是算错了。
-
-                两处**不重复**：这句 `title` 里不再跟着念一遍「高 / 中 / 低 / 无」，
-                上面那行已经说了。 */}
+                **这里以前装着两件事**。第二件——「四格 = 四档优先级」，讲的是
+                怎么读这一屏、跟输入设备无关——被切成上面那行常驻小字，因为触屏
+                上悬停不出 title，而屏幕上摆着看起来自相矛盾的证据（一条今天到期
+                的任务坐在「不紧急」格里）。**那件现在从这屏上拿掉了**：格子自己
+                就叫 高 / 中 / 低 / 没定优先级，读标题就读得出来，不需要一行字来
+                纠正格名（判据见 lib/cells.ts 的 `QUADRANT_TITLE`）。
+                `time-priority` 那套还留着常驻那句——那一套的格名说的是重要/紧急，
+                两根轴各自从哪儿算出来，光看格子看不出来。 */}
             <div
               className="ink-cells-2x2"
               /* 四格 = 四档优先级（仿滴答清单），所以四个格子都拖得动，落进
@@ -2424,9 +2734,11 @@ export function App() {
                 // 同一份 dragWiring，横向那道「同一行不改写 priority」的
                 // 守卫（下面 onDropTo）跟密度无关，不受影响。
                 density="row"
-                sections={sections}
+                // `TaskGrid` 要的是那个「按 editing 现算」的构造函数（正在编辑的
+                // 卡要留在原格里），所以包一层、不把它算成的数组换出去。
+                sections={(editing) => withQuadrantTriage(sections(editing), quadRule)}
                 // **四个格子都拖得动**：落进哪一格就是把优先级设成那一档
-                // （高/中/低/无），跟滴答清单一致。判据在 lib/cells.ts 的
+                // （高/中/低/没定），跟滴答清单一致。判据在 lib/cells.ts 的
                 // QUADRANT_PRIORITY。
                 //
                 // 原来那道「拖到同一行的另一格不发 PATCH」的守卫跟着退役了：
@@ -2442,8 +2754,7 @@ export function App() {
                   // 一格**，不能拿它当前的 priority 直接跟目标格的规范值比：
                   // priority 不等于 0/2 这两个规范值时（手动定过 1 或 3），跟规范值
                   // 比必然不相等，会被误判成「变了」而误发 PATCH——正是横向拖拽
-                  // 静默改写 priority 那个坑，见
-                  // .superpowers/sdd/2026-08-16-board-and-quadrant/final-review.md C1。
+                  // 静默改写 priority 那个坑（横向拖拽不该改 priority）。
                   //
                   // priority 那套规则下这两行是空转（四格四个不同的值，同格已经被
                   // TaskGrid 挡掉了），留着不分叉：两套规则一条代码路径。
@@ -2453,7 +2764,7 @@ export function App() {
                   // 类型上是 number——cast 到 Task['priority'] 收窄。
                   gridWiring.onPatch(id, { priority: p as Task['priority'] });
                 }}
-                empty={EMPTY_NO_TASKS}
+                empty={noTasksNote}
               />
             </div>
           </>
@@ -2463,7 +2774,7 @@ export function App() {
     all: () => withFilterBar(
       (editing) => allSections(tasks, now, editing),
       (sections, emptyFiltered) => (
-        <TaskGrid {...gridWiring} density={density} sections={sections} empty={EMPTY_NO_TASKS} emptyFiltered={emptyFiltered} />
+        <TaskGrid {...gridWiring} density={density} sections={sections} empty={noTasksNote} emptyFiltered={emptyFiltered} />
       ),
       { groupable: true },
     ),
@@ -2486,10 +2797,11 @@ export function App() {
              都在，而且都归好了」——在一个刚装好、零任务零清单的实例上它是假的，
              还顺带恭维了一件他没做过的事。空实例上实测确认：这一屏只有这一句，
              没有下一步。
-             分档用的就是文件靠前那两句现成的：真的还没有 → `EMPTY_NO_TASKS`；
+             分档用的就是文件靠前那几句现成的：真的还没有 → `noTasksNote`
+             （还没读到过的那一段不能说「还没有任务」，见它上面那段）；
              有任务、只是没有一条落在这一屏 → 原来那句。`emptyFiltered`（「有东西
              但被筛选挡住了」）是第三种，不混。 */
-          empty={tasks.length === 0 ? EMPTY_NO_TASKS : '没有未归类的任务——都有归处了'}
+          empty={tasks.length === 0 ? noTasksNote : '没有未归类的任务——都有归处了'}
           emptyFiltered={emptyFiltered}
         />
       ),
@@ -2504,6 +2816,7 @@ export function App() {
     ),
     source: () => (
       <TaskBoard
+        preRead={preRead}
         // 「按来源」原来是全站唯一选不中的视图。接上之后 Shift 在这一屏退化成
         // 单点加减，一次选一排交给组头那颗「选中这 N 条」——理由写在
         // TaskBoard.tsx GroupSection 里那段注释。
@@ -2562,6 +2875,7 @@ export function App() {
         // 回顾共用单飞锁，按钮 tooltip 已经说清「AI 总览运行时拆解/回顾会排队」。
         onBoard={() => guard(() => api.board())}
         reviewing={agent?.state === 'running'}
+        aiBlocked={aiBlocked}
       />
     ),
     // 专注统计（仿滴答清单）。**不套 withFilterBar**：这一块回答的是「我的
@@ -2709,7 +3023,7 @@ export function App() {
    *
    * 「稍后」的代价是**可逆的、且只关于时间**：这几条本来就在等着做，晚十分钟
    * 再来一次。批量「完成」不是——它会把五条没做的事一起标成做完，而「完成」
-   * 在这个应用里是要连带改重复任务的下一次、连带完成子任务的（`undoDone`），
+   * 在这个应用里是要连带改重复任务的下一次、连带完成子任务的（`undoStatus`），
    * 一次误点就是一串假数据，撤销提示也只兜得住一条。所以批量那一行只给
    * 「稍后」和「知道了」；真要逐条结案，去列表上勾，那里勾错一条只错一条。
    *
@@ -2892,7 +3206,7 @@ export function App() {
   const pageTitle = viewTitle();
   useEffect(() => { setBaseTitle(pageTitle); }, [pageTitle]);
 
-  // 密度开关在视图标题栏里出不出现——`DENSITY_VIEWS` 那四个注册表视图，
+  // 密度开关在视图标题栏里出不出现——`DENSITY_VIEWS` 里那几项注册表视图，
   // 或者 `view` 是 `list:xxx`/`tag:xxx`（清单/标签，`scopedSections` 认的
   // 那两种前缀，跟上面 `viewTitle()` 判断同一件事、同一个口径）。
   //
@@ -2936,10 +3250,12 @@ export function App() {
   // 上一批留的口子正是「这里是一个扁平数组，加批量操作就是往里追加一段
   // spread，不用改 CommandPalette 本身（它的 Command 类型已经是扁平的）」。
   //
-  // 九个固定视图（NAV_VIEW_SPECS 前 9 项）带上数字键 hint——这是快捷键唯一
-  // 的可发现入口，不带的话没人知道有 1..9。第 10 项往后（四象限、习惯、专注统计、
-  // 纪念日、回顾）数字键够不到（keymap.ts 只认 '1'..'9'），不给 hint，但照样在
-  // 命令表里，命令面板本来就是它们的入口。
+  // **数字 hint 跟着侧栏上真看得见的那几项走**（`navHints`，判据是 `navDefs`），
+  // 不再是「注册表前 9 项」。这是快捷键唯一的可发现入口，不带的话没人知道有
+  // 1..9；而带上一个跳到别处的号，比不带更坏——三处（侧栏顺序、数字键、这张表）
+  // 必须说同一件事。第 10 项往后数字键够不到（`keymap.ts` 只认 '1'..'9'），
+  // 不给 hint，但照样在命令表里：命令面板本来就是它们的入口，而被设成隐藏的
+  // 那个去处也**照样跳得过去**、只是不带号。
   //
   // 清单和标签是运行时才知道有多少条的——这正是命令面板比数字键有用的地方
   // （brief 原话）：数字键是固定的 9 个，清单/标签数量不定，只有搜索式的
@@ -2957,7 +3273,36 @@ export function App() {
 
   // 真正喂给 Sidebar 的那一份，按显示方式筛过。**当前正看着的那个永远留下**，
   // 判据在 lib/navVisibility.ts。
-  const navDefs = visibleViews(registry, navModes, view, { tasks, inbox, now, insights });
+  const navDefs = visibleViews(registry, navModes, view, { tasks, inbox, now, insights, trash });
+  /**
+   * **数字键 `1`–`9` 绑的顺序 = 这一份，不是整份注册表。**
+   *
+   * 原来数字键查的是模块顶层的 `NAV_VIEW_SPECS`——**整份注册表，不过
+   * `visibleViews` 过滤**。而侧栏真正渲染的是上面这个 `navDefs`。于是用户在任何
+   * 一项上选「隐藏」（`SettingsModal` 里那份 navModes 设置），那一项从侧栏消失，
+   * **数字键的序号却不收缩**：按 `3` 跳到的是一个不在导航上的去处，命令面板上
+   * 标着「3」的那条屏幕上找不到对应行，而 `ShortcutHelp.tsx` 那句「切到导航上
+   * 第 1～9 个去处」直接变成假话。三处同时说谎，用户没有任何线索知道为什么。
+   *
+   * 滴答那边数字键绑在侧栏上**真实存在的条目**上——它是侧栏那一列的快捷方式，
+   * 侧栏显示什么就直接决定键位。滴答的显示状态是「显示 / 隐藏 / 有内容时显示」
+   * 三档，是**侧栏的显示状态**，键位跟它同源
+   * （`docs/dida365/用清单管理任务.md`，
+   * https://help.dida365.com/articles/6950654234933067776 ）。
+   *
+   * **为什么走 ref 而不直接用 `navDefs`**：键盘那个 useEffect 挂在这上面
+   * 好几千行之前，拿不到后面才算出来的 `navDefs`。ref 是这个仓库处理这类
+   * 「渲染期算出来、事件期才读」的老套路（`lastTaskViewRef`、`tasksRef`、
+   * `selectionRef` 都是它）。
+   */
+  // **第一层过滤 `SKIP_IN_NAV` 不能省。** `navDefs` 本身**不过**这一层——
+  // Sidebar 是自己在渲染前才跳掉「搜索结果」的（`Sidebar.tsx` 里那个
+  // `shownViews = viewDefs.filter((v) => !SKIP_IN_NAV.has(v.key))`）。
+  // 直接拿 `navDefs` 会把「搜索结果」算成第 1 项，于是按 `1` 跳到一个只在打字
+  // 之后才出现的去处。`views.test.tsx` 里那条顺序断言当场就红了，是它先发现的。
+  const shownNavDefs = navDefs.filter((v) => !SKIP_IN_NAV.has(v.key));
+  const navOrderRef = useRef<string[]>([]);
+  navOrderRef.current = shownNavDefs.map((v) => v.key);
   // 顶栏那条模块栏那几项。跟侧栏分的是同一份 navDefs，只是画在两个地方。
   // 竖栏上那两段（日历/看板/四象限 + 习惯/专注统计/纪念日/回顾），按 RAIL_GROUPS
   // 的顺序摊平，段与段之间画一道分隔（见 Rail.tsx 的 `items[].group`）。
@@ -3010,40 +3355,53 @@ export function App() {
   const lastTaskViewRef = useRef<string>('today');
   if (inTaskModule) lastTaskViewRef.current = view;
 
+  // **数字 hint 只发给屏幕上真看得见的前 9 项**（判据跟数字键同一份 `navDefs`）。
+  // 命令面板**保留全量条目**——「什么都能去」这件事本身是对的，被设成隐藏的
+  // 那个去处照样应该能跳过去，只是**不带数字**：标着一个跳到别处的号，
+  // 比不标更坏。这跟侧栏是两种序号（面板是「找东西」，侧栏是「按位置」），
+  // 滴答那边的指令菜单也没有把键位徽标跟侧栏序号混在一起
+  // （`docs/dida365/⌨桌面快捷键.md`，
+  // https://help.dida365.com/articles/6950372467189743616 ）。
+  const navHints = new Map(shownNavDefs.slice(0, 9).map((v, i) => [v.key, String(i + 1)]));
+
   const commands: Command[] = [
-    ...NAV_VIEW_SPECS.map((spec, i): Command => ({
+    ...NAV_VIEW_SPECS.map((spec): Command => ({
       key: spec.key,
       label: spec.label,
-      hint: i < 9 ? String(i + 1) : undefined,
+      group: 'nav',
+      hint: navHints.get(spec.key),
       run: () => navigate(spec.key),
     })),
     ...lists.filter((l) => !l.archived).map((l): Command => ({
       key: `list:${l.id}`,
       label: `清单「${l.name}」`,
+      group: 'list',
       run: () => navigate(`list:${l.id}`),
     })),
     ...tagList.map((t): Command => ({
       key: `tag:${t}`,
       label: `标签「${t}」`,
+      group: 'tag',
       run: () => navigate(`tag:${t}`),
     })),
     // 跟 N 同一个动作（brief 原话：「一条『新任务』（跑跟 N 同一个动作）」）——
     // 不是打开 TaskComposer 那个「新任务」按钮，两者的区别见 focusQuickCapture
     // 定义处的注释。
-    { key: 'new', label: '随手记', hint: 'N', run: focusQuickCapture },
+    { key: 'new', label: '随手记', hint: 'N', group: 'action', run: focusQuickCapture },
     // 快捷键一览也进命令面板：`?` 本身要先知道才按得出来，而这个应用的
     // 快捷键在别处一个字都没写。滴答清单同样两条路都通（`?` 和指令菜单里
     // 的「显示键盘快捷键」）。
     // 「新任务」也进面板。原来只有「随手记」那条——而这两个是建任务的两条
     // 路，一条在面板里、另一条既没有键也不在面板里，只在视图标题栏那颗按钮上。
-    { key: 'compose', label: '新任务', hint: 'C', run: openCompose },
-    { key: 'help', label: '快捷键', hint: '?', run: () => setHelpOpen(true) },
+    { key: 'compose', label: '新任务', hint: 'C', group: 'action', run: openCompose },
+    { key: 'help', label: '快捷键', hint: '?', group: 'action', run: () => setHelpOpen(true) },
     // 把全部过期的改到今天。**只在真有过期的时候出现**，跟批量那几条同一条
     // 上限：面板里不该摆一个「把 0 条改到今天」。数字写在标题里，因为这条的
     // 范围是全表、不是屏幕上那几条，得让人先看见它要动多少条。
     ...(overdueAll.length > 0 ? [{
       key: 'defer-overdue',
       label: `把 ${overdueAll.length} 条过期的改到今天`,
+      group: 'action' as const,
       run: () => confirmDeferAllOverdue(overdueAll),
     }] : []),
     // 批量命令——选中非空时才出现（上限：一张都没选，面板里不该出现「删除
@@ -3061,7 +3419,7 @@ export function App() {
     // 一条条看：不需要再问的就收进来。这也是那几个单键的唯一出口——不进面板
     // 的话，它们只在 `?` 那张表里出现过一次。
     ...(selection.ids.size > 0 ? [
-      { key: 'batch-done', label: `把选中的 ${selection.ids.size} 条标成已完成`, hint: 'D', run: () => batchStatus('done') },
+      { key: 'batch-done', label: `把选中的 ${selection.ids.size} 条标成已完成`, hint: 'D', group: 'action' as const, run: () => batchStatus('done') },
       // **`clear`（去掉截止时间）不进面板**，虽然它同样「不需要再问」。它是这四档
       // 里唯一不可逆的一步（原来那个日期没别处记着，见 lib/reschedule.ts），而
       // 命令面板恰恰是最容易误触的入口：模糊搜索命中一条、回车就跑，中间没有
@@ -3071,11 +3429,12 @@ export function App() {
         key: `batch-due-${k}`,
         label: `把选中的 ${selection.ids.size} 条改到${RESCHEDULE_LABEL[k]}`,
         hint: { today: 'T', tomorrow: 'M', nextWeek: 'W' }[k as 'today' | 'tomorrow' | 'nextWeek'],
+        group: 'action',
         run: () => batchReschedule(k),
       })),
-      { key: 'batch-postpone', label: `把选中的 ${selection.ids.size} 条推迟 1 小时`, run: () => batchPostpone(POSTPONE_MINUTES) },
-      { key: 'batch-delete', label: `删除选中的 ${selection.ids.size} 条`, run: confirmBatchDelete },
-      { key: 'batch-clear', label: '取消选择', run: clearSelection },
+      { key: 'batch-postpone', label: `把选中的 ${selection.ids.size} 条推迟 1 小时`, group: 'action' as const, run: () => batchPostpone(POSTPONE_MINUTES) },
+      { key: 'batch-delete', label: `删除选中的 ${selection.ids.size} 条`, group: 'action' as const, run: confirmBatchDelete },
+      { key: 'batch-clear', label: '取消选择', group: 'action' as const, run: clearSelection },
     ] : []),
   ];
 
@@ -3101,10 +3460,30 @@ export function App() {
       >跳到任务列表</button>
       {/* 最左那条竖图标栏（仿滴答清单第一栏）。**模块从顶栏搬到了这儿**——
           理由整段在 Rail.tsx 顶部。它在 .ink-page 这一层，跟「顶栏 + 内容」
-          那一整块并排，所以是整屏通高的，不是挤在某一栏里面。 */}
-      {railDefs.length > 0 && (
-        <Rail
-          items={[
+          那一整块并排，所以是整屏通高的，不是挤在某一栏里面。
+
+          **恒在，不看 `railDefs` 有没有东西**（这一处原来写的是
+          `railDefs.length > 0 &&`）。竖栏上摆的是 `views` + `more` 两段
+          （`lib/views.tsx` 里那个 `RAIL_GROUPS`），而「搜索」和「设置」两颗
+          按钮长在 Rail 里面（`Rail.tsx` 末尾、`<nav>` 外面的那一对）。
+          于是把这两段**全部**设成「隐藏」，竖栏整条不渲染 → **全应用没有任何
+          入口能打开设置**，而唯一能改回「显示」的地方就是设置本身。命令面板
+          里没有「设置」命令（下面那份 `commands` 没有），`lib/keymap.ts` 也没有
+          settings 动作，所以键盘也救不了——**只能手改 localStorage 的 `navModes`
+          才能复活**，是一条不可自愈的死路。
+
+          而触发它的动作恰恰是 `lib/navVisibility.ts` 顶部那段明确推荐的做法：
+          「把用不上的模块收起来」。
+
+          滴答那边设置挂在**头像 → 设置**上，是一条恒在的路径，不挂在任何一个
+          可关的模块栏上（`docs/dida365/用清单管理任务.md`，
+          https://help.dida365.com/articles/6950654234933067776 ）。
+
+          改恒在之后语义反而更顺：空栏时 mark 底下直接就是搜索/设置两颗。
+          `Rail` 本来就立得住空 items——`Rail.test.tsx` 里那条「空 items 不崩」
+          钉的正是这一条。 */}
+      <Rail
+        items={[
             // **「任务」那一颗排第一**（滴答那条竖栏上第一颗也是它）。它不对应
             // 注册表里任何一条去处，对应的是一整段——所以 `active` 得自己算：
             // 站在「全部」或者某个清单里时，它照样是「当前」。
@@ -3118,7 +3497,7 @@ export function App() {
               key: v.key,
               label: v.label,
               group: v.group,
-              count: v.count?.({ tasks, inbox, now, insights }),
+              count: v.count?.({ tasks, inbox, now, insights, trash }),
             })),
           ]}
           current={view}
@@ -3128,7 +3507,6 @@ export function App() {
           onSearch={() => setSearching(true)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
-      )}
 
       {/* **顶栏整条删了。** 它只装着一个字号「办事师爷」和右边那一串状态，
           却吃掉整屏最上面 68px——而应用名在窗口标题栏上已经有一份，竖栏顶上
@@ -3136,11 +3514,15 @@ export function App() {
           就大部分时间是空的，那一行有的是地方）。 */}
       <div className="ink-shell">
       <main className="ink-main">
-        {/* 竖排的横幅 + 那一行栏。**原来是 antd 的 <Space direction="vertical">**
-            ——换成自己的 div 是因为这一层现在要参与高度分配（下面那一行栏要吃掉
-            剩余高度、自己滚，见 theme.css 的 .ink-main-stack）。用 Space 的话得去
-            够 `.ant-space-item` 这种它的内部 class 才够得着那一项，那是随它版本
-            变的东西。间距一样是 16px，写在样式表里。 */}
+        {/* 竖排的横幅。**原来这一层里还装着下面那一行栏**——2026-10-08 把它挪到
+            外面去了（那一行栏现在是 `.ink-main` 的直接子项），因为这一层现在要
+            当**一摞报警的上限区**用：四条页面级横幅同框时它在手机上能长到 463px，
+            把第一条任务推出整块屏幕。上限、自己滚、下缘那道「下面还有」的渐隐，
+            都写在 theme.css 的 `.ink-main-stack` 上。
+            **再往里加东西之前先想清楚它该不该跟着滚**：那一行栏不跟着滚，
+            就是这一层只管报警这一摞的意思。**也别换回 antd 的 <Space>**——
+            那样要够 `.ant-space-item` 这种它的内部 class 才够得着其中一项，
+            那是随它版本变的东西（这一层现在还要挂上限，更不该押在那上面）。 */}
         <div className="ink-main-stack">
           {/* 常驻横幅，不是 toast——冲突不是「刚发生的一件事」，是「现在有一堆
               文件在那儿等你处理」，划过去就没了的提示不适合它。没有冲突时
@@ -3161,7 +3543,7 @@ export function App() {
               <strong>有 {broken.length} 个文件打不开</strong>
               <span>
                 {[...new Set(broken.map((c) => KIND_LABEL[c.kind] ?? c.kind))].join('、')}
-                里有读不出来的文件，<b>那几条现在不在界面上</b>——不是被删了，是这一份读不出来（多半是同步写到一半，或者手改时格式写坏了）。去数据目录看一眼那几个文件：修好格式它们就回来了，确认不要了再删掉。
+                里有读不出来的文件，<b>那几条现在不在界面上</b>——不是被删了，是这一份读不出来（多半是同步写到一半，或者手改时格式写坏了）。去数据目录看一眼这几个文件（<code className="ink-mono">{bannerFiles(broken)}</code>）：修好格式它们就回来了，确认不要了再删掉。
               </span>
             </div>
           )}
@@ -3171,7 +3553,7 @@ export function App() {
               <strong>同步冲突：{conflicts.length} 个文件</strong>
               <span>
                 {[...new Set(conflicts.map((c) => KIND_LABEL[c.kind] ?? c.kind))].join('、')}
-                里有同步客户端留下的冲突副本。<b>那几份改动没有进看板</b>——两台设备同时改了同一条时，同步软件会把其中一份另存成副本。去数据目录看一眼，自己决定留哪份、删掉另一份。
+                里有同步客户端留下的冲突副本。<b>那几份改动没有进看板</b>——两台设备同时改了同一条时，同步软件会把其中一份另存成副本。去数据目录看一眼这几个文件（<code className="ink-mono">{bannerFiles(conflicts)}</code>），自己决定留哪份、删掉另一份。
               </span>
             </div>
           )}
@@ -3253,6 +3635,7 @@ export function App() {
               type="warning"
               showIcon
               closable
+              closeText={BANNER_CLOSE}
               message={`该做了：${t.title}`}
               description={t.notes || undefined}
               /* 提醒弹出来的那一刻，人想做的事就那么几件：现在就去做、做完了、
@@ -3358,6 +3741,7 @@ export function App() {
               type="warning"
               showIcon
               closable
+              closeText={BANNER_CLOSE}
               message={`有 ${dueTasks.length} 件事到点了`}
               description={(
                 <div className="ink-due-list">
@@ -3458,6 +3842,7 @@ export function App() {
               type={agent.state === 'failed' ? 'error' : agent.state === 'skipped' ? 'warning' : 'success'}
               showIcon
               closable
+              closeText={BANNER_CLOSE}
               // 标题按这次跑的是哪件事走——以前写死「拆解」，回顾跑完也顶着
               // 「AI 拆解完成」，总览更是名实不符。**四件事各自的叫法在
               // lib/agentWord.ts**，不在这儿写三元表达式：加「拆细」那一次
@@ -3477,6 +3862,7 @@ export function App() {
               onClose={() => setAgent(null)}
             />
           )}
+        </div>
 
           {/* 手机宽度下这一行必须堆叠，而不是被两栏网格的内容最小宽度撑破——
               见计划文档「实施后的修正」表里 Row/Col 那一行。用 antd 的响应式 Row/Col
@@ -3539,6 +3925,7 @@ export function App() {
                 onSelect={(v) => { setNavOpen(false); navigate(v); }}
                 tasks={tasks}
                 insights={insights}
+                trash={trash}
                 inbox={inbox}
                 now={now}
                 lists={lists}
@@ -3653,7 +4040,11 @@ export function App() {
                     className="ink-view-nav"
                     aria-label="打开清单侧栏"
                     aria-expanded={navOpen}
-                    onClick={() => setNavOpen(true)}
+                    // **开关，不是单向的「开」**：原来这儿写的是
+                    // `setNavOpen(true)`，而同一颗按钮挂着 `aria-expanded`——
+                    // 对着读屏宣称一个自己做不到的状态。抽屉自己有遮罩和选中
+                    // 收起那两条路，但这一颗按下去应当就是它说的那件事。
+                    onClick={() => setNavOpen(!navOpen)}
                   >☰</button>
                 )}
                 {/* 用上面那个 `pageTitle`，不再单独调一次 `viewTitle()`：
@@ -3665,7 +4056,7 @@ export function App() {
                   {/* AI 那边挂着多少东西。原来在顶栏右边，顶栏删掉之后挪到这儿
                               ——三句全是「有才说」，大部分时间这一整块不渲染。 */}
                           <div className="ink-header-status">
-                  {agent?.state === 'running' && <span>AI {agentWord(agent.kind).running}……</span>}
+                  {agent?.state === 'running' && <span>AI {agentWord(agent.kind).running}…</span>}
           {/* 0 的时候整句不渲染，跟侧栏导航「计数为 0 不渲染数字」同一条规矩
                       （Sidebar.tsx 的 `count ? … : null`）：一个常驻的「收件箱 0 条
                       待拆解」是噪音，而且收件箱本来就大部分时间是空的——那才是正常
@@ -3965,7 +4356,6 @@ export function App() {
               </Col>
             )}
           </Row>
-        </div>
       </main>
       </div>
 
@@ -3998,6 +4388,7 @@ export function App() {
         count={selection.ids.size}
         lists={lists}
         onChangeStatus={batchStatus}
+        onRescheduleDay={batchRescheduleDay}
         onChangeList={(listId) => guard(async () => {
           await api.patchTasks([...selectionRef.current.ids], { listId });
           clearSelection();

@@ -11,7 +11,7 @@
   },
   "homepage": "https://github.com/rockbenben/shiye#readme",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=26.0.0"
   },
   "type": "module",
   "workspaces": [
@@ -30,13 +30,13 @@
     "dist:desktop": "npm run build && npm run build -w desktop && electron-builder --config desktop/electron-builder.yml --publish never"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.5.2",
-    "@testing-library/react": "^16.3.2",
-    "@vitejs/plugin-react": "^6.0.4",
-    "concurrently": "^10.0.5",
-    "jsdom": "^30.0.1",
+    "@capacitor/cli": "^8.5.3",
+    "@testing-library/react": "^16.3.3",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "jsdom": "^30.1.3",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",

@@ -1,4 +1,4 @@
-import { parseSmartInput } from './smartInput.js';
+import { parseIgnoring } from './smartInput.js';
 import type { List, Repeat, TaskContext } from '../types.js';
 import type { SmartOptions } from './smartInput.js';
 
@@ -195,19 +195,35 @@ export function smartDraft(
   raw: string,
   defaults: ComposeDefaults,
   now: Date,
-  opts: { smartOff?: boolean; presetToRemindAt: (due: string | null, minutes: number) => string | null } ,
+  opts: {
+    smartOff?: boolean;
+    ignore?: string[];
+    /**
+     * 他在「添加任务」那一行上**亲手挑过**的那两维（日期 chip / 清单 chip）。
+     * 那一行原来只有输入框，所以 `mergePicked` 的第一档（控件）一直是空的；
+     * 有了这两颗 chip，它就是那个「落到控件上的更明确的一次表达」，排在他打的
+     * 字前面——同一套顺序，不另立判据。
+     */
+    picked?: { due?: string | null; listId?: string | null };
+    presetToRemindAt: (due: string | null, minutes: number) => string | null;
+  } ,
 ): { title: string; due: string | null; reminders: string[]; repeat: Repeat | null; tags: string[]; listId: string | null; priority: 0 | 1 | 2 | 3; context: TaskContext | null } {
-  const smart = parseSmartInput(raw, now, defaults.smart);
+  // `ignore` 是「这几段别认」（提示条上被点掉的那些 chip）。它必须走到这里，
+  // 不能只改界面上那份：这条判据决定建出来的任务长什么样，界面撤了而这里没撤，
+  // 点掉「明天」之后建出来的还是明天截止——那比没有这颗 chip 更坏。
+  const smart = parseIgnoring(raw, now, defaults.smart, opts.ignore ?? []);
   const on = !opts.smartOff && smart.hits.length > 0;
   const title = (on ? smart.title : raw).trim();
-  // 第一个参数传 `defaults.due` 不是笔误：`mergeDue` 的第一条判据是「他在控件
-  // 里动过没有」，而这两条路**都没有日期控件**，所以永远是「没动过」——于是
-  // 它退到「标题里写出来的 > 预填的」，正是这里要的。
-  const due = mergePicked(defaults.due, defaults.due, on ? smart.due : null);
+  // `mergePicked` 的三档顺序是「控件 > 标题 > 预填」，而它**不会返回预填**——
+  // 所以没有挑过时，第一档要照旧填 `defaults.due`（原来那句「第一个参数传
+  // defaults.due 不是笔误」说的就是这件事，被 QuickAdd 那条预填测试钉着）。
+  // 挑过了就把挑的那个放进第一档：跟预填相同 = 不算挑（①），不同才算（①）。
+  const due = mergePicked(opts.picked?.due ?? defaults.due ?? null, defaults.due, on ? smart.due : null);
   return {
     title,
     due,
-    listId: defaults.listId,
+    // 清单同理：他在那颗 chip 上点过的，排到设置里的「默认清单」前面。
+    listId: opts.picked?.listId ?? defaults.listId,
     priority: defaults.priority,
     // 提醒：标题里认出来的最优先（他刚刚亲口说了几点），其次才是设置里的
     // 「默认提前多久」。**没有 due 就不落默认提醒**——没有截止时间就没有

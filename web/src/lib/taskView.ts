@@ -38,6 +38,86 @@ export const STATUS_LABEL: Record<Status, string> = {
 };
 
 /**
+ * 五个状态**各是什么意思**——一句话，挂在卡面那颗状态角标的 tooltip 上。
+ *
+ * ## 为什么要有它
+ *
+ * `STATUS_LABEL` 那段注释记着这个仓库最贵的那类缺陷：**同一个概念两处文案**，
+ * 五份手抄、前后抄错两次。而这一张表记的是一个更靠前的问题——**「搁置」和
+ * 「放弃」这两个词，光看字面分不出意思**。
+ *
+ * 它们的区别在本文件 `STATUSES` 上方那段注释里写得很清楚（搁置是暂时不做、还会
+ * 回来；放弃是决定不做了、但不删、以后回顾还看得见），**而那段注释只在源码里**。
+ * 界面上两个词并排出现，没有任何地方说明差异：一个刚上手的人只能在两个词之间
+ * 猜，猜错的那一下**还没有撤销**（`lib/undoStatus.ts` 只给「完成」做撤销）。
+ *
+ * 所以把这句人话从注释搬到界面上——**注释里的结论如果从没到过人眼前，它就只对
+ * 写它的人有用**。
+ *
+ * ## 为什么只写「搁置」和「已放弃」两条最长
+ *
+ * 「待办」「进行中」「已完成」三个词自解释，写长了是噪音。**短的那几条不是没有
+ * 解释，是解释等于重复字面**——tooltip 里弹一句「待办：还没开始」比不弹还啰嗦。
+ *
+ * ## 写成 `Record<Status, string>` 的原因
+ *
+ * 跟 `STATUS_LABEL`、`CONTEXT_LABEL` 同一条：`server/src/model.ts` 那个联合类型
+ * 里加一档而这里没跟上，**编译就红**，不会安静地漏掉一档。
+ */
+export const STATUS_HINT: Record<Status, string> = {
+  todo: '还没开始',
+  doing: '正在做',
+  done: '已经做完',
+  later: '暂时不做、还会回来。它不进「今天」和「接下来」，也不再提醒。',
+  abandoned: '决定不做了，但没删掉——以后回顾还看得见，也可以再重新开始。',
+};
+
+/**
+ * 优先级说全了叫什么。**跟 `STATUS_LABEL` 同一类东西**：一屏里凡是对着一档
+ * 优先级「说一句话」的地方——按优先级分组的组头、四象限那一格、AI 建议里那句
+ * 「优先级改成 X」——都得是同一串字。原来它在 `lib/grouping.ts` 和
+ * `lib/cells.ts` 各抄了一份，而 0 档一份写「没有优先级」、另一份写
+ * 「没定优先级」：同一个状态在相邻两屏两个名字，读的人会以为是两档。
+ *
+ * **0 档叫「没定优先级」而不是「没有优先级」**：这一档不是「比低还低」，是
+ * 这条还没被排过——名字要指向「谁还没做这件事」，所以四象限那一格才配带一颗
+ * 「定优先级」的按钮（`App.tsx` 的 `withQuadrantTriage`）。
+ *
+ * 表单里那颗选项写的是「无」（`TaskFields.tsx` 的 `PRI_LABEL_ALL`）——那是
+ * 四选一里跟 高/中/低 并排的短词，要的是宽度一致，不是另一个名字。
+ * 这一处**有意**不同，改的时候两边一起想；`statusLabel.guard.test.ts` 拦的是
+ * 第三份手抄的映射表。
+ */
+export const PRI_FULL_LABEL: Record<0 | 1 | 2 | 3, string> = {
+  3: '高优先级', 2: '中优先级', 1: '低优先级', 0: '没定优先级',
+};
+
+/**
+ * 每一个状态走得出去的那几步，**按「此刻最可能按的排在前」的顺序**——卡片档
+ * 卡面只摆第一项（其余收进 `⋯`），这个顺序因此是「卡面上露哪一颗」的判据，
+ * 不只是菜单里的摆法。
+ *
+ * **住在这儿、跟 `STATUS_LABEL` 挨着**：读它的不止卡片。`⋯` 菜单那份是卡片
+ * 和紧凑行共用的（`lib/taskMenu.ts`），划手那份是 `TaskCard.tsx` 的 `SWIPE`，
+ * 三条通路必须来自同一张表——状态机写第二份的那天起就开始各说各话。
+ *
+ * 「搁置」从 todo/doing 都能进——AI 拆出来一条暂时不想做的，不用先开始再退回
+ * 才能搁置；从搁置回来一律是 todo（规格原话「从搁置回来就是改回 todo」），
+ * 不直接跳回 doing。
+ */
+export const STATUS_MOVES: Record<Status, Array<{ label: string; to: Status }>> = {
+  todo: [{ label: '开始', to: 'doing' }, { label: '搁置', to: 'later' }],
+  doing: [{ label: '完成', to: 'done' }, { label: '退回', to: 'todo' }, { label: '搁置', to: 'later' }],
+  done: [{ label: '重开', to: 'todo' }],
+  // 「放弃」只从搁置这里走得到——不给待办/进行中各摆一颗：那两行本来就窄
+  // （卡片最窄 358px），而「不做了」几乎总是先经过「暂时不做」。想直接放弃
+  // 一条刚建的任务，先点「搁置」再点「放弃」，两步。
+  later: [{ label: '恢复待办', to: 'todo' }, { label: '放弃', to: 'abandoned' }],
+  // 仿滴答清单：「已放弃的任务还可以标记重新开始，计划临时有变也没关系」。
+  abandoned: [{ label: '重新开始', to: 'todo' }],
+};
+
+/**
  * 情境的中文名。**全站只此一份**——编辑表单的下拉、筛选栏那一维、人话预览、
  * 卡片上那个小记号、AI 建议里那句「情境改成 X」，读的都是这一份。理由跟上面
  * `STATUS_LABEL` 那段一模一样：文案抄第二份的那天起，两处就开始各自漂。
@@ -531,6 +611,31 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
 /**
+ * 这条任务**从哪一刻起算过期**。没过期返回 `null`；过期了但时刻解不出来
+ * 返回 `NaN`（那是「确实欠着、说不出从哪天开始」，跟「没过期」不是一件事，
+ * 不能都折成 `null`）。
+ *
+ * 参照的时刻跟 `isTaskOverdue` 走同一条路：`due` 过了就看 `due`，否则看那条
+ * 更早某天已经响过的提醒（只设提醒、没设 `due` 的任务）。
+ *
+ * 抽出来是因为有两处要算同一件事：下面 `overdueLabel` 那句「欠了多久」，和
+ * 组头那句「最久的 3 天」（`longestOverdueHint`）——两份判据各写一遍的话，
+ * 卡上说的多久和组头说的最久会不是同一批任务算出来的。
+ */
+export function overdueAt(t: Task, now: Date): number | null {
+  if (!isTaskOverdue(t, now)) return null;
+  const since = isOverdue(t, now) ? t.due : firstReminderAt(t);
+  return since ? Date.parse(since) : NaN;
+}
+
+/** 欠了多久，一句话。`brief` 那一档只报时长（「3 天」），不带「过期」两个字。 */
+export function formatOverdue(ms: number, brief = false): string {
+  if (ms < HOUR) return '刚过期';
+  const n = ms < DAY ? Math.floor(ms / HOUR) : Math.floor(ms / DAY);
+  return `${brief ? '' : '过期 '}${n} ${ms < DAY ? '小时' : '天'}`;
+}
+
+/**
  * 过期了多久，一句话。没过期返回 `null`。
  *
  * 补的是卡片上那个记号的一个空洞：它一直只写「已过期」——**欠了一小时和欠了
@@ -538,28 +643,62 @@ const DAY = 24 * HOUR;
  * 被看见的，「多久」正是决定先干哪个的那半句。滴答清单那边的做法是日期本身
  * 就写成「昨天」这种相对说法，同一个意思。
  *
- * 参照的时刻跟 `isTaskOverdue` 走同一条路：`due` 过了就看 `due`，否则看那条
- * 更早某天已经响过的提醒（只设提醒、没设 `due` 的任务）。`due` 还没到时
- * `isTaskOverdue` 直接是 false，这个函数第一行就回 `null`，走不到下面。
- * **那两支各自都已经
- * 解析过一次时刻**（`isOverdue`/`isReminderOverdue` 的 `Number.isNaN` 判断），
- * 所以下面那个 `已过期` 兜底照理走不到——留着是因为这两支的判据在别处，
- * 哪天它们放宽了，这里该退回一句最朴素的话，不是印一个 `NaN` 出来。
- *
  * 三档粒度：一小时内「刚过期」（写「过期 0 小时」是句废话），一天内报小时，
  * 再往上报天。天数按经过的毫秒整除，不按日历天：日历天要处理「昨天 23:00 到
  * 今天 01:00 算一天还是两小时」这种歧义，而经过时间没有歧义，也更能说明
  * 「欠了多久」。
+ *
+ * **`brief` 给「已经有一句话说了『过期』」的那些落点**：「已过期」那一组里
+ * 每张卡都写一遍「过期 3 天」，一组 19 张就是 19 遍，眼睛先扫到 19 个「过期」
+ * 才轮到任务本身。那一组里卡上只报时长，词由组头说（见 `agenda.ts` 的
+ * `dueSectionExtras`）。带不了的两个词照旧：「刚过期」「已过期」省掉「过期」
+ * 就什么都不剩了。
  */
-export function overdueLabel(t: Task, now: Date): string | null {
-  if (!isTaskOverdue(t, now)) return null;
-  const since = isOverdue(t, now) ? t.due : firstReminderAt(t);
-  const at = since ? Date.parse(since) : NaN;
+export function overdueLabel(t: Task, now: Date, brief = false): string | null {
+  const at = overdueAt(t, now);
+  if (at === null) return null;
+  // 解不出时刻的兜底：说得出「欠着」，说不出欠多久。上面那两支各自都已经
+  // 解析过一次（`isOverdue`/`isReminderOverdue` 的 `Number.isNaN` 判断），
+  // 这一支照理走不到——留着是因为那两支的判据在别处，哪天它们放宽了，
+  // 这里该退回一句最朴素的话，不是印一个 `NaN` 出来。
   if (Number.isNaN(at)) return '已过期';
-  const ms = now.getTime() - at;
-  if (ms < HOUR) return '刚过期';
-  if (ms < DAY) return `过期 ${Math.floor(ms / HOUR)} 小时`;
-  return `过期 ${Math.floor(ms / DAY)} 天`;
+  return formatOverdue(now.getTime() - at, brief);
+}
+
+/**
+ * 卡片上那颗过期记号的**两半**：`say` 是完整的一句（「过期 3 天」），`show` 是
+ * 屏幕上那半句（组头已经说过「已过期」时就是「3 天」）。
+ *
+ * 一个函数算出两份，是为了不让它们有一天只改到一半：省字的那条规则（只有带
+ * 数字的两档能省，「刚过期」「已过期」省了就什么都不剩）写在 `formatOverdue`
+ * 一处，这里只是拿完整那句去掉开头的「过期 」。
+ */
+export function overdueMark(t: Task, now: Date, brief: boolean): { show: string; say: string } | null {
+  const say = overdueLabel(t, now, false);
+  if (say === null) return null;
+  const show = brief ? say.replace(/^过期 /, '') : say;
+  return { show, say };
+}
+
+/**
+ * 一组过期任务里**最久的那一条欠了多久**，说成组头那半句「最久的 3 天」。
+ *
+ * 补的是「一组 19 张卡各说一遍『过期 N 天』」换来的那个空洞：词省进组头之后，
+ * 「这一组里哪条欠得最久」原来只能逐张数才知道，现在放在唯一该放的地方。
+ *
+ * 整组都不到一小时不给这句话——「最久的 刚过期」不成话，而那种时候组头那个
+ * 计数已经说完了要说的。
+ */
+export function longestOverdueHint(rows: Task[], now: Date): string | undefined {
+  let oldest = Infinity;
+  for (const t of rows) {
+    const at = overdueAt(t, now);
+    if (at !== null && !Number.isNaN(at)) oldest = Math.min(oldest, at);
+  }
+  if (!Number.isFinite(oldest)) return undefined;
+  const ms = now.getTime() - oldest;
+  if (ms < HOUR) return undefined;
+  return `最久的 ${formatOverdue(ms, true)}`;
 }
 
 /**
@@ -740,7 +879,7 @@ export function countStale(tasks: Task[], now: Date): number {
  *
  * ## 第五条（`startAt` 落在今天）是补的，补的是一个没兑现的承诺
  *
- * 在这之前，`startAt` 只在三个地方起作用：卡片上一个「9 月 1 日 开始」的记号、
+ * 在这之前，`startAt` 只在三个地方起作用：卡片上一个「9月1日 开始」的记号、
  * 「接下来」里那一组默认折起来的「还没开始」、以及推荐面板把它们排除
  * （`suggest.ts`）。**三处全是「现在别烦我」那一半**，没有一处负责另一半。
  *
@@ -775,10 +914,86 @@ export function countStale(tasks: Task[], now: Date): number {
  * **改这里必须同时改 `server/src/dailySummary.ts` 的 `summaryTasks`**，
  * 两边的口径由 `todayParity.guard.test.ts` 逐条对账。
  */
+/** 两个时刻之间差几个**本地日历天**（同一天算 0）。按年/月/日算，不是拿
+ *  24 小时去除——跟上面 `isSameLocalDay` 同一条理由：「第几天」是人眼里的
+ *  日历格子数，23:59 开始和第二天 00:01 是两天。 */
+function localDayGap(a: Date, b: Date): number {
+  const day = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  return Math.round((day(b) - day(a)) / 86_400_000);
+}
+
+/**
+ * 这件事是不是「要做好几天」的那一种：`startAt` 和 `due` **都在**、都解析得了、
+ * 落在不同的本地日历天，而且 `startAt` 早于 `due`。解不出来就是 null。
+ *
+ * ## 为什么两端都得有
+ *
+ * 上面 `isInTodayView` 那段注释里专门论证过「为什么是『就今天这一天』，不是
+ * 『已经开始了的都算』」：只认开始时间，三个月前开始、至今没做完又没有截止日
+ * 期的任务会永远赖在「今天」。这一条**不跟那个论证打架**——它要的正是那个
+ * 上界：`due` 就是「做到哪天为止」，区间是闭的，到截止那天它已经作为「今天要
+ * 清掉的一条」在场，之后靠「过期」那条既有判据继续在场。
+ *
+ * 所以少了任何一端都不是跨天：只有 `startAt` 仍是「就那一天」（第五条判据，
+ * 不变），只有 `due` 仍是「截止那天」。`startAt` 晚于 `due` 是一句自相矛盾的话，
+ * 当成没有区间——跟 `calendar.ts` 里「`endAt <= startAt` 当成没有时间段」同一
+ * 条处理方式。
+ *
+ * 门槛是 `>= 2` 不是 `>= 1`：**今天开始、明天就截止的那条只有一天可做**，
+ * 它不是「要做好几天」，那是「明天到期」——卡片上「明天截止」那半句已经说尽
+ * 了，再挂一个「第 1 天 · 共 1 天」是把一件事说两遍。
+ */
+function spanOf(t: Task): { from: Date; total: number } | null {
+  if (!t.startAt || !t.due) return null;
+  const from = new Date(Date.parse(t.startAt));
+  const to = new Date(Date.parse(t.due));
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return null;
+  const total = localDayGap(from, to);
+  return total >= 2 ? { from, total } : null;
+}
+
+/** 今天在这件事的第几天。不在区间里（还没开始、已经过了截止那天、或者压根
+ *  不是跨天的）就是 null。
+ *
+ *  **区间是 `[第 1 天, 第 total 天)`——截止那天不算在内**：那天它是「今天要
+ *  做完的一条」，该由 `due` 那条判据收，而不是挂一个「第 8 天 · 共 8 天」
+ *  把它说成还早。 */
+export function dayInSpan(t: Task, now: Date): { day: number; total: number } | null {
+  const s = spanOf(t);
+  if (!s) return null;
+  const i = localDayGap(s.from, now);
+  return i >= 0 && i < s.total ? { day: i + 1, total: s.total } : null;
+}
+
+/** 这条任务今天值不值得挂「在做第几天」那个记号。 */
+export const isMultiDayToday = (t: Task, now: Date): boolean => dayInSpan(t, now) !== null;
+
+/**
+ * 卡片和行上那一句。**字串只在这儿拼一份**：两处各写一遍「第 N 天」是这个
+ * 仓库为「同一个概念两处文案」栽过的那次亏（改名的时候只改得动一处）。
+ *
+ * `brief` 给行档：那一列已经站着旗、🔁、⏳ 五六个记号，整句「第 3 天 · 共 12 天」
+ * 会把该看的截止时间挤进右缘那道 mask 里静默消失（同 `TaskRow.tsx` 里习惯打卡
+ * 那个记号的裁决）。行档只留「第 3 天」，**整句走 `title`/`aria-label`**——悬停
+ * 和读屏听到的跟卡档屏幕上写着的是同一份。
+ */
+export const multiDayLabel = (t: Task, now: Date, brief = false): string | null => {
+  // 了结的不挂：一条已完成/搁置的活摆在「已完成」那一列上写着「在做第 3 天」，
+  // 是一句假话。`dayInSpan` 保持纯日期事实（哪天算哪天），要不要说这句话在这儿判。
+  if (isSettled(t)) return null;
+  const m = dayInSpan(t, now);
+  if (!m) return null;
+  return brief ? `第 ${m.day} 天` : `第 ${m.day} 天 · 共 ${m.total} 天`;
+};
+
 export function isInTodayView(t: Task, now: Date): boolean {
   if (isSettled(t)) return false;
   return isOverdue(t, now) || hasReminderOn(t, now) || isSameLocalDay(t.due, now)
-    || isReminderOverdue(t, now) || isSameLocalDay(t.startAt, now);
+    || isReminderOverdue(t, now) || isSameLocalDay(t.startAt, now)
+    // 第六条：跨天的那几条，区间内**每一天**都算今天。前五条里没有一条管得着
+    // 它们——一条 8 号开始、20 号截止的活，原来只在 8 号露一次脸，中间那 11 天
+    // 它哪儿都不在。
+    || isMultiDayToday(t, now);
 }
 
 /**

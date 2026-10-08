@@ -21,7 +21,7 @@ const TASKS = [task({ id: 'T1', title: '写周报' })];
 
 describe('ReviewView', () => {
   it('没有 insight 时一行安静的字', () => {
-    render(<ReviewView insights={[]} tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(screen.getByText(/还没有回顾/)).toBeTruthy();
   });
 
@@ -30,7 +30,7 @@ describe('ReviewView', () => {
     // 只是把渲染整个清空的话两条都不会显示——两种退化实现都得被这条测试逮到。
     render(<ReviewView
       insights={[ins('a', { dismissedAt: '2026-08-13T01:00:00.000Z' }), ins('b')]}
-      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(screen.queryByText('a 的正文')).toBeNull();
     expect(screen.getByText('b 的正文')).toBeTruthy();
   });
@@ -38,7 +38,7 @@ describe('ReviewView', () => {
   it('点「知道了」带上这条的 id，不会误触 onOpen', () => {
     const onDismiss = vi.fn();
     const onOpen = vi.fn();
-    render(<ReviewView insights={[ins('a')]} tasks={[]} onDismiss={onDismiss} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[ins('a')]} tasks={[]} onDismiss={onDismiss} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     fireEvent.click(screen.getByRole('button', { name: '知道了' }));
     expect(onDismiss).toHaveBeenCalledWith('a');
     expect(onOpen).not.toHaveBeenCalled();
@@ -48,7 +48,7 @@ describe('ReviewView', () => {
     const onOpen = vi.fn();
     const onDismiss = vi.fn();
     render(<ReviewView insights={[ins('a', { taskIds: ['T1'] })]}
-                       tasks={TASKS} onDismiss={onDismiss} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+                       tasks={TASKS} onDismiss={onDismiss} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     fireEvent.click(screen.getByRole('button', { name: '写周报' }));
     expect(onOpen).toHaveBeenCalledWith('T1');
     expect(onDismiss).not.toHaveBeenCalled();
@@ -56,7 +56,7 @@ describe('ReviewView', () => {
 
   it('关联的任务已经被删掉了就不列它——不是显示一个裸 id', () => {
     render(<ReviewView insights={[ins('a', { taskIds: ['GONE'] })]}
-                       tasks={TASKS} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+                       tasks={TASKS} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(screen.getByText('a 的正文')).toBeTruthy();
     expect(screen.queryByText('GONE')).toBeNull();
   });
@@ -68,7 +68,7 @@ describe('ReviewView', () => {
     render(<ReviewView
       insights={[ins('k1', { createdAt: '2026-08-01T00:00:00.000Z' }),
                  ins('z9', { createdAt: '2026-08-13T00:00:00.000Z' })]}
-      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     const texts = screen.getAllByRole('listitem').map((li) => li.textContent ?? '');
     expect(texts[0]).toContain('z9 的正文');
     expect(texts[1]).toContain('k1 的正文');
@@ -82,7 +82,7 @@ describe('ReviewView', () => {
     render(<ReviewView
       insights={[ins('bad', { createdAt: '不是一个合法的时间' }),
                  ins('good', { createdAt: '2026-08-10T00:00:00.000Z' })]}
-      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+      tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     const texts = screen.getAllByRole('listitem').map((li) => li.textContent ?? '');
     expect(texts[0]).toContain('good 的正文');
     expect(texts[1]).toContain('bad 的正文');
@@ -90,13 +90,13 @@ describe('ReviewView', () => {
 
   it('kind 对应的标签会显示——这个分支删掉整行照样能通过其它断言，得单独盯着', () => {
     render(<ReviewView insights={[ins('a', { kind: 'stuck' })]}
-                       tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+                       tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(screen.getByText('卡住了')).toBeTruthy();
   });
 
   it('kind 是 note 时没有对应的中文标签，不渲染一个空标签元素', () => {
     const { container } = render(<ReviewView insights={[ins('a', { kind: 'note' })]}
-                       tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+                       tasks={[]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(container.querySelector('.ink-review-kind')).toBeNull();
     // 正文必须真的挂着 .ink-review-text 这个类——群青是靠这个类名接到正文上的
     // （见 theme.css.test.ts 那条断言），组件测试这边只查过文字有没有渲染，
@@ -115,40 +115,43 @@ describe('ReviewView：卡住的项目', () => {
   const kid = (id: string, status: Task['status']) => task({ id, parentId: 'p', status });
 
   it('底下一个能动的下一步都没有时，把这个项目列出来', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
-    expect(screen.getByRole('heading', { name: /卡住的项目/ }).textContent).toContain('1');
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
+    // 整句逐字：`toContain('1')` 对「卡住的项目 1」和「卡住的项目 1 个」给的是
+    // 同一个答案，那等于没有看过这一行——量词是这一屏句式的一部分（见
+    // `weeklyReview.test.ts` 里那条形状断言）。
+    expect(screen.getByRole('heading', { name: /卡住的项目/ }).textContent).toBe('卡住的项目 1 个');
     expect(screen.getByRole('button', { name: '装修' })).toBeTruthy();
   });
 
   it('**说清为什么算卡住**——光列标题的话，人点进去也看不出问题在哪', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(document.querySelector('.ink-review-stalled-why')?.textContent).toContain('一个能动的下一步都没有');
   });
 
   it('点标题打开那条任务', () => {
     const onOpen = vi.fn();
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'abandoned')]} onDismiss={vi.fn()} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'abandoned')]} onDismiss={vi.fn()} onOpen={onOpen} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     fireEvent.click(screen.getByRole('button', { name: '装修' }));
     expect(onOpen).toHaveBeenCalledWith('p');
   });
 
   it('还有能动的下一步就不列——那个项目没卡住', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'todo')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'todo')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(screen.queryByRole('heading', { name: /卡住的项目/ })).toBeNull();
   });
 
   it('**没有「知道了」**——这一条描述的是此刻的事实，人去动了它自己就没了，不该能被点掉', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(screen.queryByRole('button', { name: '知道了' })).toBeNull();
   });
 
   it('只有卡住的项目、一条 AI 观察都没有时，也不该显示空状态那句话', () => {
-    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[parent, kid('a', 'later')]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(screen.queryByText(/还没有回顾/)).toBeNull();
   });
 
   it('两样都没有才是空状态', () => {
-    render(<ReviewView insights={[]} tasks={[task({ id: 'x' })]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+    render(<ReviewView insights={[]} tasks={[task({ id: 'x' })]} onDismiss={vi.fn()} onOpen={vi.fn()} inbox={[]} now={NOW_REVIEW} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     expect(screen.getByText(/还没有回顾/)).toBeTruthy();
   });
 });
@@ -170,7 +173,7 @@ describe('ReviewView：这一周该过一遍的', () => {
         now={NOW}
         onDismiss={vi.fn()}
         onOpen={vi.fn()}
-        onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false}
+        onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null}
       />,
     );
     return onGo;
@@ -179,7 +182,7 @@ describe('ReviewView：这一周该过一遍的', () => {
   it('列出该看的那几行，点了切过去', () => {
     const onGo = show([task({ id: 'a', due: daysAgo(3) })]);
     expect(screen.getByRole('heading', { name: '这一周该过一遍的' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /收件箱还有 1 条没处理/ }));
+    fireEvent.click(screen.getByRole('button', { name: /1 条待拆解/ }));
     // 第二个参数是「跳过去之前先设成这个筛选」——收件箱那一行不带（它那个
     // 去处本来就只装那一类），所以是 undefined，不是「没传」。
     expect(onGo).toHaveBeenCalledWith('inbox', undefined);
@@ -196,7 +199,7 @@ describe('ReviewView：这一周该过一遍的', () => {
     render(
       <ReviewView
         insights={[]} tasks={[task({ id: 'a' })]} inbox={[]} now={NOW}
-        onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false}
+        onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null}
       />,
     );
     expect(screen.queryByRole('heading', { name: '这一周该过一遍的' })).toBeNull();
@@ -218,7 +221,7 @@ describe('ReviewView：清单那几行带着筛选跳', () => {
       <ReviewView
         insights={[]}
         tasks={[task({ id: 'a', waitingFor: '张老师', updatedAt: daysAgo(12) })]}
-        inbox={[]} now={NOW} onDismiss={vi.fn()} onOpen={vi.fn()} onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false}
+        inbox={[]} now={NOW} onDismiss={vi.fn()} onOpen={vi.fn()} onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /在等别人/ }));
@@ -231,7 +234,7 @@ describe('ReviewView：清单那几行带着筛选跳', () => {
       <ReviewView
         insights={[]}
         tasks={[task({ id: 'a', status: 'later', updatedAt: daysAgo(90) })]}
-        inbox={[]} now={NOW} onDismiss={vi.fn()} onOpen={vi.fn()} onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false}
+        inbox={[]} now={NOW} onDismiss={vi.fn()} onOpen={vi.fn()} onGo={onGo} onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /搁了超过/ }));
@@ -252,10 +255,11 @@ describe('ReviewView：让 AI 回顾一遍', () => {
     <ReviewView
       insights={[]} tasks={tasks} inbox={[]} now={NOW}
       onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()}
-      onReviewed={over.onReviewed ?? vi.fn()} onReview={over.onReview ?? vi.fn()} onBoard={vi.fn()} reviewing={over.reviewing ?? false}
+      onReviewed={over.onReviewed ?? vi.fn()} onReview={over.onReview ?? vi.fn()} onBoard={vi.fn()} reviewing={over.reviewing ?? false} aiBlocked={null}
     />,
   );
   const btn = () => screen.getByRole('button', { name: /让 AI 回顾一遍/ }) as HTMLButtonElement;
+  const boardBtn = () => screen.getByRole('button', { name: /AI 总览/ }) as HTMLButtonElement;
 
   it('有还挂着的任务：能点，点了调 onReview', () => {
     const onReview = vi.fn();
@@ -272,6 +276,48 @@ describe('ReviewView：让 AI 回顾一遍', () => {
     expect(btn().disabled).toBe(true);
     // 不留一颗没有解释的死按钮：置灰时旁边那句话要说出原因。
     expect(screen.getByText(/没什么可回顾/)).toBeTruthy();
+  });
+
+  /**
+   * 两颗按钮的门**不一样**，这一条钉的就是那道分界：回顾要挑挂着的事，全是
+   * 了结的就没意义；总览连做完的一起扫，表里有东西就有话说。
+   */
+  it('任务全了结了：回顾灰着，总览还能点', () => {
+    show([task({ id: 'a', status: 'done' })]);
+    expect(btn().disabled).toBe(true);
+    expect(boardBtn().disabled).toBe(false);
+  });
+
+  /**
+   * 零条任务时服务端两趟都拒（`app.ts` 里 `/api/review`、`/api/board` 那两道
+   * 「没内容就不起那一趟」）。那颗能点的按钮点了只会得到一句拒绝，而拒绝来得
+   * 比旁边那句话晚——所以这一屏两颗都灰，而指路要改口，不能再指着上一状态那句
+   * 「点『AI 总览』可以扫一眼现状」（在这儿它指的是一颗按不动的按钮）。
+   *
+   * **判据是「指路不许指向按不动的东西」，不是「那句话里要有『添加任务』三个字」。**
+   *
+   * 旧断言 `getByText(/添加任务/)` 把**一条具体措辞**当成了判据，而那条措辞本身
+   * 就是错的：回顾屏顶上摆的是默认关着的 `composerNode`（`App.tsx` 里注入的那个），
+   * `canQuickAdd('review')` 是 false——`QUICKADD_VIEWS`（`App.tsx` 里那份名单）里
+   * 没有回顾，`QUICKADD_AT_TOP` 里也没有。**屏幕上没有那一行**，
+   * 那句话指着一样不存在的东西。这正是本仓库 `App.tsx` 顶部那段正本
+   * （「屏幕上说一句做不到的话，比只报告『没有』更糟」）要治的病，也是
+   * `EMPTY_NO_TASKS` 刻意不指认控件、认不出的去处守了两遍的那件事。
+   *
+   * 所以新文案指「C」和竖栏「任务」——**两条此刻都真的走得通**：按 C 走的是
+   * `openCompose`，不经过视图，跟回顾在不在 `QUICKADD_VIEWS` 里无关。
+   * 下面这两条断言因此钉的是那个原则本身：既不许指向灰掉的总览，也不许指向
+   * 屏幕上没有的输入行。
+   */
+  it('一条任务都没有：两颗都灰，那句话既不指向灰掉的总览、也不指向不存在的输入行', () => {
+    show([]);
+    expect(btn().disabled).toBe(true);
+    expect(boardBtn().disabled).toBe(true);
+    expect(screen.queryByText(/扫一眼现状/)).toBeNull();
+    // 指路必须落在两条此刻走得通的路之一上
+    expect(screen.getByText(/按「C」或竖栏「任务」/)).toBeTruthy();
+    // 屏幕上没有「上面那行添加任务」，那句话也就不许再提它
+    expect(screen.queryByText(/上面那行/)).toBeNull();
   });
 
   /**
@@ -322,7 +368,7 @@ describe('ReviewView：卡住的项目上那颗「看过了」', () => {
     render(<ReviewView
       insights={[]} tasks={tasks} inbox={[]} now={NOW_REVIEW}
       onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()}
-      onReviewed={onReviewed} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+      onReviewed={onReviewed} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     return onReviewed;
   };
 
@@ -382,7 +428,7 @@ describe('ReviewView：这一周的进出', () => {
     <ReviewView
       insights={[]} tasks={tasks} inbox={[]} now={NOW}
       onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()}
-      onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />,
+      onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />,
   );
   const section = () => document.querySelector('.ink-review-pace') as HTMLElement | null;
 
@@ -487,14 +533,16 @@ describe('ReviewView：一拖再拖', () => {
     render(<ReviewView
       insights={[]} tasks={tasks} inbox={[]} now={NOW_REVIEW}
       onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()}
-      onReviewed={onReviewed} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+      onReviewed={onReviewed} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     return onReviewed;
   };
   const section = () => document.querySelector('.ink-review-postponed') as HTMLElement | null;
 
-  it('列出那几条，标题上带条数', () => {
+  it('列出那几条，标题上带条数（量词也算这一句的一部分）', () => {
     show([task({ id: 'a', title: '交房租', postponeCount: POSTPONE_MIN + 6 })]);
-    expect(screen.getByRole('heading', { name: /一拖再拖/ }).textContent).toContain('1');
+    // 这一节的标题跟上面清单里那一行说的是同一件事，两套读法就得让人在一屏里
+    // 换两次找数字的办法——所以量词钉住，不写 `toContain('1')`。
+    expect(screen.getByRole('heading', { name: /一拖再拖/ }).textContent).toBe('一拖再拖 1 条');
     expect(screen.getByRole('button', { name: '交房租' })).toBeTruthy();
   });
 
@@ -526,7 +574,7 @@ describe('ReviewView：一拖再拖', () => {
     render(<ReviewView
       insights={[]} tasks={[task({ id: 'a', title: '交房租', postponeCount: POSTPONE_MIN })]}
       inbox={[]} now={NOW_REVIEW} onDismiss={vi.fn()} onOpen={onOpen} onGo={vi.fn()}
-      onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} />);
+      onReviewed={vi.fn()} onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={null} />);
     fireEvent.click(screen.getByRole('button', { name: '交房租' }));
     expect(onOpen).toHaveBeenCalledWith('a');
   });
@@ -566,5 +614,37 @@ describe('ReviewView：一拖再拖', () => {
   it('只有这一节有内容时，不说「还没有回顾」', () => {
     show([task({ id: 'a', postponeCount: POSTPONE_MIN })]);
     expect(screen.queryByText(/还没有回顾/)).toBeNull();
+  });
+});
+
+/**
+ * 同「立即拆解」那一条：这两颗原来只按「有没有活儿」置灰，配置没配或连不上服务
+ * 时照样亮着。判据在 `lib/aiReady.ts`。
+ */
+describe('ReviewView：AI 跑不了的时候那两颗', () => {
+  const show = (aiBlocked: string | null) => render(
+    <ReviewView
+      insights={[]} tasks={TASKS} inbox={[]} now={NOW_REVIEW}
+      onDismiss={vi.fn()} onOpen={vi.fn()} onGo={vi.fn()} onReviewed={vi.fn()}
+      onReview={vi.fn()} onBoard={vi.fn()} reviewing={false} aiBlocked={aiBlocked}
+    />,
+  );
+  const btn = (name: RegExp) => screen.getByRole('button', { name }) as HTMLButtonElement;
+
+  it('回顾和总览两颗一起灰', () => {
+    show('还没配好 AI 接口，少了：密钥。');
+    expect(btn(/让 AI 回顾一遍/).disabled).toBe(true);
+    expect(btn(/AI 总览/).disabled).toBe(true);
+  });
+
+  it('**提示语优先说配置这条**——它是这一屏唯一能真正解开按钮的话；说「还没有任务」只是把原因往后挪一格', () => {
+    show('还没配好 AI 接口，少了：密钥。');
+    expect(screen.getByText(/还没配好 AI 接口/)).toBeTruthy();
+  });
+
+  it('跑得了的时候两颗都亮着', () => {
+    show(null);
+    expect(btn(/让 AI 回顾一遍/).disabled).toBe(false);
+    expect(btn(/AI 总览/).disabled).toBe(false);
   });
 });

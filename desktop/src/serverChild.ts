@@ -1,10 +1,55 @@
 import { spawn as spawnNode } from 'node:child_process';
 import type { ResolvedPaths } from './paths.js';
 
+/**
+ * 「spawn 压根没起来」时的原因。
+ *
+ * **「起不来」和「起来了又退了」是两回事**，前者只有 errno 能说清：进程都没
+ * 创建出来，没有退出码可看。而这一份原来被整个丢掉了（`child.on('error')` 只
+ * 接了个空回调），用户看到的只有「进程退出码 未知」——**可「起不来」恰恰是
+ * 最该说清楚的那一类**：文件不在（安装目录不完整）、系统不让建进程（多半被
+ * 安全软件拦了）……每一种的处置法都不一样。
+ *
+ * Electron 45 在同一个方向上加了 `app` 的 `child-process-gone` 事件带
+ * `systemErrorCode`——那条是给 renderer/utility 进程用的，**本仓这个服务是
+ * `node:child_process` spawn 的，不走那条事件**；Node 侧这个 errno 一直都在。
+ */
+export interface LaunchError {
+  /** errno 码：'ENOENT'（文件不在）/ 'EACCES'|'EPERM'（系统不让建进程）… */
+  code?: string;
+  /** 出错的那次系统调用。 */
+  syscall?: string;
+  /** 人话（Node 给的原始消息）。 */
+  message: string;
+}
+
+/**
+ * 一句话说清「为什么起不来」。
+ *
+ * **纯函数**：这句话会原样弹给用户，而 `EPERM` 那串 errno 谁都看不懂。
+ * 只认两个真正常见的码，其余原样透出 Node 的消息——**不猜**：猜错了比不猜
+ * 更坏（人会照着错的方向排查）。
+ */
+export function describeLaunchFailure(e: LaunchError): string {
+  switch (e.code) {
+    case 'ENOENT':
+      return '找不到服务入口文件（安装目录可能不完整）';
+    case 'EACCES':
+    case 'EPERM':
+      return '系统拒绝创建这个进程（多半被安全软件拦了）';
+    default:
+      return e.message;
+  }
+}
+
 export interface ChildHandle {
   stop(): void;
-  /** 子进程自己退出时回调（崩了还是被我们 kill 的）。 */
-  onExit(cb: (code: number | null, killedByUs: boolean) => void): void;
+  /**
+   * 子进程自己退出时回调：退出码、是不是我们杀的、**起不来时的原因**。
+   * 第三个参数平时是 `null`——「起来了又退了」看退出码就够，「压根没起来」
+   * 只有它说得清。
+   */
+  onExit(cb: (code: number | null, killedByUs: boolean, launchError: LaunchError | null) => void): void;
 }
 
 export interface StartOptions {
@@ -101,24 +146,30 @@ export async function startServer(o: StartOptions): Promise<ChildHandle | null> 
   // 还是「我们让它退的」——前者该告诉用户，后者不该。也拿它当 stop() 的幂等
   // 守卫，不用另开一个变量：两者本来就该同时置位，从不分叉。
   let killedByUs = false;
-  let cb: ((code: number | null, killedByUs: boolean) => void) | undefined;
+  let cb: ((code: number | null, killedByUs: boolean, launchError: LaunchError | null) => void) | undefined;
   // undefined = 还没退；退了之后存的是退出码，供 onExit() 晚注册时补发。
   let exited: number | null | undefined;
+  // 「起不来」的原因：只有 'error' 那条路会填（进程压根没创建出来）。
+  let launchError: LaunchError | null = null;
 
   // 'exit' 和 'error' 都要在 spawn 之后立刻挂，不能等 onExit() 被调用才挂：
   // EventEmitter 不重放，晚挂的监听器会错过这中间已经发生的事件——调用方
   // 可能在 await startServer() 和挂 onExit() 之间还 await 了别的事（比如
   // win.loadURL()），子进程要是这段时间里退出，这条消息就永远没人收到了。
-  const settle = (code: number | null) => {
+  const settle = (code: number | null, err?: NodeJS.ErrnoException) => {
     if (exited !== undefined) return; // 只处理一次：'error' 之后 Node 可能接着发 'exit'
     exited = code;
-    cb?.(code, killedByUs);
+    launchError = err ? { code: err.code, syscall: err.syscall, message: err.message } : null;
+    cb?.(code, killedByUs, launchError);
   };
-  child.on('exit', settle);
+  // **'exit' 的第二个参数是 signal（字符串），不是错误**——所以这里只接第一个
+  // 参数，错误只从 'error' 那条路进来（'exit' 时把 signal 传成 err 会让
+  // launchError 变成一个 signal 字符串）。
+  child.on('exit', (code) => settle(code));
   // spawn 失败（比如被杀软拦截进程创建）发的是 'error' 不是 'exit'：没有监听者
   // 的话会变成 uncaughtException，在 Electron 主进程里就是一次崩溃对话框，
   // 而不是「告诉用户服务崩了」。
-  child.on('error', () => settle(null));
+  child.on('error', (err: NodeJS.ErrnoException) => settle(null, err));
 
   return {
     stop() {
@@ -128,7 +179,7 @@ export async function startServer(o: StartOptions): Promise<ChildHandle | null> 
     },
     onExit(f) {
       cb = f;
-      if (exited !== undefined) f(exited, killedByUs); // 迟到也补发
+      if (exited !== undefined) f(exited, killedByUs, launchError); // 迟到也补发
     },
   };
 }

@@ -102,7 +102,7 @@ describe('视图注册表', () => {
     const today = findSpec('today')!;
     const inToday = task({ id: 'a', reminders: [{ at: NOW.toISOString(), firedAt: null }] });
     const later = task({ id: 'b', due: '2027-01-01T00:00:00.000Z' });
-    expect(today.count?.({ tasks: [inToday, later], inbox: [], now: NOW, insights: [] })).toBe(1);
+    expect(today.count?.({ tasks: [inToday, later], inbox: [], now: NOW, insights: [], trash: [] })).toBe(1);
   });
 
   it('「收件箱」的计数是**还没拆的**条数，不是收件箱总条数', () => {
@@ -112,6 +112,7 @@ describe('视图注册表', () => {
       inbox: [note({ id: 'a', processed: false }), note({ id: 'b', processed: true })],
       now: NOW,
       insights: [],
+      trash: [],
     });
     expect(n).toBe(1);
   });
@@ -164,7 +165,7 @@ describe('导航徽标跟视图数得一样', () => {
 
   const countOf = (key: string) => {
     const spec = VIEW_SPECS.find((v) => v.key === key)!;
-    return spec.count?.({ tasks: rows, inbox: [], now: NOW, insights: [] });
+    return spec.count?.({ tasks: rows, inbox: [], now: NOW, insights: [], trash: [] });
   };
 
   it('「全部」：徽标 = allSections 真的列出来的条数', () => {
@@ -191,7 +192,7 @@ describe('「回顾」的计数', () => {
     dismissedAt: null, ...over,
   });
   const n = (insights: Insight[]) =>
-    findSpec('review')!.count?.({ tasks: [], inbox: [], now: NOW, insights });
+    findSpec('review')!.count?.({ tasks: [], inbox: [], now: NOW, insights, trash: [] });
 
   it('数的是还没点过「知道了」的——那才是待办', () => {
     expect(n([insight({ id: 'a' }), insight({ id: 'b', dismissedAt: '2026-08-02T00:00:00.000Z' })])).toBe(1);

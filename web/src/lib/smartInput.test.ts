@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSmartInput } from './smartInput.js';
+import { parseIgnoring, parseSmartInput, smartSpanKey, type SmartOptions } from './smartInput.js';
 
 /**
  * 全程用**本地墙钟**造时刻，不用 ISO 字符串——这个模块认出来的「明天下午两点」
@@ -16,7 +16,7 @@ const NOW = local(2026, 8, 22, 10, 0);
 describe('parseSmartInput：什么都没认出来', () => {
   it('一句纯文字原样返回，hits 是空的——界面靠这个决定不出提示条', () => {
     const r = parseSmartInput('把冰箱清一遍', NOW);
-    expect(r).toEqual({ title: '把冰箱清一遍', due: null, remindAt: null, tags: [], repeat: null, context: null, hits: [] });
+    expect(r).toEqual({ title: '把冰箱清一遍', due: null, remindAt: null, tags: [], repeat: null, context: null, hits: [], spans: [] });
   });
 
   it('空串不炸', () => {
@@ -27,7 +27,7 @@ describe('parseSmartInput：什么都没认出来', () => {
   it('认走之后标题就空了（整句就是一个时间）：整份识别作废，原话还回去', () => {
     // 建一条没有标题的任务比不认这一次糟得多——他多半是在打字打到一半。
     expect(parseSmartInput('明天下午两点', NOW)).toEqual({
-      title: '明天下午两点', due: null, remindAt: null, tags: [], repeat: null, context: null, hits: [],
+      title: '明天下午两点', due: null, remindAt: null, tags: [], repeat: null, context: null, hits: [], spans: [],
     });
   });
 });
@@ -780,7 +780,7 @@ describe('parseSmartInput：表达不了的「第几个星期几」整句不认'
     '第一个周一开会',
   ])('%s：原话还回去，什么都不认', (text) => {
     expect(parseSmartInput(text, NOW2)).toEqual({
-      title: text, due: null, remindAt: null, tags: [], repeat: null, context: null, hits: [],
+      title: text, due: null, remindAt: null, tags: [], repeat: null, context: null, hits: [], spans: [],
     });
   });
 
@@ -1013,12 +1013,185 @@ describe('parseSmartInput：提前 N 提醒', () => {
   });
 });
 
-describe('临时复现：提前 N 提醒的空格', () => {
-  it('带空格的写法认不认得出来', () => {
-    for (const t of ['明天下午三点开会 提前 30 分钟提醒', '明天下午三点开会提前30分钟提醒', '明天下午三点开会 提前sss30分钟提醒']) {
-      const r = parseSmartInput(t, new Date(2026, 8, 3, 9));
-      console.log(JSON.stringify(t), '→ 标题:', JSON.stringify(r.title), '| remindAt:', r.remindAt, '| due:', r.due);
+/**
+ * `spans` 说的是**位置**：原话里哪几个字被这一次识别读走了。`hits` 说得出
+ * 「认出了明天」，说不出「明天」是第几个字——而界面要标的就是那几个字。
+ *
+ * 断言一律拿原话把区间还原成字（`spanText`），这样读起来是「哪几个字」而不是
+ * 一串下标；下标写错一个字，还原出来的词就对不上了。
+ */
+describe('parseSmartInput：spans——原话里被读走的是哪几个字', () => {
+  const shape = (raw: string, o: SmartOptions = {}) =>
+    parseSmartInput(raw, NOW, o).spans
+      .map((s) => `${raw.slice(s.start, s.end)}:${s.kind}${s.gone ? '' : '留'}`);
+
+  it('日期和钟点各标各的段', () => {
+    expect(shape('明天下午三点开会')).toEqual(['明天:date', '下午三点:time']);
+  });
+
+  it('重复规则吃的是「每周一」那三个字，不是整句', () => {
+    expect(shape('每周一 8 点晨跑')).toEqual(['每周一:repeat', '8 点:time']);
+  });
+
+  it('「半小时后」一次把日期和钟点说完，只标一段、算时刻', () => {
+    expect(shape('半小时后回头看牙')).toEqual(['半小时后:time']);
+  });
+
+  it('情境和标签也标；标签只标 `#界面` 那三个字符，前面那个空格不算', () => {
+    expect(shape('@电脑前 写周报')).toEqual(['@电脑前:context']);
+    expect(shape('写周报 #界面')).toEqual(['#界面:tag']);
+  });
+
+  it('「认了但不摘」那一档照样标，但说不摘走——那几个字明明还在标题里', () => {
+    expect(shape('明天下午三点开会', { stripDate: false })).toEqual(['明天:date留', '下午三点:time留']);
+    expect(shape('写周报 #界面', { stripTag: false })).toEqual(['#界面:tag留']);
+  });
+
+  it('「提前 N 提醒」没排上提醒时不算摘走：摘掉它等于把人写的字吃掉却什么也没做成', () => {
+    expect(shape('明天开会 提前 1 天提醒')).toEqual(['明天:date', '提前 1 天提醒:remind留']);
+    expect(shape('明天下午三点开会 提前 1 天提醒')).toEqual(['明天:date', '下午三点:time', '提前 1 天提醒:remind']);
+  });
+
+  it('整份识别作废（标题会被清空）时一个段都不标，原话整句还回去', () => {
+    expect(shape('明天下午两点')).toEqual([]);
+  });
+
+  it('什么都没认出来的句子没有段', () => {
+    expect(shape('把冰箱清一遍')).toEqual([]);
+    expect(shape('10 月 1 日国庆值班')).toEqual([]);
+  });
+
+  it('不变量：把摘走的那些段从原话里删掉、空白归一，剩下的就是 title', () => {
+    // 这条是 `spans` 全部的信用所在：标错了位置，删完就对不上标题。
+    // 「认了但不摘标签」那一档不在列——那一档标签是**接回末尾**的，位置本来就
+    // 变了，那是 `title` 的既有设计，不是这一段该说的话。
+    const raws = [
+      '明天下午三点开会', '每周一 8 点晨跑', '半小时后回头看牙', '@电脑前 写周报',
+      '写周报 #界面', '买牛奶 #购物 明天取', '下个月 15 号交房租', '大后天下午两点 拿快递',
+      '明天开会 提前 1 天提醒', '明天下午三点开会 提前 1 天提醒', '把冰箱清一遍',
+      '10 月 1 日国庆值班', '今天 18:30 前发钉钉给老板 #工作', '周五之前把报表交了',
+    ];
+    for (const raw of raws) {
+      for (const o of [{}, { stripDate: false }, { date: false }, { tag: false }, { date: false, tag: false }]) {
+        const r = parseSmartInput(raw, NOW, o);
+        const gone = r.spans.filter((s) => s.gone).sort((a, b) => a.start - b.start);
+        let cut = '';
+        let at = 0;
+        for (const g of gone) { cut += raw.slice(at, g.start); at = g.end; }
+        cut += raw.slice(at);
+        expect(cut.replace(/\s+/g, ' ').trim(), `${JSON.stringify(o)} ${raw}`).toBe(r.title);
+      }
     }
-    expect(true).toBe(true);
+  });
+
+  it('段与段不重叠、不越界，且都在原话范围内', () => {
+    for (const raw of ['明天下午三点开会 #工作', '每周一 8 点晨跑 @电脑前', '买牛奶 #购物 明天取']) {
+      const r = parseSmartInput(raw, NOW);
+      const sorted = [...r.spans].sort((a, b) => a.start - b.start);
+      for (let i = 0; i < sorted.length; i++) {
+        expect(sorted[i].start, raw).toBeGreaterThanOrEqual(0);
+        expect(sorted[i].end, raw).toBeLessThanOrEqual(raw.length);
+        expect(sorted[i].end, raw).toBeGreaterThan(sorted[i].start);
+        if (i > 0) expect(sorted[i].start, raw).toBeGreaterThanOrEqual(sorted[i - 1].end);
+      }
+    }
+  });
+});
+
+// ============================================================================
+// parseIgnoring：提示条上点掉某一段（batch9 I-1 的逐词取消）
+// ============================================================================
+
+/** 拿「那几个字」当把手取它的键——测试里要撤哪一段是人写的，不该再去数下标。 */
+function keyFor(raw: string, text: string): string {
+  const s = parseSmartInput(raw, NOW).spans.find((x) => raw.slice(x.start, x.end) === text);
+  if (!s) throw new Error(`夹具里「${raw}」没有认出「${text}」这一段，测试写得不对`);
+  return smartSpanKey(raw, s);
+}
+
+describe('parseIgnoring：撤掉某一段的识别，其余各段照认', () => {
+  it('一个都不撤（键为空）时跟 parseSmartInput 一字不差', () => {
+    const raw = '明天下午三点开会 #工作 @电脑前';
+    expect(parseIgnoring(raw, NOW, {}, [])).toEqual(parseSmartInput(raw, NOW));
+  });
+
+  it('撤掉「明天」：截止没了，那两个字回到标题里，标签和情境照认', () => {
+    const raw = '明天下午三点开会 #工作 @电脑前';
+    const r = parseIgnoring(raw, NOW, {}, [keyFor(raw, '明天')]);
+    // 撤的是「明天」那一段，「下午三点」还在——它自己就说出了一天的时刻，
+    // 于是截止落在**今天** 15:00。撤一段只少一段，不牵连别的段。
+    expect(r.due).toBe(iso(2026, 8, 22, 15, 0));
+    expect(r.title).toBe('明天开会');
+    expect(r.tags).toEqual(['工作']);
+    expect(r.context).toBe('computer');
+    // 提示条上那颗 chip 不该还在：spans 少这一段，其余三段照在。
+    // 按排序比：`spans` 是**按识别步骤**排的（情境→标签→重复→日期→时刻），
+    // 不是按原话位置，测试要说的只是「少了哪一段」。
+    expect(r.spans.map((s) => raw.slice(s.start, s.end)).sort())
+      .toEqual(['下午三点', '#工作', '@电脑前'].sort());
+  });
+
+  it('撤掉标签：#工作 原样留在标题里，tags 空', () => {
+    const raw = '明天下午三点开会 #工作';
+    const r = parseIgnoring(raw, NOW, {}, [keyFor(raw, '#工作')]);
+    expect(r.tags).toEqual([]);
+    // 只撤标签那一段：日期照认，「下午三点」+「明天」合起来是明天 15:00。
+    expect(r.title).toBe('开会 #工作');
+    expect(r.due).toBe(iso(2026, 8, 23, 15, 0));
+  });
+
+  it('撤掉情境：@电脑前 留在标题里，context 空', () => {
+    const raw = '给房东打电话 @联系人 明天';
+    const r = parseIgnoring(raw, NOW, {}, [keyFor(raw, '@联系人')]);
+    expect(r.context).toBeNull();
+    expect(r.title).toContain('@联系人');
+  });
+
+  it('一次撤两段也成立（撤的是同一颗 chip 之外的另一段时不互相干扰）', () => {
+    const raw = '明天下午三点开会 #工作';
+    const r = parseIgnoring(raw, NOW, {}, [keyFor(raw, '明天'), keyFor(raw, '#工作')]);
+    expect(r.tags).toEqual([]);
+    // 「下午三点」那段没被撤，它自己就够落一个截止（今天 15:00）——撤掉「明天」
+    // 不等于撤掉整次日期识别，那是这两段本来各自独立的意思。
+    expect(r.due).toBe(iso(2026, 8, 22, 15, 0));
+    expect(r.title).toBe('明天开会 #工作');
+    // 只剩「下午三点」那一段还被认着——撤两段之后提示条上就该只剩两颗 chip。
+    expect(r.spans.map((x) => raw.slice(x.start, x.end))).toEqual(['下午三点']);
+  });
+
+  /**
+   * 「明天下午两点」这种整句就是一个时间的，正本早就把整份识别作废了
+   * （`parseSmartInput` 里那句「认走之后标题空了：这不是一条任务，是一个时间」），
+   * 于是**没有 spans 可撤**。这条不是顺手加的兜底：它钉住「撤识别」这件事不会
+   * 在识别已经作废的原话上凭空造出一次识别来。
+   */
+  it('整句就是一个时间：本来就没有可撤的段，撤什么都等于没撤', () => {
+    const raw = '明天下午两点';
+    expect(parseSmartInput(raw, NOW).spans).toEqual([]);
+    expect(parseIgnoring(raw, NOW, {}, ['0|明天下午两点'])).toEqual(parseSmartInput(raw, NOW));
+  });
+
+  /**
+   * 这条是「键里带上那几个字」的**唯一证人**：删掉前面那几个字之后，被撤的那一段
+   * 的旧起点**正好落在另一个词上**——只按下标记的话，那次「别认」会静静地转给
+   * 「下午三点」，界面上什么都看不出来（那颗 chip 本来就不在了）。
+   */
+  it('改字之后旧起点撞上别的段：那次「别认」作废，不会转手撤掉另一个词', () => {
+    const raw = '明天下午三点开会 #工作';
+    const k = keyFor(raw, '明天');
+    const edited = '下午三点开会 #工作';
+    // 夹具自己要先成立：改完之后「下午三点」在原话上的起点就是「明天」原来的起点。
+    const moved = parseSmartInput(edited, NOW).spans.find((x) => edited.slice(x.start, x.end) === '下午三点');
+    expect(moved, '夹具不成立：改完之后「下午三点」没有落在旧起点上').toBeDefined();
+    expect(moved!.start, '夹具不成立：两者起点不同，这条测不到撞车').toBe(raw.indexOf('明天'));
+
+    const r = parseIgnoring(edited, NOW, {}, [k]);
+    expect(r.due, '「下午三点」被旧键悄悄撤掉了').toBe(iso(2026, 8, 22, 15, 0));
+    expect(r.title).toBe('开会');
+  });
+
+  it('撤不存在的键（比如那段已经不认了）等于什么都没撤', () => {
+    const raw = '把冰箱清一遍';
+    expect(parseIgnoring(raw, NOW, {}, ['0|把冰箱'])).toEqual(parseSmartInput(raw, NOW));
   });
 });

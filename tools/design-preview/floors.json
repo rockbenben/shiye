@@ -1,0 +1,406 @@
+[
+  {
+    "sel": ".ink-dt-top",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-searchmodal-input",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-nav-add",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-nav-add",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-nav-tag-act",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-nav-tag-act",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-nav-tag-rename input",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-slash-item",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-nav-tag",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-density-btn",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ant-picker-header.ant-picker-header button",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-page .ant-alert-close-icon",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-page .ant-alert-close-icon",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-list-select",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-habit-toggle",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-task-more",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-sel-check",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-sel-check",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-margin-note .ant-typography-expand",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-subtask.ant-checkbox-wrapper",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-subtask-edit",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-subtask-del",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-subtask-del",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-grid-action,\r\n.ink-group-select",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-review-todo-flat",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-review-link,\r\n.ink-review-dismiss",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-review-link,\r\n.ink-review-dismiss",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-set-navitem",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-sched-close",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-sched-tab",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-sched-select",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-sched-grouphead",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-sched-name",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-sched-move",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-sched-move",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-quadrant-rule-opt",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-trash-btn",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-trash-btn",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-more-summary",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-cal-compose",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-today-done-item",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-today-done-undo",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-cal-pref",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-search-jump",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-quickadd-more",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-quickadd-chip",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-quickadd-band",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-pri-btn",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-pri-btn",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-tag-x",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-tag-x",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-tag-input",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-repeat-select",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-repeat-interval input",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-repeat-preset",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-repeat-day",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-repeat-day",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-cal-nav button",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-cal-modesel",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-cal-pager button",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".fc-timegrid-axis-cushion",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".fc-daygrid-more-link",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".fc-daygrid-more-link",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".fc-daygrid-day-number",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".fc-event",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".fc-col-header-cell",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".fc-timegrid-more-link",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".fc-timegrid-more-link",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-cmd-input",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-cmd-item",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-batch-list-select",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-batch-tag-input",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-navmode-select",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-cd-date",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-cd-yearly",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-hstat-moonav",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-hstat-moonav",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-hstat-name",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-hstat-exp",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-hstat-exp",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-fstat-rank-name",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-suggest-name",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-groupsort-select",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-filter-waiting.ant-checkbox-wrapper",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-attach-open,\r\n.ink-attach-delete",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-attach-open,\r\n.ink-attach-delete",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-trow-check",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-trow-check",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-trow-more",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-trow-more",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-trow-handle",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-trow-handle",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-trow-menu .ink-move-btn",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-undo button",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-grid-fold",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-due-check",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-due-check",
+    "prop": "min-width"
+  },
+  {
+    "sel": ".ink-due-open",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-year-day",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-agenda-date",
+    "prop": "min-height"
+  },
+  {
+    "sel": ".ink-agenda-title",
+    "prop": "min-height"
+  }
+]

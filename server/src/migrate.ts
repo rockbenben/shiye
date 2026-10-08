@@ -1,7 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { isSafeId, writeOne } from './entityStore.js';
+import { isSafeId, renameIntoPlace, writeOne } from './entityStore.js';
 import { CONTEXTS, STATUSES } from './task.js';
 import { deviceConfigPath, type InboxItem, type Proposal, type Reminder, type Status, type Subtask, type Task, type TaskContext } from './store.js';
 
@@ -220,8 +220,13 @@ export function migrate(dir: string): { migrated: boolean; counts: Record<string
   }
 
   // 旧文件改名保留，**不删**。迁移出错时这是唯一的退路。
+  //
+  // **改名带重试**（`entityStore.ts` 的 `renameIntoPlace`）：Windows 上
+  // `renameSync` 会偶发 EPERM。上面那道「`.v1` 已存在就整体中止」的前置检查
+  // 仍然照旧——重试只对付 EPERM/EACCES/EBUSY，**目标已存在那种情况它照样
+  // 抛出去**（那道检查本来就跑在前面，根本走不到这里）。
   for (const f of [tasksFile, inboxFile, proposalsFile]) {
-    if (existsSync(f)) renameSync(f, `${f}.v1`);
+    if (existsSync(f)) renameIntoPlace(f, `${f}.v1`);
   }
 
   // meta.json 也要原子写：先写同目录 .tmp 再 rename，跟 entityStore.writeOne /
@@ -230,7 +235,9 @@ export function migrate(dir: string): { migrated: boolean; counts: Record<string
   // 更难自愈。
   const metaTmp = `${metaFile}.tmp`;
   writeFileSync(metaTmp, `${JSON.stringify({ schemaVersion: SCHEMA_VERSION }, null, 2)}\n`, 'utf8');
-  renameSync(metaTmp, metaFile);
+  // 同样带重试：这一步抖一下，服务**每次启动都死在同一行**（下次启动照样
+  // 读到半截或读不到 meta.json，于是又被当成「没迁移过」重跑一遍）。
+  renameIntoPlace(metaTmp, metaFile);
 
   return {
     migrated: hadAnything,

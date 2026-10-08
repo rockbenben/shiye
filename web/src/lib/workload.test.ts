@@ -63,4 +63,39 @@ describe('todayMetaLabel', () => {
   it('**做完的不算过期**——口径跟卡片上那个红标签同一条（isTaskOverdue）', () => {
     expect(todayMetaLabel([late({ status: 'done' }), soon()], NOW)).toBe('2 条');
   });
+
+  /**
+   * 跨天的那几条现在每一天都排在「今天」里，所以那一排分两档报数。
+   * `doing()` 是 8-20 开始、8-26 截止，今天（8-22）走到第 3 天。
+   */
+  describe('两档：今天要清的 / 在做着的', () => {
+    const doing = (over: Partial<Task> = {}) => task({ due: at(2026, 8, 26), startAt: at(2026, 8, 20), ...over });
+
+    it('两档都有就各报各的', () => {
+      expect(todayMetaLabel([soon(), doing(), doing()], NOW)).toBe('3 条（今天要清 1 条），另 2 条在做着');
+    });
+
+    it('欠着的债数在「今天要清」那一档，不会跑到「在做着」里去', () => {
+      expect(todayMetaLabel([late(), doing()], NOW)).toBe('2 条（今天要清 1 条，1 条已过期），另 1 条在做着');
+    });
+
+    it('整排都在做着时不报「今天要清 0 条」——那是句没人接着说的话', () => {
+      expect(todayMetaLabel([doing(), doing()], NOW)).toBe('2 条，都在做着');
+    });
+
+    /**
+     * **跨天那条的 `estimateMinutes` 不进「今天排得下吗」那个数字。** 那填的是
+     * 整件事的时长（「这个模块 6 小时」），今天这一段只是其中一天——加进来会把
+     * 一个下午说成排不下。
+     */
+    it('预计只数今天要清的那几条', () => {
+      expect(todayMetaLabel([soon({ estimateMinutes: 45 }), doing({ estimateMinutes: 300 })], NOW))
+        .toBe('2 条（今天要清 1 条），另 1 条在做着 · 预计 45 分钟');
+    });
+
+    it('到了截止那天就回到「今天要清」那一档——记号不挂了，数也不数进「在做着」', () => {
+      const dueDay = new Date(2026, 7, 26, 8);
+      expect(todayMetaLabel([task({ due: at(2026, 8, 26), startAt: at(2026, 8, 20) })], dueDay)).toBe('1 条');
+    });
+  });
 });

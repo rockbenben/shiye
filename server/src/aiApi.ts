@@ -80,7 +80,7 @@ export function scopeLine(scope: AgentScope): string {
  *
  * ## 为什么一个客户端就够，不用 subtitle-translator 那种 provider 注册表
  *
- * 那边 2124 行的注册表是因为它还要接 DeepL、Azure Translate、Yandex 这些
+ * 那边那份 provider 注册表是因为它还要接 DeepL、Azure Translate、Yandex 这些
  * **各说各话的机翻协议**。这边要的全是 LLM，而现在但凡是个 LLM 服务都提供
  * OpenAI 兼容端点——**Google AI Studio / Gemini 也有**
  * （`generativelanguage.googleapis.com/v1beta/openai/`），DeepSeek、通义、
@@ -156,7 +156,7 @@ export function extractJson(text: string): unknown[] {
     // 前后有闲话：从第一个方括号/花括号截到最后一个。
     const from = body.search(/[[{]/);
     const to = Math.max(body.lastIndexOf(']'), body.lastIndexOf('}'));
-    if (from < 0 || to <= from) throw new Error('AI 的回复里没有 JSON');
+    if (from < 0 || to <= from) throw new Error('AI 的回复里没有 JSON——多半是它多说了几句闲话；再拆一次，还不行就把模型换回设置里默认的');
     parsed = JSON.parse(body.slice(from, to + 1));
   }
 
@@ -166,7 +166,7 @@ export function extractJson(text: string): unknown[] {
     const vals = Object.values(parsed as Record<string, unknown>);
     if (vals.length === 1 && Array.isArray(vals[0])) return vals[0];
   }
-  throw new Error('AI 回的 JSON 不是数组');
+  throw new Error('AI 回的 JSON 不是数组——外面那层得只有一个键、值是数组（比如 {"tasks": [...]}）');
 }
 
 /** 读一份规则原文。缺文件时回空串而不是抛——少一份规则该由模型的产出去暴露，不该让整次调用死在读盘上。 */
@@ -345,23 +345,23 @@ export async function chat(cfg: AiConfig, messages: ReturnType<typeof buildMessa
     // 的内部措辞，而不是「我该改哪一格」。地址原样报出来——他能一眼看出是不是
     // 少了 `/v1`、端口写错了，或者本机那个模型压根没起。
     const name = (e as Error).name;
-    if (name === 'TimeoutError' || name === 'AbortError') throw new Error(`连 ${url} 超时了`);
+    if (name === 'TimeoutError' || name === 'AbortError') throw new Error(`连 ${url} 超时了——确认那个地址上的服务还活着；本机跑的模型先看它是不是没启动`);
     throw new Error(`连不上 ${url}（${(e as Error).message}）——检查地址有没有写错；本机跑的模型确认它已经启动`);
   }
 
   const raw = await res.text();
-  if (!res.ok) throw new Error(`接口回了 ${res.status}：${raw.slice(0, 300)}`);
+  if (!res.ok) throw new Error(`接口回了 ${res.status}——先看模型名、密钥和地址对不对；下面是它的原文：${raw.slice(0, 300)}`);
 
   let data: ChatResponse;
   try {
     data = JSON.parse(raw) as ChatResponse;
   } catch {
-    throw new Error(`接口回的不是 JSON：${raw.slice(0, 300)}`);
+    throw new Error(`接口回的不是 JSON——地址是不是指到网页首页了？OpenAI 兼容接口要带 /v1；下面是它的原文：${raw.slice(0, 300)}`);
   }
-  if (typeof data.error?.message === 'string') throw new Error(data.error.message);
+  if (typeof data.error?.message === 'string') throw new Error(`接口回了一个错误：${data.error.message}——多半是模型名或密钥的问题，先看设置里那两格`);
 
   const content = data.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content.trim()) throw new Error('接口回的内容是空的');
+  if (typeof content !== 'string' || !content.trim()) throw new Error('接口回的内容是空的——这个模型可能不接这套指令，换一个模型或换回默认的试试');
   return content;
 }
 
@@ -398,7 +398,7 @@ export async function runBoardViaApi(
 }
 
 /**
- * 设置里那三格能不能跑。回一句能直接贴进提示的话，不是一个字段名——
+ * 当前选中那一条记录里的三样能不能跑。回一句能直接贴进提示的话，不是一个字段名——
  * 「配置不完整」那种说法让人得挨个去猜是哪一格。
  *
  * ## 第三条是端到端跑出来的
@@ -437,50 +437,73 @@ export function maskKey(key: string): string {
 }
 
 /**
- * 请求里的密钥该落成什么。三种走法见 settings.ts `sanitizeSettings` 里 `aiKey` 那行的注释；
- * `POST /api/ai/test` 也走这一份。
+ * 这个字符串是不是一串打码（`••••` 打头）。
  *
- * 关键的是**中间那条**：界面读回来的是打码串，用户不碰它、只改了别的设置再保存，
- * 请求体里带回来的就是那串打码——不认它的话密钥会被 `••••abcd` 覆盖掉，
- * 而这次覆盖悄无声息，要等下一次拆解报 401 才现形。
+ * **打码不是密钥。** 认它是为了不把它**当成**一把密钥存下去。
  *
- * ## 「字段缺失 → 沿用存着的」只在地址没变时成立
- *
- * 原来这一支无条件返回 `stored`。**它是一条把密钥送给任意地址的路**：
- *
- * - `POST /api/ai/test` 带一个陌生 `baseUrl`、**不带** `apiKey` → 拿存着的真密钥
- *   去请求那个地址，`Authorization: Bearer <真密钥>` 落在对方的访问日志里。
- * - `PUT /api/settings` 带 `aiBaseUrl: 'https://攻击者'`、不带 `aiKey` → 密钥原样
- *   留着、地址换成了他的，**之后不需要受害者做任何事**：自动拆解自己会跑
- *   （收件箱有条目就 spawn），带着真密钥去请求他的地址。持久，无人触发。
- *
- * 而这两条路第三方网页都发得出去：`c.req.json()` 不看 Content-Type，`text/plain`
- * 的简单请求没有预检；CORS 拦的是「读响应」，可攻击者不需要读响应——密钥是送到
- * 他自己服务器上的。
- *
- * **真实客户端从不走这一支**：`api.testAi` 的类型里 `apiKey` 是必填，设置页保存发的
- * 是 `draft.aiKey`（没动过就是那串打码）。所以判据收紧成「地址没变才沿用」对界面
- * 零影响；「改了地址、没动密钥」那条最常见的试法走的是打码那一支，也不受影响。
- * 唯一变化：某个只想改别的设置、又省略了密钥字段的第三方客户端，如果同时把地址
- * 换了，密钥不会跟着搬过去——那正是要拦的事。
- *
- * **残余**：打码串含密钥末四位，知道它就仍能给新地址解锁存着的密钥。CORS 拦得住
- * 读它；DNS rebinding 绕得过 CORS。彻底关死要么要求换地址时重填完整密钥（砍掉那个
- * 便利），要么校验 `Host` 头——两条都不在这一笔里，有意留着。
+ * 界面读回来的就是打码，正常情况下服务器手上有真值、认得出「没动过」那一条。
+ * 但**手上没有真值**的时候（换机、导入一份别的机器导出的文件、这个 id 是新加的），
+ * 那一串打码就只剩「它长得像打码」这一条线索了——而它长得**确实**像打码。
+ * 照收的话，落盘的就是 `••••ijkl` 这种字符串，第一次调接口就 401，
+ * 而报错说的是「密钥无效」，人只会反复重填、看不出真相。
  */
-export function aiKeyFrom(
-  incoming: unknown, stored: string, base: { incoming: string; stored: string },
-): string {
-  if (typeof incoming !== 'string') return base.incoming === base.stored ? stored : '';
+export function looksMasked(value: string): boolean {
+  return value.startsWith('••••');
+}
+
+/**
+ * **一条记录里**的密钥该落成什么（`stored` 就是这条记录自己存着的那把，不是全应用
+ * 共用的一把）。三种走法：
+ *
+ * - 请求体里没这个字段 → 保持这条记录原来的密钥。别的客户端只想改番茄钟时长，
+ *   不该顺手把某家的密钥清掉。
+ * - 收到的正是 `GET` 回去的那串打码 → 保持这条记录原来的密钥。界面读回来的就是
+ *   打码，不认它的话用户在设置页改一下别的格子再保存，密钥就被 `••••abcd` 覆盖了，
+ *   而且这次覆盖悄无声息，要等下一次拆解报 401 才现形。
+ * - 别的字符串（含空串）→ 照收。空串就是「清掉」，得留这条路。
+ *
+ * ## 「手上没有真值，而来的是一串打码」→ 落成空
+ *
+ * 上面第二条认的是「打码 == 这把钥匙的打码」。可要是**手上根本没有这把钥匙**
+ * （换机、导入别处导出的文件、新加的一个 id），就没有可比对的真值了——那一串
+ * 打码只剩「长得像打码」这一条线索。照收的话落盘的就是 `••••ijkl`，
+ * **第一次调接口就 401**，而报错说的是「密钥无效」，人只会反复重填。
+ *
+ * 所以：没有存着的密钥、收到的又确实是一串打码 → 当成「没给密钥」，落空串。
+ * 真的想填一把新密钥，那串东西是用户自己敲的，不带 `••••` 打头。
+ *
+ * ## 这里**不再**管「地址换了密钥要不要跟着走」
+ *
+ * 以前 `aiKeyFrom` 还有第三个参数（进出两个 `baseUrl`），只有地址没变才允许沿用存着的
+ * 密钥——因为那时全应用只有一把 `aiKey`，「陌生地址 + 不给密钥」就是一条把真密钥送到
+ * 任意地址的路（第三方网页发得出这种请求：`c.req.json()` 不看 Content-Type，
+ * `text/plain` 的简单请求没有预检；CORS 拦的是读响应，可攻击者不需要读响应）。
+ *
+ * 密钥搬进记录之后这条路本身不存在了：`stored` 只能是**同一个 id 那条记录**的密钥，
+ * 而新地址要么是个新 id（没有存着的密钥可沿用）、要么就是这条记录自己。
+ * 「同一条记录里把地址改到别的主机」这一种仍然会带着原密钥，判据由
+ * `settings.ts` 的 `mergeEndpoint()` 把——它两边都看得见记录，主机换了就要求重填。
+ *
+ * **而「调接口」那条测试按钮现在也走 `mergeEndpoint`**（`app.ts` 的 `POST
+ * /api/ai/test`），所以那条路上同样有主机变更这道判据：带打码串去测一个陌生
+ * 主机，拿不到存着的密钥（实测：出站请求的 `Authorization` 是 `null`）。
+ * 上一版这里写着「这条路上没有主机变更那道判据」——那是旧形状留下的说法，
+ * 现在已经不成立，照着它会以为这里还有个洞。
+ */
+export function aiKeyFrom(incoming: unknown, stored: string): string {
+  if (typeof incoming !== 'string') return stored;
   const v = incoming.trim();
   if (stored && v === maskKey(stored)) return stored;
+  // 手上没有真值，而来的是一串打码：那不是一把钥匙，是一段「我这儿有这把钥匙的
+  // 回显」。存下去等于把星号串当成真密钥，第一次调接口就 401。
+  if (!stored && looksMasked(v)) return '';
   return v;
 }
 
 /**
- * 「测试连接」那颗按钮：拿一次**最便宜的调用**验那三格填对没有。
+ * 「测试连接」那颗按钮：拿一次**最便宜的调用**验这一家填对没有。
  *
- * 存在的理由是一个真实的缺口：服务地址那一格早就有「测试连接」，而 AI 这三格
+ * 存在的理由是一个真实的缺口：服务地址那一格早就有「测试连接」，而 AI 这一栏
  * 填完之后**唯一的验证方式是真跑一次拆解**——要等一两分钟、烧一次额度，而且
  * 失败是以看板顶上一条红横幅的形式出现的，离他刚填的那三个框十万八千里。
  *

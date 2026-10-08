@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, mkdirSync, statSync, utimesSync, renameSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readAll, readOne, writeOne, deleteOne, syncAll, invalidate, invalidateAll, isSafeId, caseClashIn, CONFLICT_RE, listConflicts, writeConflictCopy, listBroken } from './entityStore.js';
 
 // 只包一层 renameSync/readdirSync，其余原样透传——「写入是原子的」那条测试原来
@@ -227,6 +228,48 @@ describe('entityStore', () => {
     const [src, dest] = renameMock.mock.calls[0];
     expect(String(src)).toMatch(/\.tmp$/);
     expect(dest).toBe(join(dir, 'a.json'));
+  });
+
+  /**
+   * **Windows 上 `renameSync` 会偶发 EPERM**：目标文件刚被写完、句柄还没完全释放
+   * （或者杀毒软件、索引器正扫着这个目录），`MoveFileEx(MOVEFILE_REPLACE_EXISTING)`
+   * 就会拒绝替换。
+   *
+   * **它落在写任务上就是「那次修改整个没落盘」**——接口回 500，用户看到「保存失败」，
+   * 而他刚才改的内容没了。实测（2026-10-21，这台机器）：整份测试每轮随机红 2~3 条，
+   * 红的全是它；换个时刻红的又是别的用例。
+   *
+   * 所以改名这一步要**重试**。判据：EPERM / EACCES / EBUSY 是「等一下就好」，
+   * 别的错误（跨卷、路径被占）重试也救不回来，照抛。
+   */
+  it('rename 抖了一下（EPERM）→ 重试之后照样写成功', () => {
+    renameMock.mockClear();
+    renameMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    });
+    writeOne(dir, { id: 'retry-1' } as never);
+    expect(readOne<{ id: string }>(dir, 'retry-1')).toEqual({ id: 'retry-1' });
+    expect(renameMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('连着抖好几次 → 等得住，最后还是写成功', () => {
+    renameMock.mockClear();
+    for (let i = 0; i < 3; i++) {
+      renameMock.mockImplementationOnce(() => {
+        throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      });
+    }
+    writeOne(dir, { id: 'retry-2' } as never);
+    expect(readOne(dir, 'retry-2')).not.toBeNull();
+  });
+
+  it('别的错误（跨卷 EXDEV）照抛、不重试——重试救不回来，掩过去只会把真问题变成更难查的样子', () => {
+    renameMock.mockClear();
+    renameMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
+    });
+    expect(() => writeOne(dir, { id: 'retry-3' } as never)).toThrow(/EXDEV/);
+    expect(renameMock.mock.calls.length).toBe(1);
   });
 
   it('CONFLICT_RE 认得出各家同步客户端的冲突副本', () => {
@@ -572,5 +615,38 @@ describe('caseClashIn', () => {
     expect(clash('Foo')).toBe(true);
     expect(clash('foo')).toBe(false);
     expect(clash('bar')).toBe(false);
+  });
+});
+
+/**
+ * **全仓只许有一处裸 `renameSync`。**
+ *
+ * 2026-10-21 那次「全量测试每轮随机红 2~3 条」的根因是 Windows 上偶发的
+ * `renameSync` EPERM，`entityStore.ts` 的 `renameIntoPlace`（带退避重试）治好了
+ * 写任务、写设置、写 outbox 文件那三处。
+ *
+ * 但**同一类病落在不同文件里**，而当时只修了那三处：漏掉的还有「上次校验失败」
+ * 那份记录（`outbox.ts`）、日历导出（`index.ts`）和 `meta.json`（`migrate.ts`）。
+ * 同一天下午全量测试又红了一条，红的正是 `outbox.ts` 那处——**这病不是被认出来
+ * 的，是被撞见的**；再晚一天，它照样会随机红在另外两处。
+ *
+ * 逐个文件盯是盯不住的：下次有人新写一处「先写 .tmp 再改名」，忘了走带重试
+ * 那个版本，**任何测试都不会知道**。所以这里盯的是「`server/src` 里除了
+ * `renameIntoPlace` 自己，再没有直接调 `renameSync` 的地方」。
+ */
+describe('裸 renameSync：全仓只许有一处', () => {
+  it('除了 entityStore.ts 那个重试实现，别的文件都不直接调 renameSync', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const offenders: string[] = [];
+    for (const name of readdirSync(here)) {
+      if (!name.endsWith('.ts') || name.endsWith('.test.ts')) continue;
+      if (name === 'entityStore.ts') continue; // 它就是那个带重试的实现
+      const src = readFileSync(join(here, name), 'utf8');
+      // 注释里提到 renameSync 不算——那些多半正是在解释为什么不用它。
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      if (/\brenameSync\s*\(/.test(code)) offenders.push(`${name}：还在直接调 renameSync(...)`);
+      if (/import\s*\{[^}]*\brenameSync\b/.test(code)) offenders.push(`${name}：还从 node:fs 导入了 renameSync`);
+    }
+    expect(offenders, `这些文件还在用裸 renameSync——Windows 上它会偶发 EPERM：\n${offenders.join('\n')}`).toEqual([]);
   });
 });

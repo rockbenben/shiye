@@ -266,3 +266,53 @@ describe('formKey：编辑表单里的回车和 Esc', () => {
     }
   });
 });
+
+/**
+ * ↑/↓ 走位与 Ctrl+A。补的是键盘上那个空缺：批量操作全都作用在选中集合上，
+ * 而在此之前把某几条放进集合的唯一办法是用鼠标 Ctrl/Shift 点它们——一张卡里
+ * 有勾选圈、标题、⋯、↑↓、番茄钟五六个可聚焦元素，Tab 根本走不到「第 8 条」。
+ */
+describe('keyAction：↑/↓ 走位与 Ctrl+A 全选', () => {
+  const press = (key: string, over: Partial<Parameters<typeof keyAction>[0]> = {}) =>
+    keyAction({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, isComposing: false, inField: false, ...over });
+
+  it('↓ / ↑ 翻成 move，方向各一', () => {
+    expect(press('ArrowDown')).toEqual({ kind: 'move', dir: 'down', extend: false });
+    expect(press('ArrowUp')).toEqual({ kind: 'move', dir: 'up', extend: false });
+  });
+
+  it('按着 Shift 就是连选', () => {
+    expect(press('ArrowDown', { shiftKey: true })).toEqual({ kind: 'move', dir: 'down', extend: true });
+  });
+
+  it('输入框里的方向键是挪光标，不是挪列表焦点', () => {
+    expect(press('ArrowDown', { inField: true })).toBeNull();
+  });
+
+  // Ctrl+↓ 在不少列表界面里是「跳到末尾」。不认是有意的：那一跳在分组列表里
+  // 语义不清（跳到本组末尾还是整屏末尾），而它挡住的是一条已经能用的键。
+  it('带 Ctrl/Alt 的方向键不认（Alt+← 是浏览器后退，别接）', () => {
+    expect(press('ArrowDown', { ctrlKey: true })).toBeNull();
+    expect(press('ArrowLeft', { altKey: true })).toBeNull();
+  });
+
+  it('Ctrl+A / ⌘A 是全选，Shift 一起按也算', () => {
+    expect(press('a', { ctrlKey: true })).toEqual({ kind: 'selectAll' });
+    expect(press('A', { metaKey: true })).toEqual({ kind: 'selectAll' });
+    expect(press('a', { ctrlKey: true, shiftKey: true })).toEqual({ kind: 'selectAll' });
+  });
+
+  /**
+   * 这一条是整批里最要紧的一条：输入框里的 Ctrl+A 是「选中框里那些字」。
+   * 抢过来的串法很实——在备注框里 Ctrl+A 想清掉选区，结果整屏任务被选上，
+   * 紧接着一下 `D` 就是批量完成。
+   */
+  it('输入框里的 Ctrl+A 不抢——那是选中框里的文字，不是选任务', () => {
+    expect(press('a', { ctrlKey: true, inField: true })).toBeNull();
+  });
+
+  it('输入法组字中间两个都不认（那一下是候选词/上屏）', () => {
+    expect(press('ArrowDown', { isComposing: true })).toBeNull();
+    expect(press('a', { ctrlKey: true, keyCode: 229 })).toBeNull();
+  });
+});

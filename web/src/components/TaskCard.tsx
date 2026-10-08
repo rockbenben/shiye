@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { App as AntApp, Button, Card, Checkbox, ConfigProvider, DatePicker, Dropdown, Input, Space, Typography } from 'antd';
 import dayjs from 'dayjs';
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core';
 import type { List, Status, Task, Subtask } from '../types.js';
-import { allTags, formatWhen, isStatus, isTaskOverdue, overdueLabel, displayReminderAt, asArray, waitingQuietLabel, waitingText, parkedQuietLabel, notStarted, CONTEXT_LABEL, STATUS_LABEL } from '../lib/taskView.js';
+import { allTags, formatWhen, isStatus, isTaskOverdue, overdueMark, displayReminderAt, asArray, waitingQuietLabel, waitingText, parkedQuietLabel, notStarted, CONTEXT_LABEL, STATUSES, STATUS_LABEL, STATUS_MOVES, STATUS_HINT, multiDayLabel } from '../lib/taskView.js';
 import { dueText, whenText } from '../lib/dueChip.js';
 import { canBeHabit } from '../lib/habit.js';
 import { formatMinutes, taskFocusMinutes } from '../lib/focusStats.js';
@@ -48,33 +48,19 @@ import { Attachments, useFileDrop } from './Attachments.js';
  */
 export const FOCUS_ABANDON_TAIL = '的番茄钟中断了——这一段不记。标记完成、切走视图、换密度、这张卡被筛掉，都算放弃。';
 
-/** 每张卡能走到哪一步。「搁置」从 todo/doing 都能进——AI 拆出来一条暂时不想
- * 做的，不用先开始再退回才能搁置；从搁置回来一律是 todo（规格原话「从搁置
- * 回来就是改回 todo」），不直接跳回 doing。 */
-export const MOVES: Record<Status, Array<{ label: string; to: Status }>> = {
-  todo: [{ label: '开始', to: 'doing' }, { label: '搁置', to: 'later' }],
-  doing: [{ label: '完成', to: 'done' }, { label: '退回', to: 'todo' }, { label: '搁置', to: 'later' }],
-  done: [{ label: '重开', to: 'todo' }],
-  // 「放弃」只从搁置这里走得到——不给待办/进行中各摆一颗：那两行本来就窄
-  // （卡片最窄 358px），而「不做了」几乎总是先经过「暂时不做」。想直接放弃
-  // 一条刚建的任务，先点「搁置」再点「放弃」，两步。
-  later: [{ label: '恢复待办', to: 'todo' }, { label: '放弃', to: 'abandoned' }],
-  // 仿滴答清单：「已放弃的任务还可以标记重新开始，计划临时有变也没关系」。
-  abandoned: [{ label: '重新开始', to: 'todo' }],
-};
-
 /**
- * 左右拖拽的落点。**每一项都必须是 `MOVES` 里已经有的那一步**——手势不是
- * 第二套状态机，只是那排按钮的另一种按法。下面 `SWIPE` 里挑的就是 `MOVES`
- * 各状态的其中一项，`TaskCard.test.tsx` 有一条测试盯着它们不许飘。
+ * 左右拖拽的落点。**每一项都必须是 `STATUS_MOVES`（`lib/taskView.ts`）里已经
+ * 有的那一步**——手势不是第二套状态机，只是那排按钮的另一种按法。下面 `SWIPE`
+ * 里挑的就是各状态的其中一项，`TaskCard.test.tsx` 有一条测试盯着它们不许飘。
  *
  * 方向的含义：**往右推进，往左退回或搁置。**
  * - 待办 → 右：开始　左：搁置
  * - 进行中 → 右：完成　左：退回
  * - 已完成 → 左：重开（右边没有更靠前的状态了）
- * - 搁置 → 右：恢复待办（左边没有更靠后的了）
+ * - 搁置 → 右：恢复待办　左：放弃
+ * - 已放弃 → 右：重新开始（左边没有更靠后的了）
  *
- * 某个方向没有落点时（已完成往右、搁置往左）不响应，卡片跟着手指走一小段
+ * 某个方向没有落点时（已完成往右、已放弃往左）不响应，卡片跟着手指走一小段
  * 就弹回去——不给反馈的话人会以为是卡了。
  */
 export const SWIPE: Record<Status, { right?: { label: string; to: Status }; left?: { label: string; to: Status } }> = {
@@ -93,6 +79,20 @@ const SWIPE_COMMIT_PX = 88;
 /** 开始跟手之前要先横向移动这么多，而且横向位移得大于纵向——不然页面上下
  * 滚一下、或者想拖序号换顺序时，卡片会跟着乱晃。 */
 const SWIPE_START_PX = 12;
+
+/**
+ * 详情面板里就地写备注时，编辑框**至少**占几行。
+ *
+ * 判据是 theme.css 里 `.ink-dt-notes` 那个 96px 的地板——读的那一块有这么高
+ * （空备注也得有个点得着的地方），点下去之后编辑框从 1 行开始长的话，整块当场
+ * 塌成一条线，看着像点坏了。`autoSize` 一行是 22px + 8.67px 内边距（实测行内
+ * `min-height`：1 行 30.67、20 行 448.67），4 行 = 96.67px，跟那个地板对上，
+ * 差 0.67px 看不出来。两处必须一起改，钉在 `theme.css.test.ts` 那条守卫里。
+ *
+ * 为什么不是 CSS：`autoSize` 把 `min-height` 连 `height` 一起写成**行内样式**，
+ * 行内压过任何选择器——样式表里那条 `min-height` 实测是空写。
+ */
+const NOTES_MIN_ROWS = 4;
 
 /** 「今天」视图专用的上/下移按钮——只有 TodayView 会传这个 prop，「按来源」
  * 看板不传，卡片上就不会多出这两个按钮：跨视图共用同一张卡，行为按 prop
@@ -285,6 +285,20 @@ interface CardProps {
    *  行为跟别处不一样，而「不休息」正是加这个字段之前的行为。 */
   breakMinutes?: number;
   /**
+   * 习惯的打卡条（只有「今天」那一屏会给）。
+   *
+   * **为什么是调用方拼好传进来、而不是让 TaskCard 自己算**：连续天数要读整张
+   * 表的历史实例（打过卡的那些早被「今天」的成员资格筛掉了），而 `TaskCard`
+   * 是十个视图共用的——它自己算就等于让看板/全部/搜索也长出这一行，那条规矩
+   * 在 `HabitStreak.tsx` 顶部写着，`TodayView.test.tsx` 里也钉着「别的视图不
+   * 显示打卡条」。所以判据留在 `TodayView`，这里只接一个已经决定要画的东西。
+   *
+   * **画在卡里面**（截止/提醒那一行下面）。它原来是卡片**外面**的一个兄弟
+   * 节点，于是「🔥 连续 5 天」飘在两张卡之间的那道缝里，读起来像属于上面那
+   * 张——两张挨着时最明显。
+   */
+  habitLine?: ReactNode;
+  /**
    * 离线记号（task-3-brief）：本机连不上服务端、现在看到的是本地缓存。
    * **只有这一件事看它**——附件的「打开」链接直接指向服务端的文件系统
    * （`api.attachmentUrl`），离线时点了是个死链接，见 `Attachments.tsx` 的
@@ -295,6 +309,14 @@ interface CardProps {
    * state，不依赖这个默认值。
    */
   offline?: boolean;
+  /**
+   * **这一组的话已经由组头说了**：过期记号只报时长（「3 天」而不是「过期 3 天」）。
+   *
+   * 只有「已过期」那一组会传它（判据在 `lib/agenda.ts` 的 `dueSectionExtras`，
+   * 由 `TaskGrid` 从 section 转交）。不给就是 `false`——「今天」里一张过期的卡
+   * 周围没有那句「已过期」，卡上再省掉就什么都没了。
+   */
+  briefTime?: boolean;
   /**
    * 详情面板那一栏的形状（仿滴答清单第三栏，见 `TaskDetail.tsx`）：顶上一行
    * 「勾选圈 + 日期」，下面一个大标题，再下面一整块正文——**标题和正文都点
@@ -312,9 +334,9 @@ interface CardProps {
   detail?: boolean;
 }
 
-export function TaskCard({
+export function TaskCardImpl({
   t, now, lists, allTasks, onDuplicate, onPromoteSubtask, onSkip, onBreakdown, onPatch, onEditTask, onDelete, onEditingChange, move, proposals, rank, showNote, drag, select,
-  autoEdit, onAutoEdited, focusMinutes = 25, breakMinutes = 0, offline = false, detail = false,
+  autoEdit, onAutoEdited, focusMinutes = 25, breakMinutes = 0, offline = false, briefTime = false, detail = false, habitLine,
 }: CardProps) {
   const { message, modal } = AntApp.useApp();
   // 「跳过本次」能不能点，顺带就是要发的补丁——`null` 就是不该摆这个菜单项。
@@ -558,9 +580,10 @@ export function TaskCard({
     // 文字）」挡的是反方向：选文字恰恰是横着划的，那条守卫对这件事一次都没
     // 生效过——它真正管的是「页面在滚」。
     //
-    // 砍掉鼠标这条通路不损失任何能力：手势的每一个落点都来自 `MOVES`（见上面
-    // `SWIPE` 的注释「只是那排按钮的另一种按法」），而那排按钮在查看态下常驻
-    // 在每张卡上，鼠标本来就够得着。触屏那边一切照旧。
+    // 砍掉鼠标这条通路不损失任何能力：手势的每一个落点都来自 `STATUS_MOVES`
+    // （见上面 `SWIPE` 的注释「只是那排按钮的另一种按法」），而那几步在查看态下
+    // 都够得着——卡面上那颗，加上 `⋯` 里「改状态」那一整组（`lib/taskMenu.ts`）。
+    // 触屏那边一切照旧。
     //
     // 这一句也顺带把原来的 `e.button !== 0` 覆盖掉了：那条只在 pointerType 是
     // mouse 时才有意义，鼠标整个不进来之后它没有剩下的适用场景。
@@ -606,11 +629,57 @@ export function TaskCard({
   const { over: fileOver, uploading, upload, dropProps } = useFileDrop(t.id);
 
   const overdue = isTaskOverdue(t, now);
-  const statusLabel = isStatus(t.status) ? STATUS_LABEL[t.status] : `状态异常：${String(t.status)}`;
+  /** 状态不合法（手改 `data/tasks/` 写出 `pending`、AI 手滑）时，卡面上那句说的
+   *  是**该改成什么**，不是「我读到了什么」。原来这一行印的是
+   *  `状态异常：pending`——一个机器值摆在人面前，看完只知道它不对，不知道这里
+   *  只认五个词。五个词从 `STATUS_LABEL` 现拼，不在这句里再抄一份（
+   *  `statusLabel.guard.test.ts` 拦的就是抄）；原始值挪进 `title`，排查时它是
+   *  唯一线索。跟 `CountdownView` 那句「日期没写对」同一条规矩。 */
+  const badStatus = !isStatus(t.status);
+  const statusLabel = badStatus
+    ? `状态认不得——改成 ${STATUSES.map((s) => STATUS_LABEL[s]).join('/')} 之一`
+    : STATUS_LABEL[t.status];
+  /**
+   * 卡面那**一颗**状态按钮：`STATUS_MOVES` 的第一项，也就是往前推进那一步。
+   * 其余几步收进 `⋯` 里「改状态」那一组（`lib/taskMenu.ts`），划手仍然是快捷
+   * 路径——能力一样没少，少的是一屏几十颗常驻按钮。
+   *
+   * **两个不摆的情况**：
+   * - 详情面板（`detail`）照旧摆完整一排。那一屏只有这一条任务，没有「一屏
+   *   几十颗按钮」要消，收起来反而把它唯一的动作入口藏了。
+   * - 推进那一步正是**标题行那颗勾选圈已经在做的事**：进行中的「完成」、
+   *   已完成的「重开」。同一张卡上画两个「完成」，正是这一排要消掉的东西。
+   * 状态不合法的兜底同 `statusLabel`：当成 todo——未知状态拿到 undefined，
+   * 后面那个 `.map` 会把整页炸掉。
+   */
+  const moves = STATUS_MOVES[isStatus(t.status) ? t.status : 'todo'];
+  const advance = moves[0];
+  /** 标题行那颗勾选圈发的补丁——「done ↔ todo」来回切。上面两处圈和这里读的都是
+   *  这一份：卡面那颗要是正好撞上它（进行中的「完成」），就不摆按钮。 */
+  const ringTo: Status = t.status === 'done' ? 'todo' : 'done';
+  const showAdvance = advance.to !== ringTo;
   // 显示「下一次什么时候响」，不是「最早那次」——判据在 taskView 的
   // `displayReminderAt`。逻辑那一半（进不进「今天」、算不算过期）另有判据，
   // 那边看的是最早那个，两者问的不是同一个问题。
   const remindAt = displayReminderAt(t, now);
+  /**
+   * **已经响过的提醒，在过期的卡上不再占一行。**
+   *
+   * `displayReminderAt` 全都响过时返回**最后那个**（最近刚响的一次），于是一条
+   * 欠了三天的卡上会并排摆着「过期 3 天」和「提醒 10月5日 19:00」——左边说的是
+   * 「你欠了多久」（这一屏排序就靠它），右边是一个已经过去、已经响完、什么都
+   * 提醒不了你的时刻。
+   *
+   * **只藏「已经响过」的，不藏还没到的**：这条卡正因为逾期才需要提醒，而提醒
+   * 若还在将来，它仍然是「什么时候会再响我一次」——那半句是有效的，也是唯一
+   * 让人改期或删提醒的依据。所以判据是**时刻本身过没过去**，不是「有没有过期」。
+   *
+   * 精确时刻没丢：提醒整组在编辑表单里（`TaskFields`），详情面板也照旧列着。
+   */
+  const remindPassed = remindAt !== null && Date.parse(remindAt) < now.getTime();
+  /** 「第 3 天 · 共 12 天」：一条要做几天的活，今天走到第几天。判据（含「为什么
+   *  截止那天不挂这个」）在 taskView 的 `dayInSpan`，这里只负责画。 */
+  const spanLabel = multiDayLabel(t, now);
   // 找不到就当没有——清单被删掉之后那条任务的 listId 还指着它，
   // 显示一个裸 uuid 对人没有意义。
   const list = t.listId ? lists.find((l) => l.id === t.listId) : undefined;
@@ -730,7 +799,7 @@ export function TaskCard({
         select.onClick({ shift, ctrlOrMeta });
       } : undefined}
       /**
-       * **`X` = 选中/取消选中焦点所在的这一张**（`Shift+X` 从锚点连选）。
+       * **`X` 或 `空格` = 选中/取消选中焦点所在的这一张**（`Shift+X` 从锚点连选）。
        *
        * 补的是一个把整层键盘操作堵死的洞：勾选框只在「已经选中了至少一张」
        * 之后才出现，而进入选中态的唯一办法是 **Ctrl/Shift 点卡片**——一个
@@ -738,9 +807,15 @@ export function TaskCard({
        * 这一整套快捷键，键盘用户一个都够不着：它们全都作用在选中集合上，
        * 而那个集合他建不起来。
        *
-       * **挂在整张卡上、靠冒泡接住**，不给卡片本身加 `tabIndex`：卡里本来
-       * 就有一串可聚焦的按钮（标题、状态、`⋯`），Tab 过去按一下 `X` 就行，
-       * 再多一个「整张卡」的停靠点只会让 Tab 一圈变长。
+       * **空格是后来补的那一半**：`X` 得先知道有 `X`，而「空格=选中」是列表
+       * 界面通用的那一套（文件管理器、Gmail、滴答清单）。它只在这一张卡上
+       * 冒得出来才认——焦点在整页空白处按空格照旧是「往下翻一屏」，那一下是
+       * 页面自己的，不抢。
+       *
+       * **挂在整张卡上、靠冒泡接住**：卡里本来就有一串可聚焦的按钮（标题、
+       * 状态、`⋯`），Tab 过去按一下 `X` 就够。上面那个 `tabIndex={-1}` 不改变
+       * 这件事——`-1` 是「可编程聚焦、不进 Tab 序」，走位要靠它把焦点放到卡上，
+       * 而 Tab 一圈的长度一个字没变。
        *
        * 挡掉的只有输入框（`isInteractiveTarget` 的三种：input/textarea/
        * contenteditable）——在备注里打「x」当然不该选中这张卡。**按钮不挡**，
@@ -766,9 +841,12 @@ export function TaskCard({
       }}
       onKeyDown={select ? (e) => {
         if (draft) return;
-        if (e.key !== 'x' && e.key !== 'X') return;
+        if (e.key !== 'x' && e.key !== 'X' && e.key !== ' ') return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (isInteractiveTarget(e.target)) return;
+        // 空格落在卡里某颗按钮/链接上时，那一下是那颗控件自己的（空格=按下它），
+        // 不该顺手选中整张卡。`X` 没这个问题：焦点在按钮上按 X 既不打字也不激活。
+        if (e.key === ' ' && isInteractiveTarget(e.target, 'button, a')) return;
         e.preventDefault();
         select.onClick({ shift: e.shiftKey, ctrlOrMeta: true });
       } : undefined}
@@ -808,6 +886,14 @@ export function TaskCard({
       variant={detail ? 'borderless' : undefined}
       styles={detail ? { body: { padding: 0 } } : undefined}
       style={dx ? { transform: `translateX(${dx}px)` } : undefined}
+      // 键盘走位的两个钩子。**摊开的 dropProps 之后**是故意的：这两个是走位的
+      // 地基，不该被哪一天多摊进来的属性顺手盖掉。
+      // `data-task-id` 让 App 能从屏幕上现读顺序（折叠的、被筛掉的自然不在
+      // DOM 里，也就走不到）；`tabIndex={-1}` 是「可编程聚焦、但不进 Tab 序」
+      // ——卡里本来就有勾选圈/标题/⋯/↑↓/番茄钟五六个 Tab 停靠点，把卡片自己也
+      // 塞进 Tab 序会让纯键盘用户每走一条多按几下。
+      data-task-id={t.id}
+      tabIndex={-1}
       {...dropProps}
     >
       {/* 勾选框：只在「已经选中了至少一张」时出现（select.showCheckbox 由
@@ -864,6 +950,22 @@ export function TaskCard({
           {rank ?? '⠿'}
         </div>
       )}
+      {/* 「今天」视图专属：手动排序的键盘/鼠标共用路径，见 TaskCard.tsx
+          顶部 MoveControls 的注释。边界处禁用（不是隐藏）——禁用的原生
+          按钮天然退出 Tab 顺序，这是这个仓库已经在用的可达性写法
+          （保存按钮的 disabled 同一套）。
+          钉在序号正下方、不进操作行：序号说的是「排第几」，这两颗是
+          「怎么改这个几」，本来就是同一个信息，分居一行两端反而各说各话。
+          它们原先确实挂在操作行末尾——实测 1440px 三列的「今天」屏上操作行
+          可用 277px、控件要 ~372px，这颗 62px 宽的组把 ⋯ 顶成孤零零第二行，
+          每张卡都塌一块。挪走后落进 .ink-rank 让出的那条 52px 右边距里
+          （见 theme.css 的 .ink-rank-moves）。 */}
+      {move && (
+        <span className="ink-rank-moves" role="group" aria-label={`调整「${t.title}」在今天列表里的顺序`}>
+          <Button className="ink-move-btn" ref={move.upRef} size="small" aria-label="上移" disabled={!move.canMoveUp || move.busy} loading={move.loadingUp} onClick={move.onUp}>↑</Button>
+          <Button className="ink-move-btn" ref={move.downRef} size="small" aria-label="下移" disabled={!move.canMoveDown || move.busy} loading={move.loadingDown} onClick={move.onDown}>↓</Button>
+        </span>
+      )}
       {/* 卡片左边一条 3px 竖条，清单色。放在 Space 外面（不占任何行的位置，
           绝对定位相对 .ink-task-card——见 theme.css 里 .ink-task-card 已有的
           position: relative）——编辑态下也照常显示，跟序号一个道理：这是
@@ -888,6 +990,10 @@ export function TaskCard({
               value={draft}
               onChange={setDraft}
               lists={lists}
+              // 只读那一份带 `firedAt` 的提醒：草稿里只有时刻，而「响过没有」
+              // 正是这排时间框唯一缺的信息——编辑到这一行时，他要决定的是改期
+              // 还是干脆删掉这个提醒。详见 TaskFields 里 `fired` 那段注释。
+              fired={t.reminders}
               // 候选表在这儿算，不在表单里：判据要看全部任务，而 TaskFields
               // 只认识「这一条草稿」。allTasks 没给就不给候选，那一项整个不
               // 渲染——跟上面两个层级记号同一条。
@@ -932,7 +1038,7 @@ export function TaskCard({
                   className={`ink-trow-check${t.status === 'done' ? ' ink-trow-check-done' : ''}`}
                   aria-pressed={t.status === 'done'}
                   aria-label={t.status === 'done' ? `把「${t.title}」标回待办` : `把「${t.title}」标记完成`}
-                  onClick={() => onPatch(t.id, { status: t.status === 'done' ? 'todo' : 'done' })}
+                  onClick={() => onPatch(t.id, { status: ringTo })}
                 >
                   {t.status === 'done' && <span aria-hidden="true">✓</span>}
                 </button>
@@ -949,6 +1055,11 @@ export function TaskCard({
                     // 输入日期——对一颗药丸来说本来就是点开面板挑，不是打字。
                     format={(v) => dueText(v.toISOString(), now)}
                     allowClear
+                    // 它改的是哪一格。`placeholder` 那句「设置日期」只在空的时候
+                    // 看得见，而这条任务九成九不是空的——焦点进来念得出「设置
+                    // 日期」的时候，屏幕上其实写着「今天 18:00」。用「截止」，
+                    // 跟卡片上那个键名、跟建议详情里那个字段名同一个词。
+                    aria-label="截止日期"
                     placeholder="设置日期"
                     value={t.due ? dayjs(t.due) : null}
                     onChange={(d) => onPatch(t.id, { due: d ? d.toISOString() : null })}
@@ -985,12 +1096,12 @@ export function TaskCard({
                 颜色固定走 --pri-3/2/1，见 theme.css 里那三个变量上方的注释。 */}
             <div className="ink-card-titlerow">
               {/* **一键完成。** 在这之前，卡片档要完成一条待办得走两步
-                  （「开始」→「完成」，见 MOVES.todo 只有开始/搁置；划动手势和
+                  （「开始」→「完成」，见 STATUS_MOVES.todo 只有开始/搁置；划动手势和
                   ⋯ 菜单里也都没有「完成」）——而同一个动作在行档是点一下勾选圈、
                   在详情面板是点一下勾选圈、批量是一个 D 键。**同一件事在四个
                   地方三种代价**，而卡片档还是默认那一档。滴答清单那边每条任务
                   不管摆成什么样都有一个勾选框。
-                  借的就是行档那两个类名和那条判据（`done ? 'todo' : 'done'`），
+                  借的就是行档那两个类名和上面那份 `ringTo` 判据，
                   不新画一个圈、也不新写一套状态判断——详情面板那颗（`detail`
                   分支里那个）也是同一份，三处长一个样。
                   **`detail` 下不画**：那一屏顶上已经有一个了。 */}
@@ -1000,7 +1111,7 @@ export function TaskCard({
                   className={`ink-trow-check ink-card-check${t.status === 'done' ? ' ink-trow-check-done' : ''}`}
                   aria-pressed={t.status === 'done'}
                   aria-label={t.status === 'done' ? `把「${t.title}」标回待办` : `把「${t.title}」标记完成`}
-                  onClick={() => onPatch(t.id, { status: t.status === 'done' ? 'todo' : 'done' })}
+                  onClick={() => onPatch(t.id, { status: ringTo })}
                 >
                   {t.status === 'done' && <span aria-hidden="true">✓</span>}
                 </button>
@@ -1021,6 +1132,45 @@ export function TaskCard({
                   记号该待的地方。 */}
               {!detail && t.pinned && (
                 <span className="ink-pin-mark" role="img" aria-label="已置顶" title="已置顶">📌</span>
+              )}
+              {/* 状态角标。**它原来坐在下面那排动作按钮的最前面**——实测「进行中」
+                  卡六个控件要 322px、三列网格可用 317px，就为这 5px 第二行孤零零
+                  挂一个 ⋯；角标（48px）搬进标题行后所有状态都回到一行。理由跟
+                  置顶钉搬家是同一条：这一行本来就是「这张卡是什么」那一类记号
+                  （旗、钉）待的地方，状态正是这类记号里最重的一枚——它是这张卡
+                  「现在处在哪一步」的唯一来源，status 不合法时（手改文件、AI
+                  手滑）原始值就标在这里，用过期橙标出来，不装作没发生过（见
+                  taskView.ts 的 isStatus 注释），不需要在别处再重复一遍同样的信息。 */}
+              {!draft && (
+                <span
+                  className={badStatus ? 'ink-status-pill ink-status-pill-bad' : 'ink-status-pill'}
+                  // 两个 title 分工：状态不合法时报**原始值**（排查的唯一线索），
+                  // 合法时报**这一档是什么意思**。后者是为了「搁置 / 放弃」那对
+                  // 只看字面分不出来的词——解释在 `lib/taskView.ts` 的 STATUS_HINT
+                  // 里，跟 STATUS_LABEL 住在一起。
+                  //
+                  // 读屏会把它当 accessible description 播出来，鼠标停上去说得清；
+                  // **触屏没有 hover**，那一路靠点「⋯」→「改状态」和下面那颗角标
+                  // 本身写着的那两个字——这已经是这一屏能给到的最省的一处。
+                  // **「存的是」不写「写的是」**：跟 `CountdownView.tsx` 那条坏值
+                  // 提示（`文件里存的是：…`）说同一件事，两处各写一种是
+                  // 「同一个概念两处文案」——这个仓库栽过好几次的那一类。统一到
+                  // 「存」是因为读的人要修的是磁盘上那个值，「存的是什么」正好
+                  // 是他需要的那个信息；「写的是什么」听着像在问他自己写了啥。
+                  title={badStatus ? `文件里存的是：${String(t.status)}` : STATUS_HINT[t.status]}
+                >
+                  {statusLabel}
+                  {/* **搁了很久的把天数写在角标里。** 搁置是「暂时不做」，而这个
+                      应用里它不进「今天」「接下来」「四象限」，也不进推荐面板
+                      （suggest.ts 的 isCandidate 把搁置算作了结）——不写这个数字的话，
+                      三个月前搁下的和昨天搁下的长得一模一样，GTD 那档「将来也许」
+                      就成了黑洞。挂在角标里而不是另起一个记号：说的是同一件事的
+                      两半（现在是什么状态 + 这个状态待了多久）。判据在
+                      taskView 的 parkedQuietLabel（30 天门槛，只少说不多说）。 */}
+                  {parkedQuietLabel(t, now) && (
+                    <span className="ink-parked-quiet"> · {parkedQuietLabel(t, now)}</span>
+                  )}
+                </span>
               )}
               {/* 点标题收起回行档（final-review「行档展开收不回去」）。整行
                   可点展开成这张查看态的卡（TaskGrid.tsx/TodayView.tsx 的
@@ -1121,7 +1271,7 @@ export function TaskCard({
                 >
                   {t.notes
                     ? <Markdown source={t.notes} />
-                    : <span className="ink-dt-notes-empty">写点什么……</span>}
+                    : <span className="ink-dt-notes-empty">写点什么…</span>}
                 </div>
               ) : (
                 <NotesEditor
@@ -1131,6 +1281,14 @@ export function TaskCard({
                   // 离焦就渲染，「预览」这颗开关在这里是同一件事的第二个入口，
                   // 而且点它会把焦点从正在写的框里带走。
                   hidePreview
+                  // 读的时候那句是「写点什么…」，点进去换成一串术语（原来这里是
+                  // 默认那句「备注（支持 Markdown，输入 / 插入格式）」），同一块
+                  // 地方两副口吻。这里跟着说同一句话，`/` 那半留在括号里——
+                  // 这一栏的 Markdown 提示只在编辑表单里说一次就够了。
+                  placeholder="写点什么…（输入 / 插入格式）"
+                  // 起步跟上面读的那一块同高，别一点就塌成一条线（判据见
+                  // `NOTES_MIN_ROWS`）。
+                  minRows={NOTES_MIN_ROWS}
                   // 面板比卡片高得多，长备注不用挤在六行里。
                   maxRows={20}
                   onBlur={() => void commitNotes()}
@@ -1187,6 +1345,25 @@ export function TaskCard({
                 哪一条分错了情境。`waitingFor` 就是这么干放了很久，见下面那段。 */}
             {t.context && <span className="ink-context-mark">@{CONTEXT_LABEL[t.context]}</span>}
 
+            {/* 分段（section）。**判据跟上面情境那句一字不差：「不画就等于没有
+                这个字段」。** 而它这一格是空得最久的——`TaskFields.tsx` 的
+                `DraftAttr` 里有它、`emptyDraft()` 带它、保存时也带走，
+                `grep t.section` 在这一整个文件里只命中「填草稿」和「存草稿」
+                两处，**渲染处零命中**；`TaskRow.tsx` 同样零命中。于是同一个值
+                在「按分段分组」那一个视图里当组头看得见（`lib/grouping.ts`
+                的 `groupBy:'section'`），在其它七个视图里完全隐形。
+
+                **它跟情境不是同一个形状，这一点要说清**：情境是固定五档、写在
+                `<select>` 里的枚举，而 `section` 是一串**自由文本**、可以手打，
+                任何视图下都成立。所以「只在分组视图里说」这个选项在这里站不住
+                ——填它的理由跟当前站在哪一屏无关。也正因为是自由文本，它比情境
+                更需要画出来：没人记得自己写过什么分段。
+
+                滴答那边任务行上**也不**重复报分段（`用分组和排序管理任务.md`），
+                但它的分组头是清单里显式建出来的结构，而我们的 `section` 是
+                可以凭空打上去的——这是两回事，照抄它那条会把这个字段又藏回去。 */}
+            {t.section && <span className="ink-section-mark" aria-label={`分段 ${t.section}`}>§{t.section}</span>}
+
             {/* 在等谁/等什么。**画出来**——筛选栏一直有「只看等待中的」，而卡片
                 上一个字都不显示：筛出来一屏任务，看不出各自在等什么，也想不起
                 该去催谁。跟重复规则同一档轻处理（小号、灰），它是一条状态注记，
@@ -1209,12 +1386,25 @@ export function TaskCard({
             {/* `blocker` 也要算进这个开关：被父亲挡着的那种子任务**很可能一个
                 时间字段都没有**（日期写在父亲身上），少了它这一整行不渲染，
                 下面那句「「装修」9月1日 才开始」就永远画不出来——测试实测过。 */}
-            {(overdue || (!detail && t.due) || notStarted(t, now) || blocker || remindAt || spent > 0 || t.estimateMinutes || t.postponeCount >= POSTPONE_MIN) && (
+            {(overdue || (!detail && t.due) || notStarted(t, now) || blocker || remindAt || spanLabel || spent > 0 || t.estimateMinutes || t.postponeCount >= POSTPONE_MIN) && (
               <div className="ink-task-times">
                 {/* 「过期 3 天」而不是光一句「已过期」：欠一小时和欠三个星期
                     长得一模一样的话，这个记号就只剩「有问题」三个字，没法拿来
-                    决定先干哪个。判据在 lib/taskView.ts 的 overdueLabel。 */}
-                {overdue && <span className="ink-overdue-mark">{overdueLabel(t, now) ?? '已过期'}</span>}
+                    决定先干哪个。判据在 lib/taskView.ts 的 overdueLabel。
+                    **在「已过期」那一组里只报「3 天」**（`briefTime`）——那两个字
+                    由组头说，一组 19 张卡各说一遍「过期」，眼睛先扫到 19 个「过期」
+                    才轮到任务。省掉的字挂在 `.ink-sr-only` 里给读屏，不靠 `title`：
+                    那个要悬停，触屏和读屏都没有这一步（同四象限那句说明为什么
+                    常驻的理由）。 */}
+                {overdue && (() => {
+                  const mark = overdueMark(t, now, briefTime)!;
+                  return (
+                    <span className="ink-overdue-mark" title={mark.say}>
+                      {mark.show !== mark.say && <span className="ink-sr-only">过期 </span>}
+                      {mark.show}
+                    </span>
+                  );
+                })()}
                 {/* 截止/提醒的键名（不是值）用群青标——群青标的是「这是 AI 写的/
                     推断的」，手工任务自己填的时间跟正文一样安静，这里按
                     t.source 决定，不是按字段本身。 */}
@@ -1248,12 +1438,35 @@ export function TaskCard({
                     「{blocker.title}」{dueText(blocker.startAt as string, now)} 才开始
                   </span>
                 )}
-                {!detail && t.due && (
+                {/* **过期的这一条不再说「截止」。** 上面那颗「过期 3 天」已经把同一件事
+                    说了——欠了多久，而「欠了多久」正是这一屏要用来排序的那一半，
+                    「原本约的是 10月5日 21:00」是它的换算结果，不是第二份信息。
+                    两条并排的后果实测过：同一条过期任务上先读到的「过期 3 天」和
+                    紧跟着的「截止 10月5日 21:00」说的是一件事，眼睛却要分两次确认
+                    它们不矛盾。
+
+                    **这不是新规矩，是把行档已有的那条搬过来。** `TaskRow.tsx` 的到期
+                    chip 一直是「有 chip 画 chip、没有 chip 而过期就画『已过期』」，
+                    二选一、从不并排（见那边 `chip ? … : overdueStyle && …`）。两档
+                    口径本来就该一致——`CONTRIBUTING.md` 点名过「同一条任务换个密度
+                    就少一条信息」这个形状（`waitingFor`、`startAt` 都是那么漏的）。
+
+                    **精确时刻没有丢**：详情面板顶上那颗日期药丸说的就是这个字段
+                    （`detail` 时这一行本来就不画它，见上面那段）。要精确到几点几分
+                    的时候，人已经点开那张卡了。 */}
+                {!detail && t.due && !overdue && (
                   <span>
                     <span className={t.source === 'ai' ? 'ink-time-ai' : undefined}>截止</span> {dueText(t.due, now)}
                   </span>
                 )}
-                {remindAt && (
+                {/* **跨天的那一条要说走到第几天。** 光有「截止 8月26日」答不了这一
+                    屏真正要问的那一句——「今天该推进多少」。进度是 3/12 还是 11/12，
+                    决定了今天投进去多少力气，而这正是这条任务和其它条不一样的地方。
+                    排在截止后面：两句说的是同一个区间，先说尽头再说走到哪儿。
+                    不借群青（那是配额制的颜色）、不借过期红（它没欠着）——石墨灰，
+                    跟「9月1日 开始」同一档：一条时间注记，不是任务本身。 */}
+                {spanLabel && <span className="ink-span-mark">{spanLabel}</span>}
+                {remindAt && !remindPassed && (
                   <span>
                     <span className={t.source === 'ai' ? 'ink-time-ai' : undefined}>提醒</span> {whenText(remindAt, now)}
                     {/* 还有几个没显示就说出来。卡片是摘要，摊开三四个时刻会
@@ -1286,6 +1499,11 @@ export function TaskCard({
               </div>
             )}
 
+            {/* 习惯的打卡条，**画在卡里面**（调用方给的，判据在 TodayView）。
+                它以前是这个 `<div>` 的兄弟节点、整张卡的外面，于是那行
+                「🔥 连续 5 天」落在两张卡的缝隙里，看着像上一张卡的。 */}
+            {!draft && habitLine}
+
             {/* 按 markdown 渲染，不是纯文本——AGENTS.md 明写「支持 markdown」，
                 AI 拆解时会往这里写标题/列表/代码块。react-markdown 直接构造
                 React 元素，不经过 HTML 字符串那条路，见 Markdown.tsx 顶部
@@ -1315,6 +1533,40 @@ export function TaskCard({
             群青——是选中态那批（2026-08-17-selection）之前就有的既有缺陷，这次
             顺手一起修，用的是跟选中勾选框同一个解法：只局部套这一小块，不去动
             外层调用方有没有套过 boardLocalTheme。 */}
+        {/* 检查事项的进度条（滴答清单详情页那一根）。**在这之前卡上只有
+            「子任务 2/5」几个字**，而多步骤任务最常问的问题是「还剩多少」——
+            字要给个数算一遍，横条给的是一眼。
+
+            **只画在「已经有进度」的时候**：一条都没勾的时候那根条是空的，
+            画出来只有「这里应该有点什么」的信息，是噪音（默认状态下大多数
+            任务一条都没勾，等于每张卡都多一根空条）。勾上第一下它才出现。
+
+            算的是**检查事项**，不是子任务：滴答那边也是「如果任务包含检查事项，
+            进度会根据已完成的检查事项自动计算」（`docs/dida365/任务详情与编辑.md`，
+            https://help.dida365.com/articles/6950661731483910144 ）。
+            子任务那条要 `⤴ 转成子任务` 之后才存在，两者别混。
+
+            **「全勾完自动完成主任务」不是这条新加的**，我们早就有，在服务端
+            `applyTaskPatch`（`server/src/mutate.ts` 的 `allChecked` 那一支，
+            带 `!isSettled` 守卫）。这条横条画满之后主任务会自己变 done，
+            两件事是配套的。 */}
+        {subs.length > 0 && subs.some((s) => s.done) && (
+          <div className="ink-subtask-progress">
+            <span
+              className="ink-subtask-track"
+              role="img"
+              aria-label={`检查事项进度 ${subs.filter((s) => s.done).length}/${subs.length}`}
+            >
+              <span
+                className="ink-subtask-bar"
+                style={{ width: `${Math.round((subs.filter((s) => s.done).length / subs.length) * 100)}%` }}
+              />
+            </span>
+            <span className="ink-subtask-pct">
+              {Math.round((subs.filter((s) => s.done).length / subs.length) * 100)}%
+            </span>
+          </div>
+        )}
         <ConfigProvider theme={boardLocalTheme}>
           {subs.map((s, i) => (
             <div className="ink-subtask-row" key={`${t.id}-${i}`}>
@@ -1433,26 +1685,17 @@ export function TaskCard({
           </aside>
         )}
 
-        <Space size={6} wrap align="center">
-          {/* 状态角标是这张卡「现在处在哪一步」的唯一来源——status 不合法时
-              （手改文件、AI 手滑）原始值就标在这里，用过期橙标出来，不装作
-              没发生过（见 taskView.ts 的 isStatus 注释），不需要在别处再重复
-              一遍同样的信息。 */}
-          {!draft && (
-            <span className={isStatus(t.status) ? 'ink-status-pill' : 'ink-status-pill ink-status-pill-bad'}>
-              {statusLabel}
-              {/* **搁了很久的把天数写在角标里。** 搁置是「暂时不做」，而这个
-                  应用里它不进「今天」「接下来」「四象限」，也不进推荐面板
-                  （suggest.ts 的 isCandidate 把搁置算作了结）——不写这个数字的话，
-                  三个月前搁下的和昨天搁下的长得一模一样，GTD 那档「将来也许」
-                  就成了黑洞。挂在角标里而不是另起一个记号：说的是同一件事的
-                  两半（现在是什么状态 + 这个状态待了多久）。判据在
-                  taskView 的 parkedQuietLabel（30 天门槛，只少说不多说）。 */}
-              {parkedQuietLabel(t, now) && (
-                <span className="ink-parked-quiet"> · {parkedQuietLabel(t, now)}</span>
-              )}
-            </span>
-          )}
+        {/* 间距 4 而不是别的行用的 6：这一排是整张卡最挤的一行（实测
+            「进行中」卡六个控件要 372px、三列网格下可用 317px），配合
+            theme.css 里按钮横向内边距 7→4 才回到一行。见 .ink-rank-moves
+            下面那节的量测记录。 */}
+        {/* 详情面板里挂 `.ink-dt-actions`：那一行不折，卡片档削出来的 4px 内边距
+            在面板里挤成一坨，界行也不该压在卡片上。判据和数在 theme.css 那条
+            「详情面板里那一排动作，是另一套尺寸」的注释里。 */}
+        <Space size={4} wrap align="center" className={detail ? 'ink-dt-actions' : undefined}>
+          {/* 状态角标搬到了标题行（旗和钉旁边）——它是「这张卡是什么」那一类，
+              不是动作；搬走后「进行中」卡在窄网格下不再折出孤儿第二行。
+              理由整段写在上面那处。 */}
           {/* 置顶的记号**搬到了标题行**（原来在这儿，跟状态角标并排）。
               理由不是审美，是实测：这一行是个 `wrap` 的 Space，置顶的卡比别的
               卡多一个元素，于是窄卡上（1440px 下「未归类」「清单」这些屏是
@@ -1473,21 +1716,48 @@ export function TaskCard({
             </>
           ) : (
             <>
-              {/* 同样的兜底：status 不合法时当成 todo 处理，避免 MOVES[t.status]
-                  是 undefined 时 .map 把整页炸掉。 */}
-              {MOVES[isStatus(t.status) ? t.status : 'todo'].map((m) => (
-                <Button key={m.to} size="small" onClick={() => onPatch(t.id, { status: m.to })}>
-                  {m.label}
-                </Button>
-              ))}
-              {/* 番茄钟：规格「卡片上一个『开始专注』，倒计时结束往该任务的
+              {detail
+                ? moves.map((m) => (
+                  <Button key={m.to} size="small" onClick={() => onPatch(t.id, { status: m.to })}>
+                    {m.label}
+                  </Button>
+                ))
+                : showAdvance && (
+                  <Button size="small" onClick={() => onPatch(t.id, { status: advance.to })}>
+                    {advance.label}
+                  </Button>
+                )}
+              {/* 「编辑」「删除」收进这颗 ⋯，不再各占一颗按钮。
+                  卡片网格化之后一张卡最窄只有 358px（2560 下六列），而一张
+                  待办卡摆着状态角标 + 两步状态动作 + 编辑 + 删除 + 上下移动
+                  共六个控件，实测 2560 下每一张的按钮都要折成两行——屏幕最宽
+                  的时候按钮反而放不下。收起这两颗之后一行装得下。
+                  顺带把删除这个分量最重的动作从一等位置挪走：它原本紧挨着
+                  「编辑」，两颗都是文字按钮、只差一个字宽——删除现在会先进
+                  垃圾箱、不是没有退路，但误触的代价还是不该跟「编辑」一样轻。
+
+                  **它摆在计时器前面**：卡片档那两颗「番茄钟」「正计时」常态
+                  是收起来的（见 .ink-hover-only），一个看不见还占位的组放在
+                  中间，会把 ⋯ 顶出一段空白；放在行尾，空白落在最右边，读起来
+                  就是一排正常的工具条。**详情面板里它又被挪回行尾**（那两颗常
+                  驻，上面那段理由不成立）——DOM 顺序不动，靠 theme.css 里
+                  `.ink-dt-actions .ant-space-item:has(.ink-task-more)` 的
+                  `order`。 */}
+              <Dropdown trigger={['click']} menu={cardMenu}>
+                <Button size="small" type="text" className="ink-task-more" aria-label={`「${t.title}」的更多操作`}>⋯</Button>
+              </Dropdown>
+              {/* 番茄钟：规格「卡片上一个『番茄钟』，倒计时结束往该任务的
                   focusSessions 追加一条」。**追加不是覆盖**——onComplete 拿到
                   的只是这一轮新产出的那一条，把它跟已有的 focusSessions 拼起来
                   发 PATCH 是这里的责任，FocusTimer 自己不知道、也不该知道这张
                   卡已经攒了几条。`t.focusSessions ?? []` 兜底：GET /api/tasks
                   不校验文件写入的数据，跟上面 subtasks 的兜底同一条理由
-                  （TaskCard.tsx 渲染 .ink-subtask 那段注释）。 */}
+                  （TaskCard.tsx 渲染 .ink-subtask 那段注释）。
+                  **`quietIdle`**：卡片档没在跑的时候这两颗收进「悬停/聚焦到这张
+                  卡才显形」（见 .ink-hover-only）；跑起来了那个倒计时**必须常驻**
+                  ——它是这张卡上唯一说明「现在在计时」的东西。详情面板不静。 */}
               <FocusTimer
+                quietIdle={!detail}
                 minutes={focusMinutes}
                 // 写进浏览器标签页用（`FocusTimer` 里那两个 effect），界面上
                 // 不显示——卡片标题就在旁边。
@@ -1500,28 +1770,10 @@ export function TaskCard({
                    而屏幕上那个走了十八分钟的倒计时就这么没了。不改「不记」这条
                    规矩，只是不再瞒着。用 warning 不用 info：丢了东西。 */
                 onAbandon={() => void message.warning(`「${t.title}」${FOCUS_ABANDON_TAIL}`)}
+                /* 被别的卡占着时点这两颗——**触屏唯一的出路**。那句话平时挂在
+                   title 上（鼠标 + 读屏两条通道），手机两条都没有。 */
+                onHint={(say) => void message.info(say)}
               />
-              {/* 「编辑」「删除」收进这颗 ⋯，不再各占一颗按钮。
-                  卡片网格化之后一张卡最窄只有 358px（2560 下六列），而一张
-                  待办卡摆着状态角标 + 两步状态动作 + 编辑 + 删除 + 上下移动
-                  共六个控件，实测 2560 下每一张的按钮都要折成两行——屏幕最宽
-                  的时候按钮反而放不下。收起这两颗之后一行装得下。
-                  顺带把删除这个分量最重的动作从一等位置挪走：它原本紧挨着
-                  「编辑」，两颗都是文字按钮、只差一个字宽——删除现在会先进
-                  垃圾箱、不是没有退路，但误触的代价还是不该跟「编辑」一样轻。 */}
-              <Dropdown trigger={['click']} menu={cardMenu}>
-                <Button size="small" type="text" aria-label={`「${t.title}」的更多操作`}>⋯</Button>
-              </Dropdown>
-              {/* 「今天」视图专属：手动排序的键盘/鼠标共用路径，见 TaskCard.tsx
-                  顶部 MoveControls 的注释。边界处禁用（不是隐藏）——禁用的原生
-                  按钮天然退出 Tab 顺序，这是这个仓库已经在用的可达性写法
-                  （保存按钮的 disabled 同一套）。 */}
-              {move && (
-                <span role="group" aria-label={`调整「${t.title}」在今天列表里的顺序`}>
-                  <Button className="ink-move-btn" ref={move.upRef} size="small" aria-label="上移" disabled={!move.canMoveUp || move.busy} loading={move.loadingUp} onClick={move.onUp}>↑</Button>
-                  <Button className="ink-move-btn" ref={move.downRef} size="small" aria-label="下移" disabled={!move.canMoveDown || move.busy} loading={move.loadingDown} onClick={move.onDown}>↓</Button>
-                </span>
-              )}
             </>
           )}
         </Space>
@@ -1531,3 +1783,28 @@ export function TaskCard({
     </div>
   );
 }
+
+/**
+ * **`TaskCard` 是 `memo` 过的，导出的是它。**
+ *
+ * **为什么**：一张卡是一整棵带 antd 组件、拖拽、番茄钟、附件的子树，重渲染它
+ * 不是「多跑一个函数」，是把那一整棵重新 reconcile 一遍。`App.tsx` 一层挂着
+ * 50 个 state（改筛选词、开设置弹层、收到一条 SSE……），任何一处变动都会顺着
+ * 往下重渲染整屏的卡——而它们的内容一个字节都没变。一屏几十张卡时，这一下就是
+ * 几十棵子树白跑一遍。
+ *
+ * **光有 `memo` 挡不住，得配着 `TaskGrid` 那边的接线一起看**：memo 比的是
+ * props 的引用，而进到每张卡上的 `onOpen={() => open(t.id)}`、`select` 这类
+ * 闭包/对象是每次渲染现造的——memo 会判定「props 变了」，一张都省不掉。所以
+ * `TaskGrid.tsx` 的 `renderTaskBody` 同步做了稳定化，两边是一件事的两半。
+ *
+ * **为什么不用自定义比较函数**：默认值就是逐个 prop 浅比较，而这里绝大多数 prop
+ * 本来就是标量（`offline`/`detail`/`focusMinutes`）或本就该逐个比的对象。写一个
+ * 自定义 `arePropsEqual` 只会多一处「以后加字段忘了加进比较器」的坑——那正是
+ * 这个仓库最贵的那类缺陷（`cardWiring.guard.test.ts` 记着三次）。
+ *
+ * **判断有没有生效看 `cardRenderBudget.test.tsx`**，别看这里有没有写 memo：
+ * 那条测试数的是真渲染次数，memo 加了但没生效它照样红。
+ */
+export const TaskCard = memo(TaskCardImpl);
+export type TaskCard = ReturnType<typeof TaskCardImpl>;

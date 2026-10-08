@@ -199,6 +199,10 @@ function GroupSection({ group, now, onPatch, onEditTask, onDelete, onEditingChan
 
 interface Props {
   tasks: Task[];
+  /** 「还没读到过任务」时该说的那一句，跟 `TodayView` 同一个 prop、同一份
+   *  判据（`lib/firstRun.ts`）。非空时顶上「还没有任何任务」和「这个筛选下
+   *  没有任务」那句——那两句都是对「有没有」的断言。 */
+  preRead?: string | null;
   inbox: InboxItem[];
   now: Date;
   onPatch: (id: string, patch: Partial<Task>) => void;
@@ -240,7 +244,7 @@ interface Props {
   onSelectionChange?: (next: SelState) => void;
 }
 
-export function TaskBoard({ tasks, inbox, now, onPatch, onEditTask, onDelete, onDuplicate, onSkip, onBreakdown, onPromoteSubtask, proposals, filter, onFilterChange, lists, focusMinutes, breakMinutes, offline, selection, onSelectionChange }: Props) {
+export function TaskBoard({ tasks, preRead, inbox, now, onPatch, onEditTask, onDelete, onDuplicate, onSkip, onBreakdown, onPromoteSubtask, proposals, filter, onFilterChange, lists, focusMinutes, breakMinutes, offline, selection, onSelectionChange }: Props) {
   // 正在编辑的任务 id——筛选切换不能把这些卡从树上摘掉，见 TaskCard.tsx 里
   // CardProps 上 onEditingChange 的注释，跟 InboxSidebar 是同一个套路。
   const [editingIds, setEditingIds] = useState<Set<string>>(new Set());
@@ -316,7 +320,7 @@ export function TaskBoard({ tasks, inbox, now, onPatch, onEditTask, onDelete, on
             // 「空的」两个字在有任务的时候都算不上一句话，在一台刚装好的机器上
             // 更是把人拦在门外——这个视图正是手工建的任务落脚的地方（「单独记的」
             // 那一组）。判据和文案在 lib/firstRun.ts，跟「今天」共用一句。
-            <p className="ink-empty-note">{isFirstRun(tasks) ? FIRST_RUN_HINT : '这个筛选下没有任务'}</p>
+            <p className="ink-empty-note">{preRead ?? (isFirstRun(tasks) ? FIRST_RUN_HINT : '这个筛选下没有任务')}</p>
           )
         )}
 

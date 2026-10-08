@@ -62,13 +62,18 @@ npm 的字段，作用是挡住 `npm publish`。这是个应用不是库，永�
 | `AGENTS.md` 的样例 JSON、两处字段名单 | `agentsMd.guard.test.ts`（也盯 `README.md`） |
 | 各处 `Task` 夹具（数量别记，这行原来写「约三十五处」，实测已是三位数） | typecheck |
 | `store.ts` 的 `newTask`、`dataSource.ts` 的 `newLocalTask`（两个都返回完整 `Task`） | typecheck |
-| 编辑表单折叠区那行 `<summary>`（「重复 / 在等谁 / …」）得把新字段列进去 | `TaskFields.test.tsx`，拿真渲染出来的 `aria-label` 比，不是手抄名单 |
+| `server/src/migrate.ts` 的 `upgradeTask` 漏读新字段（返回类型就是 `Task`，每个字段必填） | typecheck（少一个必填属性就是 TS2741），外加 `migrate.test.ts` 那条「幂等测试要覆盖全部非默认字段」的用例 |
+| 编辑表单那一格属性（`TaskFields.tsx` 的 `DraftAttr` + `ATTR_NAME` + `ATTR_GROUPS`）得把新字段列进去 | `TaskFields.test.tsx`，拿真渲染出来的 `aria-label` 比（「＋ 加一项」菜单里那颗按钮），不是手抄名单 |
 
 **不会红的**——这几处漏了，测试全绿、界面看着也正常：
 
-- **`server/src/migrate.ts`**：不读就是永远 `undefined`，而校验器只拦「写错的」，
-  拦不住「没读的」。（`migrate.test.ts` 那条幂等用例拦的是「读了、但夹具没跟上」，
-  不是「忘了读」——两边都没有那个键时它是绿的。）
+- **`server/src/migrate.ts`**：这一条**从「不会红」挪进了「会红」**。当年不读的后果
+  是「新字段在老数据上永远是 `undefined`」，而校验器只拦「写错的」、拦不住「没读的」。
+  现在两道都盯着：`upgradeTask` 的返回类型就是 `Task`（每个字段都必填），少读一个
+  typecheck 就报 TS2741；`migrate.test.ts` 那条幂等用例（每个字段都给了非默认值）
+  再兜一层：夹具里给了、迁移里没读，那一格落回默认值，用例照样红。留在这儿是因为
+  它教的那件事还在：**加字段时忘了在迁移里读它，后果是「老数据上那个字段永远是空」**
+  ——只是现在有人替你盯了。
 - **`TaskCard` 和 `TaskRow` 两处都要画**。只画卡片的话，**同一条任务换个密度就少
   一条信息**——`waitingFor`、`startAt` 都是这么漏过一轮的，后者是拍四象限的图才
   发现的。
@@ -93,8 +98,8 @@ npm 的字段，作用是挡住 `npm publish`。这是个应用不是库，永�
 
 ## 给 `Settings` 加一个字段，要动哪些地方
 
-跟上面那份是两码事，坑也不一样。这份是加 AI 那四格（`aiMode`/`aiBaseUrl`/
-`aiKey`/`aiModel`）撞出来的。
+跟上面那份是两码事，坑也不一样。这份是加 AI 那一栏（`aiMode` 和接口配置那几个字段）
+撞出来的。
 
 会红的：
 
@@ -102,22 +107,43 @@ npm 的字段，作用是挡住 `npm publish`。这是个应用不是库，永�
 |---|---|
 | `server/src/model.ts` + `web/src/types.ts` 两份一模一样（连注释） | `types.sync.test.ts` |
 | `DEFAULT_SETTINGS` 补上默认值 | typecheck（`Settings` 是完整类型） |
-| `PUT /api/settings` 里那个 `next: Settings = { … }` 少一个键 | typecheck，同上 |
+| `server/src/settings.ts` 的 `sanitizeSettings` 里那个 `next: Settings = { … }` 少一个键 | typecheck，同上（`PUT /api/settings` 现在只调它，那条路由里没有这份字面量了） |
 | 各处 `Settings` 夹具（`App.test.tsx`、`SettingsModal.test.tsx`、`CalendarView.test.tsx`） | typecheck |
 
 **不会红的**：
 
-- **`PUT` 那条路由里写了键、但没真的读请求体。** 上面那行 typecheck 只保证
+- **`sanitizeSettings` 里写了键、但没真的读请求体。** 上面那行 typecheck 只保证
   「这个键在对象里」，保证不了「它的值来自 `body`」——写成
   `aiMode: DEFAULT_SETTINGS.aiMode` 照样编译，结果是**用户在设置页改什么都存不进去，
-  保存还回 200**。加字段时对着那条路由挨个看一遍值是从哪儿来的。
+  保存还回 200**。加字段时对着 `server/src/settings.ts` 里那份挨个看一遍值是从哪儿来的。
 - **`SettingsModal.tsx` 里没画这一格。** 字段存得进、读得出，界面上就是没有——
   跟「加了但坏了」长得完全不一样，不会有任何测试提这件事。
 - **是不是秘密。** 这个服务能绑局域网（`LAN=1`），`GET /api/settings` 的响应
   同一个 Wi-Fi 下谁都读得到。密钥那一类要打码回去（`aiApi.ts` 的 `maskKey`），
   而且 **`PUT` 的响应也要打**——那条路由回的是整份设置，界面拿它刷新 state，
   只挡 `GET` 等于没挡。这一条是写测试时才发现漏的。
-- **改了会不会一直漏。** `webhookUrl` 和 `aiBaseUrl` 都属于「被人改到别处之后，
+- **打码要打在「密钥出现的每一处」，不止当前那一个形状。** 2026-10-21 实测的
+  一次漏网：密钥从平铺的 `aiKey` 搬到 `aiEndpoints[*].key` 之后，打码只加在了
+  新形状上，而 `readSettings()` 里那句 `{ ...DEFAULT_SETTINGS, ...raw }` 展开
+  **把旧形状那三格一起带了出来**——于是「升级了但还没保存过一次设置」的老机器，
+  `GET /api/settings` 回的就是**明文**（`aiKey` 那一格），同一个 Wi-Fi 上谁都读得到。
+  派生成新形状是对的，**把旧形状的原文留着不是**：读完就要摘掉
+  （`store.ts` 的 `readSettings`）。守卫在 `app.test.ts`「老形状的 device.json」那条。
+- **加一格之前先问：这一格是「每家一份」还是「全应用一份」？** 接口配置现在是
+  **一家一条记录**（`Settings.aiEndpoints` + `aiEndpointId` 指到当前选中的那条）。
+  放错层的表现是「切到别家，这个值还跟着走」——**旧版那把全局密钥造成的假 401 就是
+  这么来的**（点了另一家的芯片、没碰密钥格，上一家真钥匙被发到新地址上）。
+  判据：这一格会不会**跟着地址走**？会 → 放进记录里；不会 → 放顶层。
+- **打码串不能当成真密钥存下去。** 界面上回显的是打码（`••••` 加后四位），机器上
+  没有对应真值时，那串打码**还原不出密钥**——存下去就是一把废钥匙，第一次调接口
+  才以 401 现形，而报错说的是「密钥无效」，人只会反复重填。判据在 `aiKeyFrom`
+  （`aiApi.ts`）：**手上没真值、收到的又是打码 → 落空串**。
+- **「换主机要重填一次」这条判据，服务端和界面两边都要有。** 服务端存的时候把
+  密钥清掉（`settings.ts` 的 `mergeEndpoint`：主机变了就不给），界面要在**保存之前**
+  先说清（`AiSettingsSection` 的 `movedHost`）。少一边就是「保存完对着一句跟真实原因
+  毫无关系的 401 猜是哪格错了」。
+- **改了会不会一直漏。** `webhookUrl` 和接口地址（现在住在 `aiEndpoints` 每条记录里）
+  都属于「被人改到别处之后，
   关掉局域网模式也收不回来」的那一类，加这种字段要往 `lanBind.ts` 的
   `LAN_WARNING` 里补一句（那句话被 `android/冒烟清单.md` 逐字抄了一份，
   `lanBind.test.ts` 有守卫盯着两边一致）。
@@ -128,5 +154,27 @@ npm 的字段，作用是挡住 `npm publish`。这是个应用不是库，永�
 才看得见，而这个仓库已经为它们付过账：侧栏一段用错了布局、计数没右对齐、多行的
 随手记被 markdown 折成一长行、行档少一枚 chip——四条都是单测全绿、拍图才现形的。
 
-起一个带假数据的临时实例（`DATA_DIR` **和** `DEVICE_CONFIG` 都要给，只给前者会
-读写他真实的设置、还会去 spawn AI），`tools/shot.mjs` 拍几屏，窄屏也拍一次。
+起一个带假数据的临时实例（`DATA_DIR`、`DEVICE_CONFIG` **和** `AGENT_CWD` 都要给：
+不指走就用着他真实的 `device.json` 和真实的数据目录，那份设置里「自动拆解」默认
+开着，会真的 spawn 一次 AI；`AGENT_CWD` 不指的话，CLI 那条路还会被 `aiSeesSameData`
+那道守卫当场拒掉，提示是「把 DATA_DIR 和 AGENT_CWD 指到同一处再试」）。假数据和
+那份把「自动拆解」关掉了的 `device.json` 由 `tools/preview-fixture.mjs` 铺（跑法写在
+`tools/design-preview/batch1.html` 头部那段注释里）；`tools/shot.mjs` 拍几屏，
+窄屏也拍一次。
+
+### 打磨稿（`tools/design-preview/`）
+
+`batch1.html`（现状审计）、`batch2.html`（同一条改动的改前/改后对照）、
+`floors.html`（24px 下限咬不咬人）加共用的 `drive.js` 与跑在每格自己 realm 里的
+`probe.js`。**每一格是同源的真 app iframe，不是截图**，所以量到的就是屏幕上的数。
+起法和各张表的判据都写在 `batch1.html` 头部那一段注释里。
+
+**这套东西住在 `tools/`，不在 `web/public/`——这条是刻意的。** `web/public/` 是
+Vite 的 publicDir，里面的东西原样进 `web/dist`，而 `web/dist` 整个进安装包
+（`desktop/electron-builder.yml` 的 extraResources）。搁在那儿的结果是每个装好的应用
+都带着这套内部审计稿、`/design-preview/batch1.html` 对最终用户敞开。现在只有带
+`DESIGN_PREVIEW=1` 起的服务才把它挂到那条路径上（`server/src/index.ts`），不带这个
+开关时 `/design-preview/*` 一律 404 并说明原因——不会落到 SPA 外壳上冒充 `probe.js`。
+
+`web/public/` 剩下的两样（`icon.svg`、`social-card.png`）是**要**跟着站点走的，别拿
+它们当先例往这儿加东西。

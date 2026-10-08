@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  POSTPONE_MINUTES, postponePatch, reschedulePatch, snoozePatch, snoozeLabel, SNOOZE_CHOICES,
+  POSTPONE_MINUTES, postponePatch, rescheduleDayPatch, reschedulePatch, snoozePatch, snoozeLabel, SNOOZE_CHOICES,
 } from './reschedule.js';
 import { SNOOZE_MINUTES } from '../../../desktop/src/notify.js';
 import type { Task } from '../types.js';
@@ -338,5 +338,54 @@ describe('时间段：改期 / 推迟挪的是那场会，不是补一个 due', 
   it('提醒跟着一起平移——按锚点的位移算，不是按 due', () => {
     const p = reschedulePatch(meeting({ reminders: [{ at: iso(2026, 8, 22, 8, 30), firedAt: null }] }), 'tomorrow', NOW);
     expect(p.reminders).toEqual([{ at: iso(2026, 8, 23, 8, 30), firedAt: null }]);
+  });
+});
+
+/**
+ * 「改到某一天」（批量条那颗日期选择器）。跟 `reschedulePatch` 共用同一段
+ * 规矩，所以这里只钉**两档不一样的那一处**和几条基本盘。
+ */
+describe('rescheduleDayPatch（批量「改到某天」）', () => {
+  it('原来几点还是几点：8/21 18:00 改到 9/2 是 9/2 18:00', () => {
+    const t = task({ due: iso(2026, 8, 21, 18) });
+    expect(rescheduleDayPatch(t, local(2026, 9, 2), NOW).due).toBe(iso(2026, 9, 2, 18));
+  });
+
+  it('原来没有钟点 → 落那天的 23:59，跟「改到明天」同一个数', () => {
+    const t = task({ due: iso(2026, 8, 21) });   // 本地零点 = 「只写了日期」
+    expect(rescheduleDayPatch(t, local(2026, 9, 2), NOW).due).toBe(iso(2026, 9, 2, 23, 59));
+  });
+
+  it('提醒跟着平移同样的量（只改 due 不动提醒，等于让它在下一个 tick 炸出来）', () => {
+    const t = task({ due: iso(2026, 8, 21, 18), reminders: [{ at: iso(2026, 8, 21, 17), firedAt: null }] });
+    const p = rescheduleDayPatch(t, local(2026, 9, 2), NOW);
+    expect(p.reminders).toEqual([{ at: iso(2026, 9, 2, 17), firedAt: null }]);
+  });
+
+  it('时间段整条挪，间隔不变', () => {
+    const t = task({ startAt: iso(2026, 8, 21, 9), endAt: iso(2026, 8, 21, 12) });
+    const p = rescheduleDayPatch(t, local(2026, 9, 2), NOW);
+    expect(p.startAt).toBe(iso(2026, 9, 2, 9));
+    expect(p.endAt).toBe(iso(2026, 9, 2, 12));
+  });
+
+  /**
+   * 这一条是这一档跟「改到今天」唯一的区别，也是最容易被「顺手统一」掉的一处：
+   * 「改到今天」那句含糊的话需要兜底（今天之内做），而日期选择器里他明明白白
+   * 选了那天——把 09:00 改写成 23:59 是替他改写他刚做的选择。
+   */
+  it('**选的是已经过去的日子：钟点照留，不改写成 23:59**', () => {
+    const t = task({ due: iso(2026, 8, 21, 18) });
+    expect(rescheduleDayPatch(t, local(2026, 8, 20), NOW).due).toBe(iso(2026, 8, 20, 18));
+    // 同一份夹具走「今天」那一档就会兜底（NOW 是 10:00，今天 18:00 还没到，
+    // 所以这里换个已经过的钟点来证明两条路真的不同）。
+    const morning = task({ due: iso(2026, 8, 21, 9) });
+    expect(reschedulePatch(morning, 'today', NOW).due).toBe(iso(2026, 8, 22, 23, 59));
+    expect(rescheduleDayPatch(morning, local(2026, 8, 22), NOW).due).toBe(iso(2026, 8, 22, 9));
+  });
+
+  it('什么时间都没有的任务：给它一个那天的 23:59（跟「改到明天」同一条）', () => {
+    const p = rescheduleDayPatch(task({ due: null }), local(2026, 9, 2), NOW);
+    expect(p.due).toBe(iso(2026, 9, 2, 23, 59));
   });
 });

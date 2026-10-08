@@ -345,7 +345,7 @@ export function skipPatch(t: Task, at: Date): SkipPatch | null {
 /**
  * 完成这一下之后，下一条会不会生成、落在哪天。
  *
- * **给界面报一句「下次 X」用的**（`web/src/lib/undoDone.ts`）：点完成，那张
+ * **给界面报一句「下次 X」用的**（`web/src/lib/undoStatus.ts`）：点完成，那张
  * 卡当场消失，一条「每周一交周报」看不出下一条到底生没生成、生在哪天——而
  * 那正是重复任务最需要当场确认的一件事。
  *

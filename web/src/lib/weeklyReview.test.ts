@@ -26,6 +26,30 @@ describe('weeklyReview：这一周该过一遍的', () => {
     expect(rows[0].text).toContain('2 条');
   });
 
+  /**
+   * **这一屏每一行的句式是一条：「数字 + 量词 + 什么事」。**
+   *
+   * 原来第一行写的是「收件箱还有 2 条没处理」——数字夹在句子中间，而它下面五行
+   * 全都是「2 条…」开头；同一屏里两套找数字的办法，扫读时眼睛要来回切。
+   *
+   * 钉的是**形状**而不是逐行抄文案：逐行写死的话，加第七行不会红，而这条规矩的
+   * 价值恰恰在于下一行也得照办。六个去处各造一行来跑，是为了让「一个 fixture
+   * 都没触发」不能蒙成绿——那正是形状断言最容易变空转的方式。
+   */
+  it('六行全是「数字 + 量词」开头——形状，不是逐行抄文案', () => {
+    const rows = [
+      ...weeklyReview([], inbox(2), NOW),
+      ...weeklyReview([task({ id: 'a', due: daysAgo(3) })], [], NOW),
+      ...weeklyReview([task({ id: 'p' }), task({ id: 'k', parentId: 'p', status: 'later' })], [], NOW),
+      ...weeklyReview([task({ id: 'd', postponeCount: POSTPONE_MIN })], [], NOW),
+      ...weeklyReview([task({ id: 'w', waitingFor: '张老师', updatedAt: daysAgo(WAITING_QUIET_DAYS + 1) })], [], NOW),
+      ...weeklyReview([task({ id: 'q', status: 'later', updatedAt: daysAgo(PARKED_QUIET_DAYS + 1) })], [], NOW),
+    ];
+    expect([...new Set(rows.map((r) => r.key))].sort())
+      .toEqual(['inbox', 'overdue', 'parked', 'postponed', 'stalled', 'waiting']);
+    for (const r of rows) expect(r.text, `${r.key} 那一行的句式：${r.text}`).toMatch(/^\d+ (条|个)/);
+  });
+
   it('过期的：判据跟卡片上那个红标签同一条（countStale），点了去「今天」', () => {
     const rows = weeklyReview([task({ id: 'a', due: daysAgo(3) })], [], NOW);
     expect(rows).toEqual([expect.objectContaining({ key: 'overdue', count: 1, go: 'today' })]);
@@ -264,9 +288,16 @@ describe('postponedToReview：一拖再拖', () => {
   });
 
   /** 门槛写进文案里（跟「等待」「搁置」那两行同一条规矩）：那个数字必须来自
-   *  常量，不能在文案里另写一个——改常量时这句话得跟着变。 */
-  it('那一行把门槛写出来', () => {
+   *  常量，不能在文案里另写一个——改常量时这句话得跟着变。
+   *
+   * 整句逐字钉，不是 `toContain(数字)`：这一句原来写的是「改过 2 次以上期」，
+   * 「以上」插在「2 次」和「期」中间，读一遍得停一下——而 `toContain` 对那种
+   * 语序和正确语序给出同一个答案，它从来没有真的看过这句话。
+   *
+   * 现在的措辞跟卡片上那个记号逐字一致（「推迟过 N 次」）：同一件事在一屏里不该
+   * 有两种说法，那处换措辞的账记在 `TaskCard.test.tsx` 里。 */
+  it('那一行把门槛写出来（整句逐字，语序也算）', () => {
     const row = weeklyReview([task({ id: 'a', postponeCount: POSTPONE_MIN })], [], NOW)[0];
-    expect(row.text).toContain(String(POSTPONE_MIN));
+    expect(row.text).toBe(`1 条推迟过 ${POSTPONE_MIN} 次以上、一直没动`);
   });
 });

@@ -12,7 +12,7 @@ import { readFileSync, readdirSync } from 'node:fs';
  *   之后子任务留在 A，接受「把子任务都勾上」之后一条每周重复的任务就地断链。
  * - 离线改任务（`web/src/lib/dataSource.ts`）同样只有 `applyTaskPatch`：手机上
  *   勾掉一个三层的项目，提示语照样说「连带做完了 5 条子任务」（那句话是界面
- *   自己按服务端的规矩算的，见 `lib/undoDone.ts`），屏幕上那 5 条一条没动。
+ *   自己按服务端的规矩算的，见 `lib/undoStatus.ts`），屏幕上那 5 条一条没动。
  * - 离线批量改是同一处的第二个入口，同样漏。
  *
  * 收成一份之后那种漏法**没有位置发生**：要么调 `cascadeAll`，要么一条都没有。

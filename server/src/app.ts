@@ -10,9 +10,10 @@ import {
   newTask, nowIso, paths,
   readCountdowns, readFolders, readInbox, readInsights, readLists, readProposals, readSettings, readTasks, readTrash,
   writeCountdowns, writeFolders, writeInbox, writeInsights, writeLists, writeProposals, writeSettings, writeTasks, writeTrash,
-  type Countdown, type Folder, type InboxItem, type List, type Task,
+  type AiEndpoint, type Countdown, type Folder, type InboxItem, type List, type Settings, type Task,
 } from './store.js';
 import type { Bus } from './events.js';
+import { todayProgress } from './dailySummary.js';
 import { caseClashIn, isSafeId, writeConflictCopy } from './entityStore.js';
 import { checkPushEntries, decidePush, type PushEntry, type PushKind, type PushKindResult } from './push.js';
 import { applyImport, checkKeysAndIds, checkShapes, type ImportPayload } from './import.js';
@@ -20,8 +21,8 @@ import { listAllConflicts, listAllBroken } from './conflicts.js';
 import { toastRaw } from './reminder.js';
 import { createAutoExpand } from './autoExpand.js';
 import { createAgentRunner, type Spawner } from './expand.js';
-import { aiKeyFrom, maskKey, testAi, type Fetcher } from './aiApi.js';
-import { sanitizeSettings } from './settings.js';
+import { maskKey, testAi, type Fetcher } from './aiApi.js';
+import { mergeEndpoint, sanitizeSettings } from './settings.js';
 import { skipPatch } from './repeat.js';
 import { checkTaskPatch, isSettled, sanitizeProposalPatch } from './task.js';
 import { INK_AI, checkFolderPatch, checkListPatch } from './list.js';
@@ -44,7 +45,7 @@ import {
  * 这个号是给客户端判「能不能对话」用的，两者升级节奏不同）。
  *
  * `web/src/components/ServerSetup.tsx` 的 `CLIENT_API_VERSION` 手动保持一致，
- * 跟根 `CLAUDE.md` 里 `web/src/types.ts` 手动同步 `model.ts` 那批类型是同一个
+ * 跟 `CONTRIBUTING.md` 里「`web/src/types.ts` 手动同步 `model.ts` 那批类型」是同一个
  * 套路——一个整数常量的同步负担远小于一整个 interface，先不为它搭一份专门的
  * 跨包同步测试。
  */
@@ -55,7 +56,8 @@ export const API_VERSION = 1;
  * 的那个**，`capacitor.config.ts` 把 `server.androidScheme` 显式设成了 `'http'`
  * （不设的话 Capacitor 8 Android 端默认 `'https'`，WebView 的 origin 会变成
  * `https://localhost`，不在这份白名单里，而且是安全上下文，fetch 局域网明文地址会被
- * Blink 当成主动混合内容拦掉——见 `final-review.md` C1，这一批真的漏过一次）；和
+ * Blink 当成主动混合内容拦掉——**这一批真的漏过一次**，所以 `http://localhost`
+ * 单列在下面那份白名单里）；和
  * `capacitor://localhost`——**iOS** 的默认 scheme，这个项目还没有 iOS 工程，留着
  * 是给以后用，Android 从来不会发这个 origin。
  *
@@ -132,7 +134,7 @@ function contentDisposition(name: string): string {
  * 完成/删除/打补丁三件写入语义已经搬进 `mutate.ts`（平台无关的纯函数，
  * server 和 web 共用，见那个文件顶部的注释）。这里留一个同名的薄包装。
  *
- * 下面三个调用点（批量 PATCH、单条 PATCH、接受提议）**全部显式传第三个参数**
+ * 下面三个调用点（单条 PATCH、跳过、接受提议）**全部显式传第三个参数**
  * `nowIso()`——纯函数不读时钟这条性质一路延伸到路由层，不靠这里的默认参数兜底。
  * 默认参数留着**只是为了 `applyTaskPatch.test.ts`**：那份既有测试直接
  * `import { applyTaskPatch } from './app.js'`、按 2 个参数调用（断言落在
@@ -433,9 +435,9 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   app.patch('/api/inbox/:id', async (c) => {
     const body = (await jsonBody(c)) as Record<string, unknown> | null;
     if (!body) return c.json({ error: '请求体不是合法 JSON' }, 400);
-    if ('processed' in body && typeof body.processed !== 'boolean') return c.json({ error: 'processed 必须是布尔值' }, 400);
+    if ('processed' in body && typeof body.processed !== 'boolean') return c.json({ error: 'processed 要是布尔值' }, 400);
     if ('taskIds' in body && !(Array.isArray(body.taskIds) && body.taskIds.every((x) => typeof x === 'string'))) {
-      return c.json({ error: 'taskIds 必须是字符串数组' }, 400);
+      return c.json({ error: 'taskIds 要是字符串数组' }, 400);
     }
     // 跟 POST /api/inbox 同一套判据：非空字符串，首尾去空白。这是信任边界——
     // 网页不是唯一的客户端，判据只在这一处实现，不在前端另外挡一遍。
@@ -559,6 +561,18 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
    * 不是任务总数。这里只改响应、不写盘，不会跟并发写打架。 */
   app.get('/api/tasks', (c) => c.json(readTasks().map(asServed)));
 
+  /**
+   * 桌面端画任务栏进度条要的那三个数：**今天一共几件、做完了几件、还剩几件**。
+   *
+   * **三个数一起给，因为只给「还剩几件」画不出进度条**——进度条要的是一个比例，
+   * 分母（今天一共几件，含已经做完的）只有服务端算得出来：判据是
+   * `dailySummary.ts` 的 `belongsToToday`，跟每日概览那条推送、跟网页「今天」
+   * 那一屏是同一份口径（网页那边由 `todayParity.guard.test.ts` 逐条对账）。
+   *
+   * 桌面端那边只是拿这三个数去填 `win.setProgressBar`（见 desktop/src/progress.ts）。
+   */
+  app.get('/api/summary', (c) => c.json(todayProgress(readTasks(), new Date())));
+
   app.post('/api/tasks', async (c) => {
     const r = checkTaskPatch(await jsonBody(c));
     if (!r.ok) return c.json({ error: `${r.field} ${r.reason}`, field: r.field }, 400);
@@ -626,7 +640,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   app.patch('/api/tasks/reorder', async (c) => {
     const body = (await jsonBody(c)) as { ids?: unknown } | null;
     if (!body || !Array.isArray(body.ids) || !body.ids.every((x) => typeof x === 'string')) {
-      return c.json({ error: 'ids 必须是字符串数组' }, 400);
+      return c.json({ error: 'ids 要是字符串数组' }, 400);
     }
     // 排序算法本身（下标就是新 order、跳过没变的、找不到的 id 忽略）提成了
     // 平台无关的 applyReorder（mutate.ts）——Task 2 的离线本地实现共用同一份，
@@ -684,10 +698,10 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
       ? (body.patches as Array<{ id: unknown; patch: unknown }>)
       : (Array.isArray(body.ids) ? (body.ids as unknown[]).map((id) => ({ id, patch: body.patch })) : []);
     if (!Array.isArray(body.patches) && !Array.isArray(body.ids)) {
-      return c.json({ error: 'ids 必须是字符串数组（或者给 patches: [{id, patch}]）' }, 400);
+      return c.json({ error: 'ids 要是字符串数组（或者给 patches: [{id, patch}]）' }, 400);
     }
     if (!raw.every((e) => e && typeof e === 'object' && typeof e.id === 'string')) {
-      return c.json({ error: 'ids 必须是字符串数组（或者给 patches: [{id, patch}]）' }, 400);
+      return c.json({ error: 'ids 要是字符串数组（或者给 patches: [{id, patch}]）' }, 400);
     }
 
     // **一条校验不过就整批退回**，不是挑着改：半批生效的批量操作没法解释，
@@ -736,7 +750,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   app.delete('/api/tasks', async (c) => {
     const body = (await jsonBody(c)) as { ids?: unknown } | null;
     if (!body || !Array.isArray(body.ids) || !body.ids.every((x) => typeof x === 'string')) {
-      return c.json({ error: 'ids 必须是字符串数组' }, 400);
+      return c.json({ error: 'ids 要是字符串数组' }, 400);
     }
     const ids = new Set(body.ids as string[]);
 
@@ -916,7 +930,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
         // 回一句人话，不把 errno 文本和服务器绝对路径原样丢给客户端
         // （I4，final-review.md）。
         if (e instanceof AttachmentValidationError) return c.json({ error: e.message }, 400);
-        return c.json({ error: '附件保存失败，请稍后重试' }, 500);
+        return c.json({ error: '附件没能存下来——检查一下磁盘空间和服务端数据目录的写入权限，再传一次' }, 500);
       }
 
       // 重新读：上面 parseBody()/file.arrayBuffer() 这两次长 await 期间，别的
@@ -1027,7 +1041,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
    * 哲学）。落盘/回滚在 import.ts 的 applyImport：写到一半失败会自己滚回去，
    * 措辞区分「未触碰任何数据」与「已回滚到导入前状态」。
    * `settings` 走 `sanitizeSettings`——与 `PUT /api/settings` 同一份逐键清洗，
-   * 打码回来的 `aiKey` 由它沿用存着的真值，不写回一串星号。
+   * 打码回来的 `key` 由它沿用**这条记录自己**存着的真值，不写回一串星号。
    *
    * 两道校验的**顺序**是契约的一部分：`checkShapes` 的前提是「已过
    * `checkKeysAndIds`」（九键齐全、每行 id 合法），反过来先跑形状会在那之前
@@ -1101,7 +1115,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
     // 可信：proposals.json 没有任何界面能编辑，想批量清掉过期建议只能手改，
     // 手改过的文件、或者别的版本的合并逻辑写出来的文件，都可能带上 `id` 或
     // `status`——`applyTaskPatch` 是个裸展开，`id` 一旦被换掉，这条任务跟收件箱
-    // 的 taskIds 反向引用、跟别的建议就全断了。toTask 会重新校验 outbox 的输入，
+    // 的 taskIds 反向引用、跟别的建议就全断了。checkTask 会重新校验 outbox 的输入，
     // PATCH /api/tasks/:id 会重新校验 HTTP 的输入，这条路没有理由例外。
     const patch = sanitizeProposalPatch(p.patch);
     if (!patch) {
@@ -1139,7 +1153,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
       // 「再点一次能清干净」，文件名只会占掉本来就不多的一行。真要排查，
       // 服务窗口的日志里有完整报错。
       console.warn('[proposals] 接受之后清理建议失败：', (e as Error).message);
-      return c.json({ ...next, warning: '改动已经生效了，但这条建议没能清掉——再点一次「接受」就好。' });
+      return c.json({ ...next, warning: '改动已经生效了，但这条建议没能清掉——再点一次「接受」就好' });
     }
     return c.json(next);
   });
@@ -1168,20 +1182,47 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   // ── 设置 ──
 
   /**
-   * **密钥不原样回给浏览器**：这个服务会绑到局域网上（`lanBind.ts`），同一个
-   * Wi-Fi 里的任何设备都能 GET 这条路由。回打码后的形状（`••••` 加后四位）——
-   * 全打成 `••••` 的话，界面上没法告诉他「存着的是哪一把」，换钥匙时只能盲改。
+   * 按 id 排过序、且**每条记录内部的字段顺序也固定**的记录表。
+   *
+   * 只为「内容变了没有」这一次比较服务，不落盘也不外发。
+   *
+   * **记录内部的字段顺序也得固定**：旧数据派生出来的那条记录是
+   * `{ baseUrl, key, model }`（`aiEndpoints.ts` 的 `withLegacyAi`），而
+   * `mergeEndpoint` 落的是 `{ baseUrl, model, key }`。两把一样的钥匙，JSON 化出来
+   * 字符串不一样——于是「升级之后第一次保存设置」永远被判成「AI 配置变了」，
+   * 白白把自动拆解试过哪些条目清掉一次（那是一次用户没要求的重跑）。
    */
-  app.get('/api/settings', (c) => {
-    const s = readSettings();
-    return c.json({ ...s, aiKey: maskKey(s.aiKey) });
-  });
+  const canonicalEndpoints = (m: Record<string, AiEndpoint>) =>
+    Object.fromEntries(
+      Object.entries(m)
+        .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+        .map(([id, r]) => [id, { baseUrl: r.baseUrl, model: r.model, key: r.key }]),
+    );
 
   /**
-   * 导出专用的设置读取：**`aiKey` 给明文**。普通 GET 永远打码，那是给界面回显
-   * 用的；这条是给「导出数据」文件的。拍板（2026-09-26）：换机是导入的主场景，
-   * 而打码串到了空机器会被 `aiKeyFrom` 当成「没给密钥」的普通字符串原样存下——
-   * 星号串变成真密钥，第一次拆解才以 401 现形。带明文才带得动。
+   * **密钥不原样回给浏览器**：这个服务会绑到局域网上（`lanBind.ts`），同一个
+   * Wi-Fi 里的任何设备都能 GET 这条路由。逐条记录各打各的码（`••••` 加后四位）——
+   * 全打成 `••••` 的话，界面上没法告诉他「这家存着的是哪一把」，换钥匙时只能盲改。
+   */
+  const maskAiEndpoints = (s: Settings): Settings => ({
+    ...s,
+    aiEndpoints: Object.fromEntries(
+      Object.entries(s.aiEndpoints).map(([id, r]) => [id, { ...r, key: maskKey(r.key) }]),
+    ),
+  });
+
+  app.get('/api/settings', (c) => c.json(maskAiEndpoints(readSettings())));
+
+  /**
+   * 导出专用的设置读取：**每条记录的 `key` 都给明文**。普通 GET 永远逐条打码，
+   * 那是给界面回显用的；这条是给「导出数据」文件的。拍板（2026-09-26）：换机是导入
+   * 的主场景，而打码串**还原不出密钥**——它只有末四位，落到空机器上就是一把废钥匙，
+   * 第一次拆解才以 401 现形。带明文才带得动。
+   *
+   * ⚠️ **2026-10-21 补一句**：打码串**不再**被当成真密钥存下去（`aiKeyFrom` 认得出
+   * 「手上没有真值而收到的是打码」，落成空串而不是那串星号），所以这一条现在管的是
+   * **能不能用**，不是「会不会存坏」——换机要的是真密钥，不是一把废钥匙。
+   *
    * 代价：LAN=1 时局域网里任何设备 GET 这一下就拿走密钥，所以 `LAN_WARNING`
    * 点名了这条路径（`lanBind.test.ts` 钉着）。
    */
@@ -1208,7 +1249,10 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
      * 因为别的原因失败过的条目全放回候选池。`autoExpand` 本来也一直不管这个——
      * 它自己只在收件箱变化时评估。
      */
-    const aiChanged = (['aiMode', 'aiCli', 'aiCliPath', 'aiCliCustomArgs', 'aiBaseUrl', 'aiKey', 'aiModel'] as const).some((k) => stored[k] !== next[k]);
+    const aiChanged = (['aiMode', 'aiCli', 'aiCliPath', 'aiCliCustomArgs', 'aiEndpointId'] as const).some((k) => stored[k] !== next[k])
+      // 表是对象，`!==` 恒真——按内容比。否则每次保存都算「AI 改了」，把自动拆解
+      // 试过哪些条目清掉，等于白饶一次重跑。键先排序，免得只是顺序变了也被判成改过。
+      || JSON.stringify(canonicalEndpoints(stored.aiEndpoints)) !== JSON.stringify(canonicalEndpoints(next.aiEndpoints));
     if (aiChanged) autoExpand.clearAll();
 
     // settings 存在设备本地的 device.json，不在 data/ 里（见 store.ts 的
@@ -1220,7 +1264,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
     bus?.emit('data-changed', { file: 'settings' });
     // **这条响应跟 GET 打的是同一份码**：界面保存完会拿响应刷新自己那份 state，
     // 这儿漏出真值等于上面那道遮挡白设——密钥照样进了浏览器。
-    return c.json({ ...next, aiKey: maskKey(next.aiKey) });
+    return c.json(maskAiEndpoints(next));
   });
 
   // ── 清单与文件夹 ──
@@ -1424,7 +1468,7 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
     // 的离线改动都推不回去，而他没有任何手段知道该去动哪条。
     if (!taskEntries || !inboxEntries) {
       const which = !taskEntries ? whichEntryIsBad(body?.tasks, 'tasks') : whichEntryIsBad(body?.inbox, 'inbox');
-      return c.json({ error: `${which}不合形状，这一批整批没推。每条 upsert 的内容要像一条完整的任务/收件箱条目——在手机上把那条重新编辑一次（会带上一份新的内容），这一批就能推回去了` }, 400);
+      return c.json({ error: `${which}不合形状，这一批整批没推。每条的内容要像一条完整的任务或收件箱条目——在手机上把那条重新编辑一次（会带上一份新的内容），这一批就能推回去了` }, 400);
     }
     // 一条不安全就整批拒——这些 id 会被拼进文件名，`isSafeId` 是这个判据的唯一实现
     // （`entityStore.ts`），不在这里另写一遍。用 `find` 不是 `every`：要把那条报出来。
@@ -1449,27 +1493,41 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   // outbox.ts 的 mergeOutbox，由文件监听器触发，这条路由不管那一步。
   // 单飞状态在 agentRunner 闭包里，跟这个 app 实例绑定。
   /**
-   * 「测试连接」——设置页 AI 那三格旁边那颗按钮。
+   * 「测试连接」——设置页「调接口」那一栏旁边那颗按钮。
    *
-   * **验的是他此刻框里填的那份，不是存着的那份**：这颗按钮的用途就是「我刚填完，
-   * 对不对」，拿存着的旧值去验等于答非所问。所以三格都从请求体收。
+   * **验的是他此刻框里填的那一条记录，不是存着的那一条**：这颗按钮的用途就是
+   * 「我刚填完，对不对」，拿存着的旧值去验等于答非所问。所以地址和模型名都从请求体收，
+   * `endpointId` 只决定「拿哪条记录打底」——没给 id 就打当前选中的那条。
    *
-   * 密钥走 `aiKeyFrom`，跟 `PUT /api/settings` 同一条规矩：界面读回来的是打码串，
-   * 他不碰那一格就会原样送回来——不认它的话，「改了地址、没动密钥」这种最常见的
-   * 情形会拿着一串 `••••abcd` 去认证，然后报一个跟真实原因毫无关系的 401。
+   * 密钥走 `mergeEndpoint`，跟 `PUT /api/settings` **同一份判据**：界面读回来的是
+   * 打码串，他不碰那一格就会原样送回来，得认；但认的范围是**这一条记录自己**的密钥。
+   * 以前这里全应用只有一把 `aiKey`，「点了另一家的芯片、没碰密钥格」就是拿着上一家
+   * 的真密钥去请求新地址，接口回一句 `Invalid API key`，而报错让他去查模型名和地址
+   * ——那个 401 跟真实原因毫无关系。现在同一条记录里把主机换了也照样不给（理由见
+   * `mergeEndpoint` 顶上），测试按钮和真正保存判据一致，不会出现「测着通、存下去不通」。
    *
    * 二十秒超时：冷启动的模型（本机 Ollama 第一次加载）确实要好几秒，而 `chat`
    * 自己不带超时，只认传进去的 signal。
    */
   app.post('/api/ai/test', async (c) => {
-    const body = (await jsonBody(c)) as { baseUrl?: unknown; model?: unknown; apiKey?: unknown } | null;
+    const body = (await jsonBody(c)) as { endpointId?: unknown; baseUrl?: unknown; model?: unknown; apiKey?: unknown } | null;
     const stored = readSettings();
-    const baseUrl = typeof body?.baseUrl === 'string' ? body.baseUrl.trim() : stored.aiBaseUrl;
+    const emptyRec: AiEndpoint = { baseUrl: '', key: '', model: '' };
+    // 测的是**他此刻框里那一条**，不是存着的那一条：三样都从请求体收，`endpointId`
+    // 决定拿哪条记录打底（不给就是当前选中的那条）。合并整套复用 `mergeEndpoint`——
+    // 「打码回显 = 没动密钥」和「主机换了密钥不跟着搬」这两条判据，测试按钮和真正
+    // 保存必须走同一份，不然「测着通、存下去却不通」那种分裂又长回来了。
+    const id = typeof body?.endpointId === 'string' ? body.endpointId : stored.aiEndpointId;
+    const rec = stored.aiEndpoints[id] ?? emptyRec;
+    const draft = mergeEndpoint({
+      baseUrl: body?.baseUrl ?? rec.baseUrl,
+      model: body?.model ?? rec.model,
+      key: body?.apiKey,
+    }, rec);
     const error = await testAi({
-      baseUrl,
-      model: typeof body?.model === 'string' ? body.model.trim() : stored.aiModel,
-      // 不带 apiKey 又带着陌生地址的请求拿不到存着的密钥——理由见 aiKeyFrom。
-      apiKey: aiKeyFrom(body?.apiKey, stored.aiKey, { incoming: baseUrl, stored: stored.aiBaseUrl }),
+      baseUrl: draft?.baseUrl ?? '',
+      model: draft?.model ?? '',
+      apiKey: draft?.key ?? '',
     }, fetchFn, AbortSignal.timeout(20_000));
     // 一律 200：这条路由自己没出错，「连不上」是它要报告的结果，不是它的失败。
     // 回 4xx 的话前端得把「请求失败」和「测出来不通」分开处理两遍。
@@ -1477,6 +1535,19 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   });
 
   app.post('/api/expand', (c) => {
+    /**
+     * **收件箱里没有待拆解的条目就不跑。** 界面上那颗按钮本来就按「还有几条没拆」
+     * 禁用着（`InboxSidebar.tsx` 的 `unprocessedCount === 0`），这道是防**按钮之外
+     * 的调用方**：局域网里那台手机、脚本、或者一份停在旧状态的页面——它们报上来的
+     * 「该拆了」不一定还是真的。白起一个 AI 进程读一份空收件箱，代价是一次额度，
+     * 回报是一条凭空的绿色「拆解完成」。
+     *
+     * 排在 `clearAll()` 之前：这一趟压根不该存在，更不该顺手把自动调度的尝试记录
+     * 清空（那等于让已经试过的条目重新排上一轮）。
+     */
+    if (!readInbox().some((x) => !x.processed)) {
+      return c.json({ error: '收件箱里没有待拆解的条目，这一趟不跑' }, 409);
+    }
     // 手动触发不受自动拆解的重试限制，而且不管这次 start() 成不成功（单飞锁
     // 可能把它 409 掉）都清空尝试记录——用户明确要求重来就是重来，这个「重来」
     // 的意图不该因为「凑巧正有一次在跑」就打折扣。
@@ -1513,8 +1584,20 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
       // **认不出来就明确拒绝，不能悄悄退回「扫全部」。** 回顾是真花钱的（API 模式下
       // 按 token 计，CLI 模式下烧订阅额度），一个打错的 id 静默变成全量扫描，
       // 用户拿到的是一份看不出错在哪的账单和一堆不相干的建议。
-      if (!list) return c.json({ error: `没有这份清单：${body.listId}` }, 400);
+      if (!list) return c.json({ error: `没有这个清单：${body.listId}` }, 400);
       scope = { listId: list.id, listName: list.name };
+    }
+
+    /**
+     * **没内容就不起那一趟**（跟上面 `/api/expand` 那道同一个理由：回顾是真花钱
+     * 的，而跑完会冒一条绿色的「回顾完成」——对着零条任务说这句话是凭空报功）。
+     * 带了清单范围要按**那份清单**数：空清单上点「让 AI 回顾这份清单」是同一件事，
+     * 只看全局有没有任务挡不住它。
+     */
+    const all = readTasks();
+    const candidates = scope ? all.filter((t) => t.listId === scope.listId) : all;
+    if (candidates.length === 0) {
+      return c.json({ error: scope ? `清单「${scope.listName}」里还没有任务，没什么可回顾的` : '还没有任何任务，没什么可回顾的' }, 409);
     }
 
     const result = agentRunner.start('review', scope);
@@ -1526,6 +1609,12 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   // 已经说清「AI 总览运行时拆解/回顾会排队」。board 不带 listId、不收 scope——
   // 它是全局总览，按清单筛反而失了「总览」语义。见 `workflows/board.md`。
   app.post('/api/board', (c) => {
+    // 同 `/api/expand`、`/api/review` 那两道：零条任务时这一趟只会拿回一句
+    // 「看板是空的」，而那句话他站在屏幕前自己就看得见——白烧一次额度，
+    // 跑完还报一条「总览完成」。
+    if (readTasks().length === 0) {
+      return c.json({ error: '还没有任何任务，没什么可总览的' }, 409);
+    }
     const result = agentRunner.start('board');
     return result.ok ? c.json({ ok: true }) : c.json({ error: result.error }, 409);
   });

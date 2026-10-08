@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { FocusStats } from './FocusStats.js';
 import { task } from '../test-utils.js';
-import type { FocusSession, Task } from '../types.js';
+import type { FocusSession, Task, WeekStart } from '../types.js';
 
 const local = (y: number, mo: number, d: number, h = 9) => new Date(y, mo - 1, d, h);
 const iso = (...a: Parameters<typeof local>) => local(...a).toISOString();
@@ -12,12 +12,28 @@ const NOW = local(2026, 8, 19, 12);
 const withSessions = (id: string, sessions: FocusSession[], over: Partial<Task> = {}) =>
   task({ id, title: id, focusSessions: sessions, ...over });
 
-/** `message.useApp()` 要一层 `<AntApp>`，所有渲染都经这一个入口。 */
-function show(tasks: Task[], opts: { onPatch?: (id: string, patch: Partial<Task>) => void } = {}) {
+/** `message.useApp()` 要一层 `<AntApp>`，所有渲染都经这一个入口。
+ *  `now` / `weekStart` 可覆盖：总览那四格旁边的小字说的是「这一档盖了哪几天」，
+ *  要验跨月、跨年、周日档三种范围就得能换日子。 */
+function show(tasks: Task[], opts: {
+  onPatch?: (id: string, patch: Partial<Task>) => void;
+  now?: Date;
+  weekStart?: WeekStart;
+  onOpen?: (taskId: string) => void;
+} = {}) {
   const onPatch = opts.onPatch ?? vi.fn();
-  const utils = render(<AntApp><FocusStats tasks={tasks} now={NOW} onPatch={onPatch} /></AntApp>);
+  const utils = render(
+    <AntApp><FocusStats tasks={tasks} now={opts.now ?? NOW} weekStart={opts.weekStart} onPatch={onPatch}
+      onOpen={opts.onOpen} /></AntApp>,
+  );
   return { ...utils, onPatch };
 }
+
+/** 某一格的名字 + 旁边那行日期，连起来当一句读（「本周9月28日–10月3日」）。
+ *  按名字找、拿它父节点的整句文本，而不是 `getByText(/本周/)`——那样「本周」
+ *  出现在哪儿都能匹配到，钉不住「范围就写在这格的名字旁边」这件事。 */
+const cellLine = (label: string) =>
+  screen.getByText(label).parentElement?.textContent ?? '';
 
 /** 不接 onPatch 的那一份——「补记」整块不该渲染。 */
 const showReadonly = (tasks: Task[]) =>
@@ -38,6 +54,66 @@ describe('FocusStats', () => {
     for (const label of ['今天', '本周', '本月', '至今']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
+  });
+
+  /**
+   * 每格旁边那一行小字说的是「这一档盖了哪几天」。
+   *
+   * 实测的起因：10 月 3 日那一屏上「本周 3 小时 45 分」摆在「本月 2 小时 6 分」
+   * 上面，第一反应是「本月包含本周，怎么反而少」。数是对的（本周从 9 月 28 日
+   * 起，跨了月），缺的是范围。逐字钉整句，不拆成「包含 9 月」这种说法——
+   * 范围写成「9月28日–10月3日」还是「9/28–10/3」还是漏了年份，界面上都是
+   * 一眼能看出来的差别，测试也该看得见。
+   *
+   * 「至今」那一格没有日期：它数的是全部记录，一天都没被排除在外。这一条
+   * 断言在它身上——少一格日期是设计，多一格编出来的是噪音。
+   */
+  it('三格报出自己盖的那几天，「至今」不报', () => {
+    show([withSessions('a', [{ startedAt: iso(2026, 8, 19), minutes: 25 }])]);
+    expect(cellLine('今天')).toBe('今天8月19日');
+    expect(cellLine('本周')).toBe('本周8月17日–19日');
+    expect(cellLine('本月')).toBe('本月8月1日–19日');
+    expect(cellLine('至今')).toBe('至今');
+  });
+
+  /** 同月省掉后一边的月：「8月1日–19日」不是「8月1日–8月19日」——一格那么窄，
+   *  重复的月名只会把真正要看的日子挤下去。 */
+  it('同月不重复月名，跨月两边都写', () => {
+    show([withSessions('a', [{ startedAt: iso(2026, 10, 3), minutes: 25 }])], { now: local(2026, 10, 3, 12) });
+    expect(cellLine('本月')).toBe('本月10月1日–3日');
+    expect(cellLine('本周')).toBe('本周9月28日–10月3日');
+  });
+
+  /** 跨到上个月那一周：起点写在 9 月。「本月为什么比本周少」这句话没有第四个
+   *  地方可说——它就靠这两行的月份不一样说出来。 */
+  it('跨月的那一周把「本月比本周少」答完了：本周起点在上个月，本月在这个月 1 号', () => {
+    show([withSessions('a', [{ startedAt: iso(2026, 10, 3), minutes: 25 }])], { now: local(2026, 10, 3, 12) });
+    expect(cellLine('本周')).toMatch(/^本周9月/);
+    expect(cellLine('本月')).toMatch(/^本月10月1日/);
+  });
+
+  /** 上限截到今天：那一天（这周的周日）还没过完，一条记录也落不进去。 */
+  it('范围不写到还没到的那天', () => {
+    show([withSessions('a', [{ startedAt: iso(2026, 10, 3), minutes: 25 }])], { now: local(2026, 10, 3, 12) });
+    expect(cellLine('本周')).not.toMatch(/10月4日/);
+  });
+
+  /** 「本周」的窗口跟着 `Settings.weekStart` 挪，跟那个数字同源（`focusStats.test.ts`
+   *  里钉的是数字这一头，两头痛一起才说明是同一批边界）。 */
+  it('周首设置一改，窗口起点跟着挪', () => {
+    const s = [withSessions('a', [{ startedAt: iso(2026, 8, 26), minutes: 25 }])];
+    const first = show(s, { now: local(2026, 8, 26, 12) });
+    expect(cellLine('本周')).toBe('本周8月24日–26日');
+    first.unmount();   // 不拆掉上一份，第二次渲染会让 getByText('本周') 撞到两个
+    show(s, { now: local(2026, 8, 26, 12), weekStart: 0 });
+    expect(cellLine('本周')).toBe('本周8月23日–26日');
+  });
+
+  /** 跨年的那一周补上年份：不补的话「12月28日–1月2日」看着像把日期写反了。 */
+  it('跨年写年份', () => {
+    show([withSessions('a', [{ startedAt: iso(2026, 1, 2), minutes: 25 }])], { now: local(2026, 1, 2, 12) });
+    expect(cellLine('本周')).toBe('本周2025年12月29日–1月2日');
+    expect(cellLine('今天')).toBe('今天1月2日');
   });
 
   it('趋势图十四根柱子，一天一根——没有记录的那天也有槽位', () => {
@@ -61,8 +137,12 @@ describe('FocusStats', () => {
     // 三张表（按类别 / 按任务 / 最近记录）用的是同一套行样式，各自报名字，
     // 按名字取那一份——原来靠 `.slice(0, 2)` 数位置，前面一多出一张表就错。
     const rank = screen.getByRole('list', { name: '按任务的排行' });
-    expect([...rank.querySelectorAll('.ink-fstat-rank-name')].map((el) => el.textContent))
-      .toEqual(['多的', '少的']);
+    const names = [...rank.querySelectorAll('.ink-fstat-rank-name')];
+    expect(names.map((el) => el.textContent)).toEqual(['多的', '少的']);
+    // 每一行都带着全文 `title`：这一行刻意不折行（换行会让排行扫下来是锯齿，
+    // 理由写在 theme.css 那条注释里），省略号只解决「不撑破」，不解决「那是
+    // 哪一条」——实测 390 上这里原来是「截了没兜底」。
+    for (const el of names) expect(el.getAttribute('title')).toBe(el.textContent);
     expect(screen.getAllByText('1 小时 30 分').length).toBeGreaterThan(0);
   });
 
@@ -184,7 +264,11 @@ describe('FocusStats：点任务名跳回去', () => {
     const onOpen = vi.fn();
     render(<AntApp><FocusStats tasks={rows} now={NOW} onOpen={onOpen} /></AntApp>);
     const rank = screen.getByRole('list', { name: '按任务的排行' });
-    fireEvent.click(within(rank).getByRole('button', { name: '写周报' }));
+    const name = within(rank).getByRole('button', { name: '写周报' });
+    // 可点那支是另一个元素（`RankName` 分 button / span 两支），`title` 得各自
+    // 钉一遍——只测 span 那一支的话，按钮这半边的 title 删掉也没人红。
+    expect(name.getAttribute('title')).toBe('写周报');
+    fireEvent.click(name);
     expect(onOpen).toHaveBeenCalledWith('写周报');
   });
 
@@ -201,6 +285,8 @@ describe('FocusStats：点任务名跳回去', () => {
     render(<AntApp><FocusStats tasks={[withSessions('a', [{ startedAt: iso(2026, 8, 19), minutes: 25 }], { tags: ['写作'] })]} now={NOW} onOpen={onOpen} /></AntApp>);
     const rank = screen.getByRole('list', { name: '按类别的分布' });
     expect(within(rank).queryByRole('button', { name: '写作' })).toBeNull();
+    // 类别名（清单/标签/情境）跟任务标题一样不受控，同一份兜底挂上。
+    expect(within(rank).getByText('写作').getAttribute('title')).toBe('写作');
   });
 
   it('不给 onOpen 就还是一行字——点了没反应的入口比没有更糟', () => {

@@ -90,6 +90,16 @@ interface Props {
   showLunar?: boolean;
   /** 标不标「休 / 班」（`Settings.showHolidays`）。默认不标，理由同上。 */
   showHolidays?: boolean;
+  /**
+   * 周/日视图里点中某个**小时格**时，把那个整点报出来（0–23）。
+   *
+   * 点格子本来只做一件事——选中那一天（下面 `dateClick` 里那句
+   * `onSelectDay`）。可「在日历上看出周四 14 点空着，想往那天那格加一件事」
+   * 是这一档最自然的动作，而选中之后要点底下那颗「在这天新建」，预填的是那天
+   * **23:59**——你刚点的是 14 点。这个回调就是为了让那颗按钮知道你点的是
+   * 哪一格。月视图不报（那里没有小时这个维度）。
+   */
+  onSlotCompose?: (dayKey: string, hour: number) => void;
 }
 
 // 月视图星期表头还是 CalendarGrid.tsx 自己画的 .ink-cal-weekdays（周一起）；
@@ -200,7 +210,7 @@ const MARK_CLASS: Record<CalMark['kind'], string> = {
   checkin: 'ink-checkin-event',
 };
 
-export function CalendarFull({ days, anchor, now, selectedKey, onSelectDay, onOpenTask, onDropOnDay, onDropOnSlot, onScheduleTo, onEventDrag, allHours, weekStart = 1, showLunar, showHolidays }: Props): ReactNode {
+export function CalendarFull({ days, anchor, now, selectedKey, onSelectDay, onOpenTask, onDropOnDay, onDropOnSlot, onScheduleTo, onEventDrag, onSlotCompose, allHours, weekStart = 1, showLunar, showHolidays }: Props): ReactNode {
   // 窄屏月格里只画时刻不画标题，判据见下面 eventContent 那段注释。直接在这里
   // 调 hook、不从 props 传：调用方（CalendarView）自己也不需要这个信息。
   const narrow = useIsNarrow();
@@ -430,6 +440,10 @@ export function CalendarFull({ days, anchor, now, selectedKey, onSelectDay, onOp
       }}
       dateClick={(arg) => {
         onSelectDay(dayKey(arg.date));
+        // 只有时间档报整点：月视图的 `arg.date` 恒是那天零点，报上去等于每次
+        // 点月格都声明「要建在 0 点」，而 0 点在这个应用里是「全天」（见
+        // `calendar.ts` 的 `isAllDay`），那是个假答案。
+        if (timeMode) onSlotCompose?.(dayKey(arg.date), arg.date.getHours());
       }}
       /* 点任务块 → 打开那一条。**标记类的事件不响应**：它们的 id 是
          `${kind}:${id}`（calendar.ts 的 `MARK_KINDS`），不是任务 id，没有卡片可开。

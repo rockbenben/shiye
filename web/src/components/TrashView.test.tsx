@@ -30,13 +30,35 @@ describe('TrashView', () => {
     expect(screen.getByText(/垃圾箱是空的/)).toBeTruthy();
   });
 
+  /**
+   * 空着的时候，第一句说的是「这一屏放什么、东西会不会自己没了」，那句
+   * 「还原找不回什么」排在它后面。
+   *
+   * 两件事都要钉住：
+   * - **顺序**。原来那句警告是这一屏的第一句，而此刻没有任何东西可还原——
+   *   它在替一件不存在的事先付代价。那句说明本身仍然常驻（空的时候也留着的
+   *   理由写在下面那组测试里），只是不再抢第一句的位置。
+   * - **留存期**。这个应用不做「N 天后自动清理」（那是在一个定时器上悄悄删
+   *   他的数据），所以删掉的一直留着；原来整屏没说这句话，而人看到「垃圾箱」
+   *   默认都会以为有个 30 天。
+   */
+  it('空着的时候：先说这一屏是什么，再讲还原的边界，并且说清它不会自己过期', () => {
+    const { container } = show([]);
+    const notes = [...container.querySelectorAll('p')].map((p) => p.textContent ?? '');
+    expect(notes[0], '第一句该是「垃圾箱是空的 + 东西留在这儿」').toMatch(/垃圾箱是空的/);
+    expect(notes[0], '留存期没说清：它不会自己过期').toMatch(/不会自己过期/);
+    expect(notes[1], '还原的边界那句还在，但排在第二').toMatch(/还原只找回任务本身/);
+  });
+
   it('列出标题和删除时间，空状态那句话跟着消失——不是无条件叠在列表上面', () => {
     const it_ = item({ id: 'a', title: '要删的' });
     show([it_]);
     expect(screen.getByText('要删的')).toBeTruthy();
     // 没有这条的话，「无条件同时渲染空文案和列表」这种退化实现也能让上面
     // 那句和其它测试全绿——真实界面上会变成列表上方永远挂着「垃圾箱是空的」。
-    expect(screen.queryByText('垃圾箱是空的')).toBeNull();
+    // 用正则不是精确串：那句话现在长了（后面跟着留存期），逐字匹配会当场变成
+    // 一条空转断言（什么都匹配不到，`toBeNull` 自然永远通过）。
+    expect(screen.queryByText(/垃圾箱是空的/)).toBeNull();
 
     // 显示的是删除时间（deletedAt），不是创建时间（createdAt）——fixture 里
     // 两者差 12 天。期望值用 whenText 本身现算，不写死日期字符串，断言才
@@ -150,5 +172,69 @@ describe('TrashView：清空', () => {
 
     fireEvent.click(btnIn(dialog, '清空'));
     await waitFor(() => expect(onPurgeAll).toHaveBeenCalled());
+  });
+});
+
+/**
+ * **行消失之后，焦点要有人接。**
+ *
+ * 实测（1280、真浏览器）：按「还原」把一行收掉，`document.activeElement` 掉回
+ * `<body>`——键盘用户下一次 Tab 从页面顶重来，读屏也丢了位置。「彻底删除」那条
+ * 更绕：antd 把焦点还给触发它的那颗按钮，而那颗按钮随那一行一起没了，焦点落在
+ * 一个已经关掉的弹窗里的按钮上。回执那句（`role="alert"`，读得到）写得很好，
+ * 但它管的是「成功了没有」，不管「你此刻站在哪儿」。
+ *
+ * 判据照 `TaskDetail.tsx` 那处：接不住具体一行时，焦点收进这块区域本身
+ * （`tabIndex={-1}`——进得了 `.focus()`，不进 Tab 顺序）。
+ */
+describe('TrashView：还原/删除之后焦点落在哪', () => {
+  const a = (title: string) => item({ id: title, title });
+  const rows = (c: HTMLElement) => [...c.querySelectorAll('.ink-trash-item')];
+  const restoreOf = (li: Element) => li.querySelector('button') as HTMLButtonElement;
+
+  const showTwo = (items: TrashItem[]) => render(
+    <NoMotion><AntApp>
+      <TrashView items={items} now={NOW} onRestore={vi.fn()} onPurge={vi.fn()} />
+    </AntApp></NoMotion>,
+  );
+
+  it('还原中间那一行：焦点落在顶上那一行的「还原」上，不是 body', () => {
+    const { container, rerender } = showTwo([a('一'), a('二'), a('三')]);
+    fireEvent.click(restoreOf(rows(container)[1]));
+    // 父层（App）在 API 回来之后把那条从 items 里拿掉——这就是那次重渲染
+    rerender(<NoMotion><AntApp>
+      <TrashView items={[a('一'), a('三')]} now={NOW} onRestore={vi.fn()} onPurge={vi.fn()} />
+    </AntApp></NoMotion>);
+    expect(document.activeElement).toBe(restoreOf(rows(container)[1]));
+    expect(document.activeElement?.textContent).toBe('还原');
+  });
+
+  it('还原最后一行：焦点退到它上面那一行，不越过末尾', () => {
+    const { container, rerender } = showTwo([a('一'), a('二')]);
+    fireEvent.click(restoreOf(rows(container)[1]));
+    rerender(<NoMotion><AntApp>
+      <TrashView items={[a('一')]} now={NOW} onRestore={vi.fn()} onPurge={vi.fn()} />
+    </AntApp></NoMotion>);
+    expect(document.activeElement).toBe(restoreOf(rows(container)[0]));
+  });
+
+  it('一行都不剩：焦点收进这块区域（读屏重新落到「垃圾箱是空的」那一句上）', () => {
+    const { container, rerender } = showTwo([a('一')]);
+    fireEvent.click(restoreOf(rows(container)[0]));
+    rerender(<NoMotion><AntApp>
+      <TrashView items={[]} now={NOW} onRestore={vi.fn()} onPurge={vi.fn()} />
+    </AntApp></NoMotion>);
+    const region = container.querySelector('[tabindex="-1"]');
+    expect(region, '焦点没处可去时得有一块区域接着——不然它掉回 body').toBeTruthy();
+    expect(document.activeElement).toBe(region);
+  });
+
+  it('**不点东西就不抢焦点**——第一次渲染和每次重渲染都不动', () => {
+    const { rerender } = showTwo([a('一'), a('二')]);
+    expect(document.activeElement).toBe(document.body);
+    rerender(<NoMotion><AntApp>
+      <TrashView items={[a('一')]} now={NOW} onRestore={vi.fn()} onPurge={vi.fn()} />
+    </AntApp></NoMotion>);
+    expect(document.activeElement).toBe(document.body);
   });
 });

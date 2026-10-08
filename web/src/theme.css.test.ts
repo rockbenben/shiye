@@ -248,6 +248,56 @@ describe('行档列表容器：单列、封顶 --measure，跟卡片网格的两
     expect(m![1]).toMatch(/max-width:\s*none/);
   });
 
+  it('那一簇两颗 chip 的点击目标是 24 的下限（窄屏上它们是唯一能点的东西）', () => {
+    const chip = declarationsFor(outsideAnyMedia(bare), '.ink-quickadd-chip');
+    expect(chip, 'chip 又变成一颗点不准的小字了').toMatch(/min-height:\s*24px/);
+    // 「认出来的」那一档只有线型不同，不许顺手把颜色当成唯一区别（色盲用户
+    // 读不到虚线之外的信息，而这里信息本来就靠虚线表达）。
+    expect(declarationsFor(outsideAnyMedia(bare), '.ink-quickadd-chip-smart')).toMatch(/border-style:\s*dashed/);
+  });
+  it('标题/备注那一圈边框真的没了——`.ink-field-bare` 四边 0、只留一条下界线，聚焦加深', () => {
+    const rule = declarationsFor(outsideAnyMedia(bare), '.ink-field-bare');
+    expect(rule, '这条规则不见了——标题/备注又会画回自己那一圈').toMatch(/border:\s*0/);
+    expect(rule).toMatch(/border-bottom:\s*1px solid var\(--rule\)/);
+    expect(rule).toMatch(/padding-left:\s*0/);
+    const focus = bare.match(/\.ink-field-bare:focus[^}]*\}/);
+    expect(focus, '聚焦态那条没了').not.toBeNull();
+    // 聚焦不画光晕、只把下界线加深——跟「加任务」那一行同一套（上面那条
+    // `.ink-quickadd:focus-within` 的理由）。
+    expect(focus![0]).toMatch(/border-bottom-color:\s*var\(--ink-you\)/);
+    expect(focus![0]).toMatch(/box-shadow:\s*none/);
+  });
+
+  it('图标列的样式没有尸体留着（JSX 那边已经没人用它了）', () => {
+    expect(bare, '.ink-frow-ic 还在：那一列没人渲染了，样式该跟着走').not.toMatch(/^\.ink-frow-ic\s*\{/m);
+    // 展开编辑器的缩进是**照着那一列算出来的**（算术写在规则上面）。图标列没
+    // 了还留着 2/25 那两个数，线就从名字中间穿过去——所以把重算后的那半边钉住。
+    const ed = declarationsFor(outsideAnyMedia(bare), '.ink-frow-editor');
+    expect(ed, '缩进又回到「图标左缘 + 名字左缘」那两个数了').toMatch(/margin-left:\s*0/);
+    expect(ed).toMatch(/padding:\s*2px 2px 10px 13px/);
+  });
+
+  // 390 上实测：那一簇两颗 chip 把输入框挤到 106px，打长句看不见自己写的字。
+  // 窄屏因此只让**带上值**的 chip 占位（空 chip 藏、⌄ 那条完整表单的路还在）。
+  it('窄屏只让带上值的 chip 占位', () => {
+    const narrow = insideMedia(bare, 'max-width: 767px');
+    expect(declarationsFor(narrow, '.ink-quickadd-chip:not(.ink-quickadd-chip-on)')).toMatch(/display:\s*none/);
+    // 宽屏不许跟着藏：那一行有 886px，让人多点一下才发现能挑什么，比挤输入框更亏。
+    expect(outsideAnyMedia(bare)).not.toMatch(/\.ink-quickadd-chip[^{]*\{[^}]*display:\s*none/);
+  });
+  it('识别提示那条带子**在流里**——absolute 那一版两行提示就压住输入行（实测压进去 40px）', () => {
+    // 这条钉的是 batch9 I-1 那个 bug 的形状，不是它的一句话：提示里要重打一遍
+    // 人自己打的整句原话，原话一长必然折行，于是「钉死 24px 的 absolute 带子」
+    // 会从下沿往上长回去盖住输入行。1280 与 390 两档都复现过。
+    // 判据用反向的：整份文件里**不许再有**「quickadd 的提示条被从流里摘出去」
+    // 那种写法——把它改回 absolute 会红，改成 `top:100%` 浮起来也会红（那是
+    // 更早那一版翻过的车，理由写在 theme.css 那段）。
+    const band = declarationsFor(outsideAnyMedia(bare), '.ink-quickadd-band');
+    expect(band, '带子规则不见了——它一没了自己就退回「提示出现把列表推走」那一版').toMatch(/min-height:\s*24px/);
+    expect(band).not.toMatch(/position:/);
+    expect(bare).not.toMatch(/\.ink-smart-hint[^{]*\{[^}]*position:\s*(absolute|fixed)/);
+  });
+
   it('--row-measure 这个 token 真的定义了，而且比正文那个宽', () => {
     const root = bare.match(/:root\s*\{([\s\S]*?)\n\}/);
     expect(root, ':root 不见了').not.toBeNull();
@@ -354,6 +404,23 @@ describe('详情栏的大标题：短标题不许被竖着码成一列', () => {
  * 弹层 256px，分区栏 132px **比正文栏（124px）还宽**，分区说明只剩 104px、
  * 约九个字一行码成五行。摊成顶上一条横向滚动的带子之后正文拿到整幅宽度。
  */
+/**
+ * 「＋ 加一项」那一行右边点名的那串。390px 实测：九个字全名点名 337px 宽，
+ * 在 245px 的可用宽度里折成两行，把那一行顶到 **50px 高**，而同一个表单里
+ * 别的属性行都是 32px——三段式表单的全部形状就是「一行一个字段」，被这一行
+ * 破了。所以它必须**永不折行**：截断不丢信息，点开的菜单里全名一个不少。
+ */
+describe('属性行：「＋ 加一项」那串点名不许把行顶高', () => {
+  it('.ink-frow-hint 是 nowrap + 省略号，且解除 min-width: auto', () => {
+    const d = declarationsFor(bare, '.ink-frow-hint');
+    expect(d).toMatch(/white-space:\s*nowrap/);
+    expect(d).toMatch(/text-overflow:\s*ellipsis/);
+    // flex 子项默认 min-width: auto，不解除的话它不肯缩到内容宽度以下，
+    // 上面那两条就成了摆设（跟 .ink-dt-h 那处同一个道理）。
+    expect(d).toMatch(/min-width:\s*0/);
+  });
+});
+
 describe('设置弹层：窄屏把分区栏摊成顶上一条，别让导航比正文还宽', () => {
   const narrowSet = () => {
     const m = bare.match(/@media\s*\(max-width:\s*767px\)\s*\{([\s\S]*?)\n\}/g)?.find((b) => b.includes('.ink-set'));
@@ -430,7 +497,9 @@ describe('界面元件（路牌/统计/回顾的按钮）不用群青——群�
   //「锚定规则本身，不是任意出现的类名字符串」——本仓库的第 8 次和第 22 次
   // 假绿都是这个形状，而且两次都是「专门为消灭假绿而写的提交」自己造的。
   for (const sel of [
-    'ink-grid-heading', 'ink-grid-count', 'ink-grid-action', 'ink-grid-fold', 'ink-grid-caret', 'ink-review-kind', 'ink-review-link', 'ink-review-dismiss',
+    // .ink-grid-hint：组头计数后那半句（「最久的 20 天」）。新加的类名不会自动
+    // 进这张名单——这一族漏进去过一次群青就是靠名单外补的那条测试才抓住的。
+    'ink-grid-heading', 'ink-grid-count', 'ink-grid-hint', 'ink-grid-action', 'ink-grid-fold', 'ink-grid-caret', 'ink-review-kind', 'ink-review-link', 'ink-review-dismiss',
     // 卡住的项目那一段：**从任务本身现算的结构性事实，不是 AI 产出**，
     // 所以一个群青都不该有。它挨着 .ink-review-kind（那一条是 AI 的观察、
     // 群青是它合法的用法）摆着，正是最容易被顺手写成同一个颜色的地方。
@@ -780,7 +849,7 @@ describe('日历：固定 7 列网格，格子有最小高度 + 裁切，三种�
   it('剩下的 41 条 .ink-cal-* 规则块一个群青都不许有', () => {
     const rules = bare.match(/\n[ \t]*\.ink-cal-[\w-]*[^{}]*\{[^}]*\}/g);
     expect(rules, '.ink-cal-* 规则块一条都没扫到').not.toBeNull();
-    expect(rules!.length, '应该有 41 条：.ink-cal-compose / :hover / .ink-cal-shell / .ink-cal-main / .ink-cal-sched / .ink-cal-prefs / .ink-cal-pref / .ink-cal-nav / .ink-cal-nav button / .ink-cal-nav button[aria-pressed] / .ink-cal-tools / .ink-cal-mode / .ink-cal-modesel / .ink-cal-pager / .ink-cal-pager button + button / .ink-cal-pager button / .ink-cal-heading / .ink-cal-wk / .ink-cal-weekdays / .ink-cal-weekday / .ink-cal-day-selected / .ink-cal-daynum / .ink-cal-daynum-today / .ink-cal-timegrid / .ink-cal-monthgrid / .ink-cal-chip / .ink-cal-chiptime / .ink-cal-sub / .ink-cal-lunar / .ink-cal-mark / .ink-cal-mark-off / .ink-cal-mark-on / .ink-cal-sched-drop / .ink-cal-sched-over / .ink-cal-dropnote / .ink-cal-chip-narrow / .ink-cal-chiptime-narrow / .ink-cal-chipdot / @container 里的 .ink-cal-timegrid / .ink-cal-monthgrid / .ink-cal-sched').toBe(41);
+    expect(rules!.length, '应该有 47 条：.ink-cal-compose / :hover / .ink-cal-shell / .ink-cal-main / .ink-cal-sched / .ink-cal-prefs / .ink-cal-pref / .ink-cal-nav / .ink-cal-nav button / .ink-cal-nav button[aria-pressed] / .ink-cal-tools / .ink-cal-mode / .ink-cal-modesel / .ink-cal-pager / .ink-cal-pager button + button / .ink-cal-pager button / .ink-cal-heading / .ink-cal-wk / .ink-cal-weekdays / .ink-cal-weekday / .ink-cal-day-selected / .ink-cal-daynum / .ink-cal-daynum-today / .ink-cal-timegrid / .ink-cal-monthgrid / .ink-cal-chip / .ink-cal-chiptime / .ink-cal-sub / .ink-cal-lunar / .ink-cal-mark / .ink-cal-mark-off / .ink-cal-mark-on / .ink-cal-sched-drop / .ink-cal-sched-over / .ink-cal-dropnote / .ink-cal-chip-narrow / .ink-cal-chiptime-narrow / .ink-cal-chipdot / @container 里的 .ink-cal-timegrid / .ink-cal-monthgrid / .ink-cal-sched / 窄屏那排横滚的三条：.ink-cal-prefs、它的 ::-webkit-scrollbar、.ink-cal-pref / 「格子够宽时农历回到日号那一行」那批：@container (min-width: 620px) 里的 .ink-cal-wk 和 .ink-cal-sub').toBe(46);
     for (const r of rules!) {
       expect(r.toUpperCase(), r).not.toContain('#2E3ED4');
       expect(r, r).not.toContain('--ink-ai');
@@ -912,12 +981,19 @@ describe('FullCalendar 月视图 + 周/日视图：.fc-* 前缀族 + --fc-* 变�
   // 0-2-0 把全站 11px 下限压掉了）和 `.fc-timegrid-axis-cushion`（左上角
   // 那颗「35周」，22px 高，第十三次为 24px 兜底）。
   it('.fc-* 规则块（月视图 4 条 + task-6 周/日视图新增 4 条 + 四种标记各 1 条 + 量测补的 2 条）一个群青都不许有', () => {
-    const rules = bare.match(/\n\.fc-[\w-]*[^{}]*\{[^}]*\}/g);
+    // **锚点从 `\n\.fc-` 放宽成 `\n[ \t]*\.fc-`**：跟上面 `.ink-cal-*` 那条同一步。
+    // 「格子够宽时农历回到日号那一行」那条规则写在 `@container (min-width:
+    // 620px)` 里、且选择器以 `.ink-cal-monthgrid` 打头（为了把这一档限定在月视图
+    // 壳内），于是它的 `.fc-daygrid-day-number` 在旧锚点下整条隐形。下面那条
+    // 全文件计数交叉核对立刻判红——它每一次判红都是真的：那个 `.fc-` 确实躲
+    // 在扫描射程之外了。放宽只放行「缩进 + 顶格类名」，祖先选择器打头的照旧
+    // 扫不到、照旧被交叉核对兜住。
+    const rules = bare.match(/\n[ \t]*\.fc-[\w-]*[^{}]*\{[^}]*\}/g);
     expect(rules, '.fc-* 规则块一条都没扫到').not.toBeNull();
     expect(
       rules!.length,
-      '应该有 12 条：.fc-event-title / .fc-daygrid-more-link / .fc-daygrid-day-number / .fc-event（月视图）+ .fc-col-header-cell / .fc-timegrid-slot / .fc-timegrid-more-link / .fc-timegrid-now-indicator-line::before（周/日视图，task-6）+ .fc-timegrid-event .fc-event-title / .fc-timegrid-axis-cushion（量测补的）+ 四种标记：.fc-event.ink-ghost-event（影子）/ .fc-event.ink-cd-event（纪念日）/ .fc-event.ink-pomo-event（专注记录）/ .fc-event.ink-checkin-event（打卡）',
-    ).toBe(14);
+      '应该有 17 条：.fc-event-title / .fc-daygrid-more-link / .fc-daygrid-day-number / .fc-event（月视图）+ .fc-col-header-cell / .fc-timegrid-slot / .fc-timegrid-more-link / .fc-timegrid-now-indicator-line::before（周/日视图，task-6）+ .fc-timegrid-event .fc-event-title / .fc-timegrid-axis-cushion（量测补的）+ 四种标记：.fc-event.ink-ghost-event（影子）/ .fc-event.ink-cd-event（纪念日）/ .fc-event.ink-pomo-event（专注记录）/ .fc-event.ink-checkin-event（打卡）+ 月格六行等分那三条：.fc-daygrid-body（table-layout）/ 它的 tbody > tr（行高百分比）/ .fc-daygrid-day-frame（min-height 松绑）',
+    ).toBe(17);
     for (const r of rules!) {
       expect(r.toUpperCase(), r).not.toContain('#2E3ED4');
       expect(r, r).not.toContain('--ink-ai');
@@ -1233,7 +1309,7 @@ describe('通知权限记号：石墨色，不借群青、不借报警橙', () =
 it('.ink-cmd-* 规则块（命令面板 + 既有的回顾命令提示块）一个群青都不许有', () => {
   const rules = bare.match(/\n\.ink-cmd-[\w-]*[^{}]*\{[^}]*\}/g);
   expect(rules, '.ink-cmd-* 规则块一条都没扫到').not.toBeNull();
-  expect(rules!.length, '应该有 11 条：既有的 5 条命令提示块 + 命令面板这一批新增的 6 条').toBe(11);
+  expect(rules!.length, '应该有 13 条：既有的 5 条命令提示块 + 命令面板那 6 条 + 分节标题这 2 条（.ink-cmd-group 和它的首行变体）').toBe(13);
   for (const r of rules!) {
     expect(r.toUpperCase(), r).not.toContain('#2E3ED4');
     expect(r, r).not.toContain('--ink-ai');
@@ -1366,13 +1442,16 @@ describe('选中态 / 批量操作条：一个群青都不许有', () => {
 // 三件套照抄 .ink-batch-*/.ink-filter-*（本文件上面两条）：前缀扫描 + 条数
 // 断言 + 全文件计数交叉核对，不手写清单。
 describe('打卡条：.ink-habit-* 一个群青都不许有', () => {
-  it('.ink-habit-* 规则块（打卡条 + 待打卡提示 + 行档收窄 + 编辑表单那个勾选框）一个群青都不许有', () => {
+  it('.ink-habit-* 规则块（打卡条 + 待打卡提示 + 编辑表单那个勾选框）一个群青都不许有', () => {
     const rules = bare.match(/\n\.ink-habit-[\w-]*[^{}]*\{[^}]*\}/g);
     expect(rules, '.ink-habit-* 规则块一条都没扫到').not.toBeNull();
-    // 第三条（.ink-habit-streak-compact）是 task-5 新加的（行档下收窄间距）。
-    // 第四条（.ink-habit-toggle）是「当成习惯」那个勾选框——`habit` 这个字段
-    // 以前界面上根本没有入口，整套习惯功能只能靠手改 JSON 才用得上。
-    expect(rules!.length, '应该有 4 条：.ink-habit-streak/.ink-habit-pending/.ink-habit-streak-compact/.ink-habit-toggle').toBe(4);
+    // .ink-habit-toggle 是「当成习惯」那个勾选框——`habit` 这个字段以前界面上
+    // 根本没有入口，整套习惯功能只能靠手改 JSON 才用得上。
+    // 这一族以前还有第四条 `.ink-habit-streak-compact`（行档下把那条完整的
+    // 打卡句收窄）。行档现在改画一颗紧凑记号，整句话走 aria-label，那条规则
+    // 零消费者、已删；**新位置在 `.ink-trow-habit`**，归下面 `.ink-trow-*`
+    // 那族的前缀扫描管，群青规矩一样。
+    expect(rules!.length, '应该有 3 条：.ink-habit-streak/.ink-habit-pending/.ink-habit-toggle').toBe(3);
     for (const r of rules!) {
       expect(r.toUpperCase(), r).not.toContain('#2E3ED4');
       expect(r, r).not.toContain('--ink-ai');
@@ -1523,7 +1602,7 @@ describe('附件：.ink-attach-* 一个群青都不许有', () => {
 // 群青都不许有。三件套照抄 .ink-attach-*/.ink-batch-*：前缀扫描 + 条数断言 +
 // 全文件计数交叉核对，不手写清单（.ink-cal-weekday 那起事故的教训）。
 describe('任务行：.ink-trow-* 一个群青都不许有（.ink-trow-proposal 是唯一允许的例外，见下面单独那条）', () => {
-  it('.ink-trow-* 规则块（勾选圈/行体/标题/到期/标签/子项数/更多/选中/待决建议/抓手/菜单/菜单里的按钮/铃铛/图钉/层级/可拖拽留白/AI 到期级联修复）一个群青都不许有（除了 .ink-trow-proposal 和 .ink-trow-due.ink-time-ai）', () => {
+  it('.ink-trow-* 规则块（勾选圈/行体/标题/到期/标签/子项数/更多/选中/待决建议/抓手/菜单/菜单里的按钮/铃铛/图钉/层级/可拖拽留白/AI 到期级联修复/行档那颗打卡火苗）一个群青都不许有（除了 .ink-trow-proposal 和 .ink-trow-due.ink-time-ai）', () => {
     const rules = bare.match(/\n\.ink-trow-[\w-]*[^{}]*\{[^}]*\}/g);
     expect(rules, '.ink-trow-* 规则块一条都没扫到').not.toBeNull();
     // 23 条：check / check-done / select / open / open-compact / title /
@@ -1561,7 +1640,9 @@ describe('任务行：.ink-trow-* 一个群青都不许有（.ink-trow-proposal 
     // soon 是「快到期」那一档（仿 OmniFocus 的 Due Soon）：28 → 29。用
     // --overdue 兑淡的 color-mix，不新开色相、也不上群青，照样在下面那个
     // 循环的射程里。
-    expect(rules!.length, '应该有 29 条').toBe(29);
+    // habit 是行档那颗打卡记号（🔥5 / 🔥2/3，整句话走 aria-label）：29 → 30。
+    // 上的是 --ink-you，照样在下面那个「一个群青都不许有」的循环射程里。
+    expect(rules!.length, '应该有 30 条').toBe(30);
     // .ink-trow-proposal 和 .ink-trow-due.ink-time-ai 是这一族里仅有的两条
     // 允许群青的规则（各自有单独的正向断言）——从「不许有」的循环里摘掉，
     // 不是整条规则松绑。
@@ -1575,8 +1656,8 @@ describe('任务行：.ink-trow-* 一个群青都不许有（.ink-trow-proposal 
     // 照这个写法排除，不是简单的 `.startsWith`。
     const mustBeQuiet = rules!.filter((r) =>
       !/^\n\.ink-trow-proposal\s*[,{]/.test(r) && !/^\n\.ink-trow-due\.ink-time-ai\s*[,{]/.test(r));
-    // 29 - 2 = 27（总数那条每加一档，这一条跟着加——排除的永远只有那两条）。
-    expect(mustBeQuiet.length, '应该排除掉恰好 2 条（.ink-trow-proposal、.ink-trow-due.ink-time-ai）').toBe(27);
+    // 30 - 2 = 28（总数那条每加一档，这一条跟着加——排除的永远只有那两条）。
+    expect(mustBeQuiet.length, '应该排除掉恰好 2 条（.ink-trow-proposal、.ink-trow-due.ink-time-ai）').toBe(28);
     for (const r of mustBeQuiet) {
       expect(r.toUpperCase(), r).not.toContain('#2E3ED4');
       expect(r, r).not.toContain('--ink-ai');
@@ -1646,6 +1727,42 @@ describe('任务行：.ink-trow-* 一个群青都不许有（.ink-trow-proposal 
     } finally {
       document.head.removeChild(style);
       document.body.removeChild(el);
+    }
+  });
+
+  it('.ant-picker-header.ant-picker-header button：那条 24px 下限规则本身在，类名写了两遍（文本层）', () => {
+    const m = bare.match(/\n\.ant-picker-header\.ant-picker-header(?=[,{\s])[^{}/]*\{([^}]*)\}/);
+    expect(m, '.ant-picker-header 那条 24px 下限规则不见了').not.toBeNull();
+    expect(m![1]).toMatch(/min-width:\s*24px/);
+  });
+
+  it('.ant-picker-header.ant-picker-header button：真实级联算出来的下限是 24px，不是 antd 的 22.4px（真级联层）', () => {
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+    // antd 的那一份是**运行时**注进 `<head>` 的，排在 theme.css 后面。这里照那个
+    // 顺序补一条对手规则（`.ant-picker-header button`，特异度 0,1,1；实测那颗
+    // 22.4px 就是这么来的）。
+    const antd = document.createElement('style');
+    antd.textContent = '.ant-picker-header button { min-width: 22.4px; }';
+    document.head.appendChild(antd);
+    const head = document.createElement('div');
+    head.className = 'ant-picker-header';
+    const btn = document.createElement('button');
+    btn.className = 'ant-picker-header-super-prev-btn';
+    head.appendChild(btn);
+    document.body.appendChild(head);
+    try {
+      // 变异验证锚点：**把类名退回到只写一遍**（一次「顺手清理重复」）。上面
+      // 那条文本层断言会因为找不到选择器而红，这一条则从另一个方向红——两条
+      // 特异度相同、后注入的赢，算出来是 22.4px。拆成两条是故意的：合成一条时
+      // 文本层先红，级联那半根本没跑到，注释里那句「这条才是验收标准」就成了
+      // 没有证人支持的断言。
+      expect(getComputedStyle(btn).minWidth, '翻月那颗又缩回 antd 给的 22.4px 了').toBe('24px');
+    } finally {
+      document.head.removeChild(antd);
+      document.head.removeChild(style);
+      document.body.removeChild(head);
     }
   });
 
@@ -1816,9 +1933,10 @@ describe('密度开关：.ink-density-* 一个群青都不许有', () => {
   });
 });
 
-// 「开始专注」被锁住时外面那层 span（FocusTimer.tsx）。照抄上面各族的四件套：
+// 「这颗按钮这会儿点不动」那两句解释挂在外层 span 上（FocusTimer.tsx 两处：被别的
+// 卡占着的那对开始键、正计时不满一分钟那颗「结束」）。照抄上面各族的四件套：
 // 前缀扫描 + 条数断言 + 群青检查 + 全文件计数交叉核对。
-describe('.ink-focus-*：被别的卡占着锁时那句解释要够得着', () => {
+describe('.ink-focus-*：那两句挂在 title 上的解释要够得着', () => {
   it('.ink-focus-* 规则块（休息标签 + span 自己 + 里面那颗按钮）一个群青都不许有', () => {
     const rules = bare.match(/\n\.ink-focus-[\w-]*[^{}]*\{[^}]*\}/g);
     expect(rules, '.ink-focus-* 规则块一条都没扫到').not.toBeNull();
@@ -1850,6 +1968,57 @@ describe('.ink-focus-*：被别的卡占着锁时那句解释要够得着', () =
     const m = bare.match(/\n\.ink-focus-blocked\s*(?=[,{])[^{}/]*\{([^}]*)\}/);
     expect(m, '.ink-focus-blocked 规则不见了').not.toBeNull();
     expect(m![1]).toMatch(/cursor:\s*not-allowed/);
+  });
+});
+
+/**
+ * 卡片档「不悬停到这张卡上不占视线」那两组：番茄钟的两颗开始键（`.ink-hover-only`）
+ * 和「今天」的 ↑↓（`.ink-rank-moves`）。
+ *
+ * 这两条守卫钉的是**收的方式**，不是收没收——收错了的两种坏法都在人看不见的时候
+ * 发生：改成 `display: none`，这两组同时从 Tab 顺序和读屏里消失，桌面键盘用户
+ * 再也够不着上移下移；不给 `:focus-within` 那一条，鼠标用户之外的人根本点不亮它。
+ * 两种都不会让界面截图变难看，只能靠断言盯着。
+ */
+describe('卡片档收起的次要控件：只收视线，不收通路', () => {
+  const QUIET = ['.ink-task-card .ink-hover-only', '.ink-task-card .ink-rank-moves'];
+  const LIT = [
+    '.ink-task-card:hover .ink-hover-only', '.ink-task-card:hover .ink-rank-moves',
+    '.ink-task-card:focus-within .ink-hover-only', '.ink-task-card:focus-within .ink-rank-moves',
+  ];
+
+  it('整个收起来的行为在 `@media (hover: hover)` 里——触屏没有悬停，收了就是永远点不到', () => {
+    const quiet = insideMedia(bare, 'hover: hover');
+    expect(quiet, 'theme.css 里没有 @media (hover: hover) 这一块，或者它的写法跟 `hover: hover` 不一致').not.toBe('');
+    // 基线（所有 @media 之外）必须干干净净：媒体查询一旦不被支持/被剥掉，
+    // 这两组回到「永远可见」，而不是「永远不可见」。
+    for (const sel of [...QUIET, ...LIT]) {
+      expect(
+        outsideAnyMedia(bare),
+        `${sel} 的规则漏在 @media 外面了——那样触屏上这两组会被永久收起来`,
+      ).not.toContain(sel);
+    }
+  });
+
+  it('隐藏那一态用 opacity 不用 display——`display: none` 会把这两组从 Tab 和读屏里一起抹掉', () => {
+    const quiet = insideMedia(bare, 'hover: hover');
+    for (const sel of QUIET) {
+      const d = declarationsFor(quiet, sel);
+      expect(d, `${sel} 没有把透明度归零`).toMatch(/opacity:\s*0/);
+      expect(d, `${sel} 不收指针事件——看不见的按钮会被误点`).toMatch(/pointer-events:\s*none/);
+      expect(d, `${sel} 改成了 display：键盘和读屏那条路一起没了`).not.toMatch(/display:/);
+      expect(d, `${sel} 改成了 visibility：同样退出 Tab 顺序`).not.toMatch(/visibility:/);
+    }
+  });
+
+  it('悬停跟聚焦各点亮一次，`:focus-within` 那两条一条都不能少', () => {
+    const quiet = insideMedia(bare, 'hover: hover');
+    for (const sel of LIT) {
+      const d = declarationsFor(quiet, sel);
+      expect(d, `${sel} 没有点亮`).toMatch(/opacity:\s*1/);
+      expect(d).toMatch(/pointer-events:\s*auto/);
+    }
+    expect(LIT.filter((s) => s.includes('focus-within')).length, '守卫本身得覆盖 :focus-within 那两条').toBe(2);
   });
 });
 
@@ -2054,6 +2223,54 @@ describe('调色板：次要文字色的对比度是量过的', () => {
   });
 
   /**
+   * **字面量前景色一律不许出现——这一条是为一个真实漏过去的色补的。**
+   *
+   * `theme.css` 原来有一条 `.ink-note-done .ink-note-text { color: #7c828b }`，
+   * 它是整份样式表里**唯一**一个不走 token 的前景色，而且同时犯了两个错：
+   *
+   * ① 色相。那是冷蓝灰（蓝 139 > 绿 130 > 红 124），而 `:root` 顶部那段注释说
+   *    这一整套中性色是暖的（色相 30–40°），头一版全部落在 219–240° 那段蓝里、
+   *    已被判定「跟手稿立意对不上」而整体转掉。这一处是那轮改漏的残留。
+   * ② 对比度。实测对卡片底 3.65:1、对页面底 3.31:1，而它是 14px 正文，
+   *    按正文那条 4.5 门槛**两处都不合格**（`--dim` 在同样两种面上是 6.30 / 5.71）。
+   *
+   * **而上面那三条断言一条都没发现它**——它们全走 `token()` 读具名变量
+   * （`bare.match(new RegExp('--${name}:\\s*(#......)'))`），**字面量是它们的
+   * 盲区**。这不是某条断言写得不够严，是这一族断言的**形状**决定了它看不见
+   * 不走 token 的颜色。所以补的不是「再加一条对比度断言」，是**把字面量本身
+   * 变成不允许的东西**——只要没有字面量，上面那三条的盲区就不存在。
+   *
+   * 真需要一个新颜色时的正确做法：在 `:root` 里给它一个具名 token，
+   * 然后在这三条断言里给它定下量出来的比值。那样它同时进了色板、进了对比度
+   * 守卫，也跟其余所有颜色走同一套字形与混合逻辑。
+   *
+   * **对着 `bare` 匹配，不对着 `css`**：注释里原样引着旧值（上面 ① ② 两段
+   * 就写着 `#7c828b`），拿 `css` 匹配会命中注释里那个**已经改掉的**色，
+   * 于是守卫盯着的是一句历史记录而不是当前的值——`token()` 那段注释里
+   * 记的就是这个坑，它当时报出来的是「--pri-1 只有 2.75:1」，而文件里真实的值
+   * 早就改好了。
+   *
+   * 连 `rgb()` / `rgba()` 一起扫：换个写法写前景色仍然是字面量，
+   * 那扇后门不能留。
+   */
+  it('**不许出现字面量的前景色**——上面那三条对比度断言只读具名 token，看不见不走 token 的颜色', () => {
+    // `color:` 后面直接跟颜色值的：#hex（三位/六位/八位）、rgb()、rgba()、hsl()。
+    // 只管 `color:`，不管 `background:` / `border-color:` / `box-shadow:` ——
+    // 那三样画的是面和线，不是文字，套正文的 4.5 门槛是另一回事（`--rule`
+    // 画线就是故意压到 1.34:1 的）。
+    const literalForeground = [...bare.matchAll(
+      /(^|[;{\s])color\s*:\s*(#[0-9A-Fa-f]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\))/g,
+    )].map((m) => m[2]);
+
+    expect(
+      literalForeground,
+      '这些前景色是写死的，没走调色板：\n  ' + literalForeground.join('\n  ')
+      + '\n加进 `:root` 的具名 token，并在上面那三条对比度断言里给它定下量出来的比值。'
+        + '（别对着 `css` 找——注释里引着旧值，匹配到的是一句历史记录。）',
+    ).toEqual([]);
+  });
+
+  /**
    * **不许再往回写那种一次性的半透明墨色。** 那四处（导航的「＋」「⋯」、日历
    * 的周数和时刻）原来各写一遍 `color-mix(… 45%/35%, transparent)`，量出来
    * 2.40–3.26:1。它们要表达的「次要文字」这件事已经有一个 token 了。
@@ -2132,6 +2349,37 @@ describe('这一轮量出来的四条', () => {
     // 习惯和纪念日改成了自动分列——不是简单地把上限删掉了事。
     expect(bare).toMatch(/\.ink-hstat-root\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill/);
     expect(bare).toMatch(/\.ink-cd-list\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill/);
+  });
+
+  /**
+   * **纪念日「正在改那一行」要能折行。** 展示那一行是 `nowrap`（「还有几天」那列
+   * 数字对齐，不许一行变两行），但编辑态要塞下名字框 + 日期框 + 保存 + 取消——
+   * 实测 390 上名字框被压到 23px 宽，正在打的字一个都看不见。
+   *
+   * 这一条 jsdom 替不了它：组件测试只看 DOM 上有没有那层壳的类名，样式表跑不跑
+   * 是浏览器的事，删掉这条规则之后 30 条测试照样全绿，只有真浏览器里那 23px 回来。
+   * 同 `.ink-focus-blocked > .ant-btn` 那条是一个道理。
+   */
+  it('纪念日编辑那一行放开折行，展示那一行照旧 nowrap', () => {
+    const edit = bare.match(/\n\.ink-cd-row-edit\s*\{([^}]*)\}/);
+    expect(edit, '.ink-cd-row-edit 这条规则不见了——编辑态的名字框会又被压成一条缝').not.toBeNull();
+    expect(edit![1]).toMatch(/flex-wrap:\s*wrap/);
+    const base = bare.match(/\n\.ink-cd-row\s*\{([^}]*)\}/);
+    expect(base, '.ink-cd-row 这条规则不见了').not.toBeNull();
+    expect(base![1]).toMatch(/flex-wrap:\s*nowrap/);
+  });
+
+  /**
+   * **专注统计那四格旁边的日期小字：11px 下限、不借群青。**
+   * 它是「这一档盖了哪几天」那半句，跟组头计数后面那半句（`.ink-grid-hint`）
+   * 是同一个身份：附属说明，不是数据本身。字号再往下压就看不清了；颜色借群青
+   * 更不行——群青只标 AI 产出，而这一屏每个数都是从 `focusSessions` 现算的。
+   */
+  it('.ink-fstat-cell-range：11px 字号下限，一个群青都不许有', () => {
+    const m = bare.match(/\n\.ink-fstat-cell-range\s*\{([^}]*)\}/);
+    expect(m, '没有 .ink-fstat-cell-range 这条规则').not.toBeNull();
+    expect(m![1]).toMatch(/font-size:\s*11px/);
+    expect(m![0]).not.toContain('--ink-ai');
   });
 });
 
@@ -2442,6 +2690,25 @@ describe('界面审查：量出来的那几条别退回去', () => {
     expect(rail, '整条栏一滚，钉在两头的搜索/设置会跟着卷出屏幕').not.toMatch(/overflow-y:\s*auto/);
   });
 
+  /**
+   * 侧栏导航那一段的**下缘**渐隐。
+   *
+   * 那一段自己滚（上面 `.ink-rail-col` 那一节），而滚窗下沿正好切在某一行字
+   * 中间时，露出的那半个字高读起来像排版事故——实测切在「标签」这一节的小标题
+   * 上，收件箱、今天、每一屏都在。做法跟上面 `.ink-modrail` 那条横滚带子同一个
+   * 「常驻不判断」：放得下的时候这一列底部本来就是空的，渐隐落在空处。
+   *
+   * 三样都要钉：它在宽屏媒体查询里（窄屏那一段不自己滚，写在外面等于给整页加
+   * 一层遮罩）、它是 `to bottom`（这条列是竖着滚的）、以及 12px 这个量。
+   */
+  it('宽屏侧栏导航有下缘渐隐——滚窗切出来的半行字不该像坏了', () => {
+    const wide = insideMedia(bare, 'min-width: 768px');
+    const d = declarationsFor(wide, '.ink-nav');
+    expect(d, '这一段不滚的话，渐隐没有对象').toMatch(/overflow-y:\s*auto/);
+    expect(d, '渐隐要落在下缘，不是右缘').toMatch(/mask-image:\s*linear-gradient\(to bottom/);
+    expect(d, '12px 这个量是量出来的：再长就开始吃掉整行').toMatch(/calc\(100% - 12px\)/);
+  });
+
   it('窄屏日历那三条一个群青都没有——它们是人这一侧的记号，不是 AI 产出', () => {
     for (const sel of ['ink-cal-chip-narrow', 'ink-cal-chiptime-narrow', 'ink-cal-chipdot']) {
       // 不拼正则：这一段的反斜杠转义在几层工具之间来回被吃，切字符串更稳。
@@ -2656,5 +2923,228 @@ describe('间距：相邻块叠出来的总空白有上限', () => {
     const narrow = insideMedia(bare, 'max-width: 767px');
     expect(declarationsFor(narrow, '.ink-modrail'), '横滚 + 藏滚动条 + 没有渐隐 = 图标像被切坏了')
       .toMatch(/mask-image:\s*linear-gradient\(to right/);
+  });
+});
+
+/**
+ * 收件箱那一栏的小标题和「立即拆解」那颗按钮。
+ *
+ * 原来这条 flex 是 `space-between` + `gap: 12px`：1440px 上「待拆解」右缘在
+ * x=419，按钮左缘在 x=791——**中间空 371px**。那颗按钮跟它服务的那一栏在版面上
+ * 没有任何关系，读起来像属于右边另一栏。这条守卫钉的就是别再回到 space-between。
+ */
+describe('收件箱「待拆解」那一行：按钮贴着它服务的标签', () => {
+  it('justify-content 是 flex-start、间距 8px——不是把按钮推到另一端', () => {
+    const m = bare.match(/\n\.ink-pending-head\s*(?=[,{])[^{}/]*\{([^}]*)\}/);
+    expect(m, '.ink-pending-head 规则不见了').not.toBeNull();
+    expect(m![1]).toMatch(/justify-content:\s*flex-start/);
+    expect(m![1]).toMatch(/gap:\s*8px/);
+    // 上限：回到 space-between 就是这次要修的那个 371px。
+    expect(m![1]).not.toMatch(/justify-content:\s*space-between/);
+  });
+});
+
+/**
+ * **四颗点不着的小按钮**（batch7 G-1/G-2/G-3）。全站点击目标下限是 24px，
+ * 这条规矩在这个文件里已经单独兜底过十三次（`.ink-nav-tag` / `.ink-tag-x` /
+ * `.fc-daygrid-more-link` …），漏的这四处是 1440 与 390 两档实测出来的盒：
+ * 侧栏文件夹折叠 <b>15×15</b>、习惯「展开月历」<b>13×11</b>、随手记那颗 ⌄
+ * <b>20×24</b>、卡片上那颗 ⋯ <b>23×24</b>。钉的是声明本身——jsdom 不算布局，
+ * 量不到盒，只有浏览器里量到的那四个数会变成这里的一行字。
+ */
+describe('点击目标下限：这四处别再回到「字形多大就是多大」', () => {
+  it('.ink-quickadd-more / .ink-hstat-exp / .ink-task-more 都写着 24 的下限', () => {
+    expect(declarationsFor(bare, '.ink-quickadd-more')).toMatch(/min-width:\s*24px/);
+    const exp = declarationsFor(bare, '.ink-hstat-exp');
+    expect(exp).toMatch(/min-width:\s*24px/);
+    expect(exp).toMatch(/min-height:\s*24px/);
+    expect(declarationsFor(bare, '.ink-task-more')).toMatch(/min-width:\s*24px/);
+  });
+
+  /**
+   * 侧栏那颗**不能用 min-width 撑**，这条守卫因此是两头的：15px 是槽宽，
+   * 文件夹标题要跟它底下那几行清单对齐在同一条竖线上（`.ink-nav-slot` 坐的
+   * 就是 15px），把盒子撑到 24 等于把标题推走 9px——修一条下限、撞坏一条对齐。
+   * 所以往外长的是判定区（`::before` 四边各出 4.5px）。任何一头掉了都是坏：
+   * 伪元素没了就还是 15×15 点不准，槽宽变了就又是一列名字对不齐。
+   */
+  it('.ink-nav-fold 靠 ::before 补命中区，15px 那个槽宽一个字不许动', () => {
+    const fold = declarationsFor(bare, '.ink-nav-fold');
+    expect(fold).toMatch(/flex:\s*0 0 15px/);
+    expect(fold, '用 min-width 撑这颗会撞坏侧栏对齐——长的是判定区，不是盒子').not.toMatch(/min-width:\s*24px/);
+    const hit = bare.match(/\.ink-nav-fold::before\s*(?=[,{])[^{}/]*\{([^}]*)\}/);
+    expect(hit, '命中区没了：那颗折叠键又变回 15×15').not.toBeNull();
+    expect(hit![1]).toMatch(/position:\s*absolute/);
+    expect(hit![1]).toMatch(/inset:\s*-4\.5px/);
+  });
+});
+
+/**
+ * 窄屏首屏（batch7 G-4）。实测 390×844：改之前第一张卡的顶边在 y=<b>347</b>，
+ * 四成屏幕是 chrome；头部那一行自己就 102px（标题 / 状态 / 开关各一行），
+ * 日历那排显示勾选断成两整行（y=224–284）。
+ *
+ * 守卫钉的是**声明的形状**，不是那个 37%——jsdom 不算布局，量不到 y。
+ * 347→310 那个数是在真浏览器里量的，写在提交说明里。
+ */
+describe('窄屏首屏：头部不摞三行，日历那一排不断两行', () => {
+  const narrow = insideMedia(bare, 'max-width: 880px');
+
+  it('状态跟开关挤同一行；换行保护还留着（切掉开关那个坑靠 flex-wrap，不靠 space-between）', () => {
+    expect(declarationsFor(narrow, '.ink-header-status'), '状态又去独占一行了？那一行就是 27px 屏幕高度')
+      .toMatch(/flex:\s*0 1 auto/);
+    expect(declarationsFor(narrow, '.ink-view-actions')).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  it('四段下边距各收一档——只窄屏，宽屏那条不许跟着动', () => {
+    expect(declarationsFor(narrow, '.ink-view-bar')).toMatch(/margin-bottom:\s*12px/);
+    expect(declarationsFor(narrow, '.ink-quickadd-band')).toMatch(/min-height:\s*12px/);
+    expect(declarationsFor(narrow, '.ink-suggest')).toMatch(/margin-bottom:\s*8px/);
+    expect(declarationsFor(narrow, '.ink-source-meta')).toMatch(/margin-bottom:\s*8px/);
+    // 宽屏那三条还是原值：这一条只吃窄屏。**必须用 outsideAnyMedia**——`bare`
+    // 里那条窄屏规则的选择器一模一样，`declarationsFor` 会把两条拼起来，
+    // 拿它断言「宽屏还是 20px」会连窄屏那条一起读，改坏了也照样绿。
+    expect(declarationsFor(outsideAnyMedia(bare), '.ink-view-bar')).toMatch(/margin-bottom:\s*20px/);
+  });
+
+  /** 手机上这一排**横滚**，不是收进「筛选」那颗。理由写在这排控件自己上面的
+   *  注释里（「收起来要多点两下才知道…最大的问题本来就是没人知道它存在」），
+   *  而 `display: none` 那种「省版面」的做法会当场违反它——所以这条守卫一半是
+   *  形状（nowrap + 横滚 + 渐隐），一半是否定（不许藏）。 */
+  it('日历那排：一行横滚 + 右缘渐隐，并且没有藏起来', () => {
+    const prefs = declarationsFor(insideMedia(bare, 'max-width: 767px'), '.ink-cal-prefs');
+    expect(prefs).toMatch(/flex-wrap:\s*nowrap/);
+    expect(prefs).toMatch(/overflow-x:\s*auto/);
+    expect(prefs, '横滚却没有渐隐 = 那颗露半截的勾看起来像坏了').toMatch(/mask-image:\s*linear-gradient\(to right/);
+    expect(prefs, '藏掉这一排就是把它自己那段判据推翻了').not.toMatch(/display:\s*none/);
+  });
+});
+
+/**
+ * 详情面板里那块正文的两态，以及它下面那一排动作。两条守卫各钉一种「只有屏幕上
+ * 才看得见、单测全绿」的失效：
+ *  - 读的那一块有 96px 地板、点下去的编辑框没有 —— 那一块当场缩成一条线；
+ *  - 面板那排按钮的内边距跟卡片那条特异度打平，靠的是**排在后面**，谁把它挪到
+ *    卡片规则上面，它就变成一句空写（面板回到 4px，五个控件挤成一坨）。
+ */
+describe('详情面板：正文两态同一个地板，动作那一排是另一套尺寸', () => {
+  it('就地编辑的起步行数跟读的那一块是同一个数——点「写点什么」不能先塌成一条线', () => {
+    const m = bare.match(/\.ink-dt-notes\s*\{[^}]*min-height:\s*([0-9]+)px/);
+    expect(m, '.ink-dt-notes 的高度地板不见了').not.toBeNull();
+    const px = Number(m![1]);
+    const rows = readFileSync('web/src/components/TaskCard.tsx', 'utf8').match(/NOTES_MIN_ROWS[\s\S]{0,40}?=\s*([0-9]+)/);
+    expect(rows, 'TaskCard.tsx 里读不到 NOTES_MIN_ROWS——编辑框的起步高度没人跟这块对账了').not.toBeNull();
+    // 编辑框那一半只能按行数对账：`autoSize` 把算出来的高度写成**行内样式**，
+    // CSS 里再写一条 `min-height` 压不住（实测行内是 1 行 30.67px、20 行
+    // 448.67px，一行 22px 外加 8.67px 内边距）。两态差控制在半行以内，
+    // 再多就是屏幕上看得见的一跳。
+    const editPx = Number(rows![1]) * 22 + 8.67;
+    expect(Math.abs(editPx - px), `${rows![1]} 行 = ${editPx.toFixed(1)}px，而读的那一块地板是 ${px}px——两处得一起改`).toBeLessThanOrEqual(11);
+    expect(Number(rows![1]), '编辑框退回 1 行起步：点下去整块塌成一条线').toBeGreaterThanOrEqual(3);
+  });
+
+  it('面板那排按钮的内边距规则排在卡片那条之后——同特异度靠源码顺序决胜', () => {
+    const card = bare.indexOf('.ink-task-card .ant-space-horizontal .ant-btn-sm');
+    const panel = bare.indexOf('.ink-task-card .ink-dt-actions.ant-space-horizontal .ant-btn-sm');
+    expect(card, '卡片那条基准规则不见了').toBeGreaterThan(-1);
+    expect(panel, '面板那条规则不见了，或者被挪到了卡片规则上面（那样就是空写）').toBeGreaterThan(card);
+  });
+});
+/**
+ * 到期提醒那两条横幅（以及任何带 `action` 那一排的 Alert）。390 上实测：antd 把
+ * 正文那块给成 `flex: 1 1 0%`，而动作那排是 `0 1 auto` 且不肯折行——于是「有 2 件
+ * 事到点了」七个字竖着排成一列、下面每条任务名一字一行，整条横幅 779px 高，比那块
+ * 屏幕（844 减去顶栏）还高。**探针量不到这一类**：它认的是横向溢出和裁切，而这是
+ * 「被挤没」，两个都不算——所以这一族只能靠稿子那一格真开一次横幅去量。
+ *
+ * 钉的是那两条声明**一起**成立：光有 `flex-wrap: wrap` 而正文还是 0% 基准，谁都不
+ * 会换行（基准 0 等于「我永远放得下」）；光把基准抬到 220px 而不放开折行，装不下
+ * 的时候还是照挤。
+ */
+describe('带动作那一排的横幅：正文不许被挤成一列一个字', () => {
+  const alert = bare.match(/\.ant-alert:has\(\.ant-alert-actions\)\s*\{([^}]*)\}/);
+  const section = bare.match(/\.ant-alert:has\(\.ant-alert-actions\)\s+\.ant-alert-section\s*\{([^}]*)\}/);
+
+  it('规则挂在「有动作那一排的 Alert」上，不是给四条横幅各挂一个类名', () => {
+    expect(alert, '.ant-alert:has(.ant-alert-actions) 那条规则不见了——回到「正文 0% 基准 + 不换行」那一面').not.toBeNull();
+    expect(section, '.ant-alert-section 那条基准宽度的规则不见了').not.toBeNull();
+  });
+
+  it('两条声明各管一半：放开折行，再给正文一个装得下的基准', () => {
+    expect(alert![1], '没有 flex-wrap: wrap，动作那排永远跟正文抢同一行').toMatch(/flex-wrap:\s*wrap/);
+    const m = section![1].match(/flex:\s*(\d+)\s+(\d+)\s+([0-9.]+)px/);
+    expect(m, '正文那块不是「1 1 <某个 px>」——基准还是 0% 的话换行根本不会发生').not.toBeNull();
+    expect(Number(m![1]), 'flex-grow 不是 1：宽屏上正文不会把富余的宽度吃掉').toBe(1);
+    const basis = Number(m![3]);
+    // 下限：「有 N 件事到点了」那句最短的标题也要一行放得下（九个字 ≈ 135px），
+    // 再留一点余量；上限：390 那一格上它得让动作那排换到第二行，可要是基准自己
+    // 就快占满一行，第二行的按钮又会挤成两行。
+    expect(basis, `${basis}px 太窄：正文还是会被压成一列一个字`).toBeGreaterThanOrEqual(180);
+    expect(basis, `${basis}px 太宽：窄屏上它自己就占满一行`).toBeLessThanOrEqual(260);
+  });
+});
+/**
+ * 页面级横幅那一摞的上限区（`.ink-main-stack`）。390 上四条同框实测 463px，
+ * 占掉那块 844 屏幕的 55%，第一条任务落在 882px——第一屏上根本没有任务。这一族
+ * 探针量不到（没有溢出、没有裁切、没有小目标，只是**摞得太高**），所以钉在这儿。
+ *
+ * 三条断言各管一种「改着改着就悄悄失效」：
+ *  - 上限/滚动那两件被删一条——这一摞要么回到把任务推出屏幕，要么变成一个没有
+ *    任何「下面还有」说法的暗滚动区；
+ *  - 跑道那 12px 跟渐隐那 12px 不再是同一个数——收着的时候渐隐就会去洗掉最后一张
+ *    横幅的下沿，看着像渲染事故；
+ *  - 跑道和间距没有挂在 `:has(> *)` 上——一条横幅都没有的平时，看板顶上会凭空
+ *    多出一条白带，而它下面什么都没有。
+ */
+describe('横幅那一摞：最多 45vh，超出自己滚，并且说得出「下面还有」', () => {
+  const m = bare.match(/\.ink-main-stack\s*\{([^}]*)\}/);
+  const has = bare.match(/\.ink-main-stack:has\([^)]*\)\s*\{([^}]*)\}/);
+  it('那条规则还在，而且是上限 + 自己滚 + 跑道不被上限吃掉三件一起', () => {
+    expect(m, '.ink-main-stack 整条规则不见了——这一摞又会把第一条任务推出整块屏幕').not.toBeNull();
+    const body = m![1];
+    expect(body, '没有 max-height：这一摞想长多高长多高').toMatch(/max-height:\s*(\d+)vh/);
+    expect(body, '没有 overflow-y: auto：超出上限的那几条不是能滚到，是直接看不见').toMatch(/overflow-y:\s*auto/);
+    expect(body, '没有 box-sizing: content-box：那 12px 跑道会被上限吃掉，平时多出一条「能滚 3px」').toMatch(/box-sizing:\s*content-box/);
+    const vh = Number(body.match(/max-height:\s*(\d+)vh/)![1]);
+    // 上限画在 45vh：390 那一档实测各摞高度是 单排期 63 / 单到点 148 / 两者 211 /
+    // 两条数据出事 251 / 四条 535（含间距），这条线落在 251 与 535 之间那段空档上。
+    expect(vh, `${vh}vh 这条线画到了实测的空档外面`).toBeGreaterThanOrEqual(40);
+    expect(vh, `${vh}vh 高到一摞就能吃掉多半块屏幕`).toBeLessThanOrEqual(50);
+  });
+
+  it('跑道与渐隐是同一个数，而且只在真挂着横幅时补', () => {
+    expect(has, '那圈跑道/渐隐没有挂在 :has(> *) 上——平时一条横幅都没有，也要占掉这 16px').not.toBeNull();
+    const pad = has![1].match(/padding-bottom:\s*(\d+)px/);
+    expect(pad, '垫底那段 padding 不见了——渐隐会常驻去洗最后一条横幅').not.toBeNull();
+    const fade = has![1].match(/linear-gradient\(to bottom,\s*#000\s+calc\(100%\s*-\s*(\d+)px\)/);
+    expect(fade, '渐隐那道宽度不再是 calc(100% - Npx) 这个形状，跟 padding 对不上账了').not.toBeNull();
+    expect(Number(fade![1]), `渐隐 ${fade![1]}px 而垫底 ${pad![1]}px——两个数是一个约定的两半`)
+      .toBe(Number(pad![1]));
+    // 跑道 12 + 盒外那点 = 原来横幅与内容之间那 16px，别把这套排版的节奏改走样。
+    const mar = has![1].match(/margin-bottom:\s*(\d+)px/);
+    expect(mar, '盒外那一点间距不见了：横幅跟下面内容之间原来隔 16px').not.toBeNull();
+    expect(Number(pad![1]) + Number(mar![1]), '跑道 + 盒外间距不再是原来那个 16px 一档').toBe(16);
+    expect(has![1], '渐隐不见了：被切在半条横幅上，读起来像排版事故').toMatch(/mask-image:/);
+  });
+});
+/**
+ * 一节**内部**的小分组标题（「谁来拆」/「什么时候拆」）。这一节原来八格一列排到
+ * 底，两件事之间没有缝；缝是 CSS 的事，所以钉在 CSS 上，界面上那两块标题由
+ * `SettingsModal.test.tsx` 里那条钉。
+ */
+describe('设置里的小分组标题：比节标题安静一档，而且第一组不划线', () => {
+  const g = bare.match(/\.ink-set-group\s*\{([^}]*)\}/);
+  const first = bare.match(/\.ink-set-group:first-child\s*\{([^}]*)\}/);
+  it('这条规则在，字号比节标题小、上面有一道分隔线', () => {
+    expect(g, '.ink-set-group 整条规则不见了——那一节的分组缝又没了').not.toBeNull();
+    expect(g![1], '没有 border-top：两组之间只剩空白，缝看不出来').toMatch(/border-top:/);
+    const size = Number(g![1].match(/font-size:\s*(\d+)px/)![1]);
+    const title = Number(bare.match(/\.ink-set-title\s*\{[^}]*font-size:\s*(\d+)px/)![1]);
+    expect(size, `小标题 ${size}px 不该等于或大过节标题 ${title}px`).toBeLessThan(title);
+  });
+
+  it('第一组不划线——它上面就是节标题，再来一道就是两条横线夹一个标题', () => {
+    expect(first, '那条 :first-child 的例外不见了').not.toBeNull();
+    expect(first![1]).toMatch(/border-top:\s*0/);
   });
 });

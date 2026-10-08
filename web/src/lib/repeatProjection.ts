@@ -18,7 +18,7 @@ import { isSettled } from './taskView.js';
  * 从 `server/src/repeat.js` 引 `nextOccurrence`，不在这边照抄一份：那是「下
  * 一次是哪天」的唯一判据（月末溢出、DST、weekdays、until 全在里面），抄一份
  * 迟早跟服务端算出不一样的日子，而这两个数字摆在同一个界面上。`pushBack.ts`
- * 从 `server/src/push.js` 引 `decidePush` 是同一个先例。
+ * 从 `server/src/push.js` 引 `stableKey` 是同一个先例。
  */
 export interface RepeatGhost {
   /** 从哪条任务推演出来的。给界面做 key、也让人点了能跳回本体。 */

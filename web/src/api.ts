@@ -169,8 +169,8 @@ export const api = {
   // 它塞进 state，界面显示的是假数据但看起来完全正常，用户改一下再保存
   // 还会把假数据整份 PUT 回服务端、覆盖掉桌面真实的 webhookUrl 之类。
   settings: () => route(() => req<Settings>('/api/settings'), offlineUnsupported('读取设置')),
-  /** 导出专用：这条回明文 `aiKey`（普通 `settings` 永远打码）。备份要带得动
-   *  密钥，换机才不用重填——代价见服务端 `LAN_WARNING`。 */
+  /** 导出专用：这条回**每条记录的明文 `key`**（普通 `settings` 永远逐条打码）。
+   * 备份要带得动密钥，换机才不用重填——代价见服务端 `LAN_WARNING`。 */
   settingsExport: () => route(() => req<Settings>('/api/settings/export'), offlineUnsupported('导出数据')),
   saveSettings: (s: Settings) => route(
     () => req<Settings>('/api/settings', { method: 'PUT', body: body(s) }),
@@ -285,15 +285,16 @@ export const api = {
   ),
 
   /**
-   * 设置页 AI 那三格旁边的「测试连接」。**传的是此刻框里那份**，不是存着的那份
-   * ——这颗按钮问的就是「我刚填完，对不对」。
+   * 设置页「这一家」那几格旁边的「测试连接」。**传的是此刻框里那一条记录**，
+   * 不是存着的那一条——这颗按钮问的就是「我刚填完，对不对」。
    *
-   * 密钥那一格照原样送回去：界面读回来的是打码串，他不碰它就该原样往回传，
-   * 服务端认得出（见 `aiApi.ts` 的 `aiKeyFrom`）。
+   * `endpointId` 决定服务端拿哪条记录打底（不给就是当前选中的那条）。密钥那格
+   * 用户没动时会原样送回打码串，服务端只认**这一条记录自己**的那把真值，换了主机
+   * 就连这把也不给（见 `aiApi.ts` 的 `aiKeyFrom` 和 `settings.ts` 的 `mergeEndpoint`）。
    *
    * **连不通也是 200**：那是这条接口要报告的结果，不是它自己失败了。
    */
-  testAi: (cfg: { baseUrl: string; model: string; apiKey: string }) => route(
+  testAi: (cfg: { endpointId?: string; baseUrl: string; model: string; apiKey: string }) => route(
     () => req<{ ok: true } | { ok: false; error: string }>('/api/ai/test', { method: 'POST', body: body(cfg) }),
     offlineUnsupported('测试 AI 接口'),
   ),

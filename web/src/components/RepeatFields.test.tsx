@@ -79,6 +79,17 @@ describe('RepeatFields', () => {
  * 是两套驱动方式。
  */
 describe('RepeatFields：until——重复截止日', () => {
+  /**
+   * 这排控件全挤在一行里，每颗都得自己说得出名字。上面那些用例是拿
+   * `getByPlaceholderText` 找它的——jsdom 里找得到，**读屏的用户可拿不到**：
+   * antd 把 placeholder 画成框里那行灰字，它不是可及名（全站别的几颗日期框
+   * 都单独写了 `aria-label`，这一颗漏了，是打磨稿在浏览器里量出来的）。
+   */
+  it('那颗日期框自己有可及名，不靠 placeholder 那行灰字', () => {
+    show(R({ every: 'week' }));
+    expect(screen.getByLabelText('重复到哪天为止')).toBeTruthy();
+  });
+
   it('填一个日期，写回的是那一天的**结束**（23:59:59.999），不是起点——用起点的话，那天晚一点的 due 会被判成已经过了 until，反而生成不出当天这一次', () => {
     const { onChange } = show(R());
     const input = screen.getByPlaceholderText('重复截止（不填就一直重复）');

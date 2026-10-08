@@ -59,12 +59,12 @@ describe('ensureAgentFiles：正常场景（from !== to）', () => {
     expect(readFileSync(join(to, 'workflows', 'expand.md'), 'utf8')).toBe('新流程');
   });
 
-  // 打包场景下 from 是 resourcesPath，里面还有 server/、CLAUDE.md 这些不该被
+  // 打包场景下 from 是 resourcesPath，里面还有 server/、README.md 这些不该被
   // 拷进 agentCwd 的东西。批发 cpSync(from, to, {recursive:true}) 这种退化
   // 实现会连它们一起倒过去——每次启动往 <userData>/agent/ 塞几百 MB，只测
   // 「AGENTS.md/workflows 拷过去了没」测不出这种「多拷了不该拷的」。
   it('只拷 AGENTS.md 和 workflows/ 这两样——不是把整个 from 目录倒过去', () => {
-    writeFileSync(join(from, 'CLAUDE.md'), '排期规矩，跟拆解无关', 'utf8');
+    writeFileSync(join(from, 'README.md'), '给人看的说明，跟拆解无关', 'utf8');
     mkdirSync(join(from, 'server'), { recursive: true });
     writeFileSync(join(from, 'server', 'not-agent-stuff.txt'), '不该被拷', 'utf8');
 

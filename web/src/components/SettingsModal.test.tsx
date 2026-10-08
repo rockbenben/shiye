@@ -5,7 +5,16 @@ import { SETTING_SECTIONS, SettingsModal } from './SettingsModal.js';
 import { getApiBase, setApiBase } from '../lib/apiBase.js';
 import type { InboxItem, Proposal, Settings, Task } from '../types.js';
 
-const settings: Settings = { webhookUrl: 'https://x', toastEnabled: true, autoExpand: true, autoExpandDelaySec: 60, focusMinutes: 25, breakMinutes: 5, dailySummaryAt: null, dailySummaryOn: null, defaultListId: null, defaultPriority: 0 as const, defaultDue: 'none' as const, defaultRemindMinutes: null, defaultTags: [], weekStart: 1 as const, smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true, showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiCli: 'claude' as const, aiCliPath: '', aiCliCustomArgs: '', aiBaseUrl: '', aiKey: '', aiModel: '' };
+const settings: Settings = { webhookUrl: 'https://x', toastEnabled: true, autoExpand: true, autoExpandDelaySec: 60, focusMinutes: 25, breakMinutes: 5, dailySummaryAt: null, dailySummaryOn: null, defaultListId: null, defaultPriority: 0 as const, defaultDue: 'none' as const, defaultRemindMinutes: null, defaultTags: [], weekStart: 1 as const, smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true, showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiCli: 'claude' as const, aiCliPath: '', aiCliCustomArgs: '', aiEndpointId: '', aiEndpoints: {} };
+/**
+ * 旧写法那三格的糖：把它们落成**一条记录**并选中它。测试读起来还是「他配了这一家」，
+ * 但形状跟现在真正存在 `Settings` 里的东西一致——不再是全应用一把密钥。
+ */
+const at = (o: { aiBaseUrl?: string; aiKey?: string; aiModel?: string; id?: string } = {}) => {
+  const id = o.id ?? 'x';
+  return { aiEndpointId: id, aiEndpoints: { [id]: { baseUrl: o.aiBaseUrl ?? '', key: o.aiKey ?? '', model: o.aiModel ?? '' } } };
+};
+
 const inbox: InboxItem[] = [{ id: 'i1', text: '条目', createdAt: '2026-08-01T00:00:00.000Z', processed: false, taskIds: [] }];
 const tasks: Task[] = [{
   id: 't1', title: '任务', notes: '备注', status: 'todo', due: null, startAt: null, endAt: null, reminders: [],
@@ -35,10 +44,13 @@ vi.mock('../api.js', () => ({
     inbox: vi.fn(async () => inbox),
     tasks: vi.fn(async () => tasks),
     settings: vi.fn(async () => settings),
-    // 导出走的是这条掀开明文 `aiKey` 的专用路径——桩故意给一把「真」密钥，
+    // 导出走的是这条掀开**每条记录明文 `key`** 的专用路径——桩故意给一把「真」密钥，
     // 下面的用例断言导出文件里躺的就是它（普通 `settings` 桩保持打码形状，
     // 两份不一样才测得出导出用的是哪条）。
-    settingsExport: vi.fn(async () => ({ ...settings, aiKey: 'sk-plain-roundtrip' })),
+    settingsExport: vi.fn(async () => ({
+      ...settings,
+      aiEndpoints: { x: { baseUrl: 'https://x.test/v1', key: 'sk-plain-roundtrip', model: 'm' } },
+    })),
     proposals: vi.fn(async () => proposals),
     // **`data/` 下的其余四张表也要有桩。** 这份桩原来只有四个方法，跟当时
     // 「导出只导四样」的实现是对称的——补齐实现之后，缺桩会让 `Promise.all`
@@ -67,6 +79,13 @@ const noop = () => {};
 const goto = (label: string) => fireEvent.click(screen.getByRole('tab', { name: label }));
 
 /**
+ * 展开「更多厂商」那一层。三十多枚厂商 chip 默认只露常用那一排（怎么挑的写在
+ * `lib/aiPresets.ts` 的 `commonAiPresets`），本机那几家和两家订阅套餐端点都在
+ * 收起的那一层里——下面几条要点它们的用例都得先开这一层。
+ */
+const openMore = () => fireEvent.click(screen.getByRole('button', { name: /更多厂商/ }));
+
+/**
  * 「模型」那格是 AutoComplete，它的 `placeholder` 渲染成旁边一个占位 span、**不落
  * 在 input 的 `placeholder` 属性上**（rc-select 只在收到 React element 形式的输入控件
  * 时把 placeholder 拷过去），所以 `getByPlaceholderText` 找不到它，按表单项里的
@@ -81,6 +100,17 @@ const modelInput = () =>
  * 全是那份——点它没有任何效果，选中值压根不动。
  */
 const modelOption = (label: string) => screen.getByText(label, { selector: '.ant-select-item-option-content' });
+
+/**
+ * 「接口地址」那格。它跟「模型」那一格同为 AutoComplete，`placeholder` 同样不落进
+ * input 的属性（见 `modelInput` 上面那段），所以这几处也按表单项找，别再用
+ * `getByPlaceholderText`——换成候选下拉之后那条会直接找不到元素。
+ */
+const urlInput = () =>
+  (screen.getByText('接口地址').closest('.ant-form-item') as HTMLElement).querySelector('input')! as HTMLInputElement;
+
+/** 地址框下拉里的候选项，按显示的文字找（找法同 `modelOption`）。 */
+const urlOption = (label: string) => screen.getByText(label, { selector: '.ant-select-item-option-content' });
 
 // 「导航显示」那一节的三个 prop——这几条测试盯的都是别的东西（导出、保存、
 // 读不到设置时不渲染表单），给一份最小的固定值就行，不用为每条各造一份。
@@ -135,9 +165,12 @@ describe('SettingsModal：导出数据', () => {
 
     expect(parsed.inbox).toEqual(inbox);
     expect(parsed.tasks).toEqual(tasks);
-    // 设置取自 /api/settings/export（明文密钥那条），不是打码的普通 GET——
-    // 换机场景里星号串会被新机存成「真值」，等于密钥没搬家。
-    expect(parsed.settings).toEqual({ ...settings, aiKey: 'sk-plain-roundtrip' });
+    // 设置取自 /api/settings/export（每条记录明文那条），不是打码的普通 GET——
+    // 换机场景里打码串在新机上是**一把废钥匙**（只有末四位），等于密钥没搬家。
+    expect(parsed.settings).toEqual({
+      ...settings,
+      aiEndpoints: { x: { baseUrl: 'https://x.test/v1', key: 'sk-plain-roundtrip', model: 'm' } },
+    });
     // 提议也要在里面：这颗按钮声称是「把 data/ 下的现状打包」，漏一份就是假话。
     expect(parsed.proposals).toEqual(proposals);
 
@@ -515,7 +548,7 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
     open({ ...settings, aiMode: 'api' });
     fireEvent.click(screen.getByText('Google AI Studio'));
 
-    const url = screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement;
+    const url = urlInput();
     expect(url.value).toBe('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
     expect(modelInput().value).toBe('gemini-3.8-flash');
   });
@@ -524,20 +557,103 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
    * 本机那两条不带模型名（装了什么模型只有他自己知道）。拿空串去冲掉他已经填好的
    * 那个，等于按一下就把活儿弄丢了。
    */
-  it('本机那两条不带模型名：只换地址，已经填好的模型名不动', () => {
-    open({ ...settings, aiMode: 'api', aiBaseUrl: 'https://x.test/v1', aiModel: '我自己填的' });
+  /**
+   * 旧版这里钉的是「按一下只换地址，别把他填的模型名冲掉」——那条判据只有
+   * 「全应用一格」的年代才成立：那一格着的模型名本来就是这次要用的那家。
+   * 现在模型名跟着**记录**走，按一下是切到另一条记录，带过去旧那家的模型名
+   * 恰恰是我们要消灭的那种串味（DeepSeek 的模型名发给 Ollama 只会换一个 400）。
+   * 旧那条没丢，还在表里，点回去就是它原来那套。
+   */
+  it('切到没配过的一家：地址和模型名都跟着这一家，旧那条留在表里', async () => {
+    const onSave = vi.fn(async (_v: Settings) => {});
+    open({ ...settings, aiMode: 'api', ...at({ aiBaseUrl: 'https://x.test/v1', aiModel: '我自己填的' }) }, onSave);
+    openMore();
     fireEvent.click(screen.getByText('Ollama（本机）'));
 
-    const url = screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement;
-    expect(url.value).toBe('http://127.0.0.1:11434/v1/chat/completions');
-    expect(modelInput().value).toBe('我自己填的');
+    expect(urlInput().value).toBe('http://127.0.0.1:11434/v1/chat/completions');
+    expect(modelInput().value, '模型名是端点的属性，不跟着别家过来').toBe('');
+
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '保存')!);
+    void waitFor(() => expect(onSave).toHaveBeenCalled());
+    const saved = onSave.mock.calls[0][0] as Settings;
+    expect(saved.aiEndpoints['x'].model, '原来那条还在表里，点回去还是它自己那套').toBe('我自己填的');
+    const fresh = Object.entries(saved.aiEndpoints).find(([id]) => id !== 'x')?.[1];
+    expect(fresh?.baseUrl, '新那一条按地址立了身份，模型名是空的').toBe('http://127.0.0.1:11434/v1/chat/completions');
+    expect(fresh?.model).toBe('');
   });
 
   it('地址框照样能自己写——预置只是起点，不是白名单', () => {
     open({ ...settings, aiMode: 'api' });
-    const url = screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement;
+    const url = urlInput();
     fireEvent.change(url, { target: { value: 'http://192.168.1.9:8080/v1' } });
     expect(url.value).toBe('http://192.168.1.9:8080/v1');
+  });
+
+  /**
+   * 「最近用过」存在的理由：**自建/局域网端点没有预置可点**。provider 目录那七枚
+   * 本机芯片钉的全是 `127.0.0.1` 加各家默认端口，一台局域网机器换的是 IP，于是每次
+   * 都得重敲一整串。这条钉住「存过 → 下拉里点得回来」。
+   */
+  it('存过的地址出现在下拉里，点一下填进框，不用重敲', () => {
+    localStorage.setItem('aiBaseUrlHistory', JSON.stringify(['http://192.168.2.127:8317']));
+    open({ ...settings, aiMode: 'api' });
+    fireEvent.mouseDown(urlInput());
+    fireEvent.click(urlOption('http://192.168.2.127:8317'));
+    expect(urlInput().value).toBe('http://192.168.2.127:8317');
+  });
+
+  /**
+   * 自由输入那一半不能被候选吃掉——改成 Select（只能选）之后手填的 LAN 地址就没了，
+   * 而这一栏的全部意义就是「目录里没有的地址照样能用」。
+   */
+  it('有候选也照样能自己写', () => {
+    localStorage.setItem('aiBaseUrlHistory', JSON.stringify(['http://192.168.2.127:8317']));
+    open({ ...settings, aiMode: 'api' });
+    const url = urlInput();
+    fireEvent.mouseDown(url);
+    fireEvent.change(url, { target: { value: 'http://192.168.2.9:8317' } });
+    expect(url.value).toBe('http://192.168.2.9:8317');
+  });
+
+  /**
+   * 这一栏是「最近用过」不是搜索框：改地址改的通常就是末段那三位，一边敲一边筛
+   * 会把正想点的那条筛没（`filterOption={false}` 的理由）。
+   */
+  it('候选不跟着已经敲进去的字筛', () => {
+    localStorage.setItem('aiBaseUrlHistory', JSON.stringify(['http://192.168.2.127:8317', 'http://192.168.2.9:11434/v1']));
+    open({ ...settings, aiMode: 'api' });
+    const url = urlInput();
+    fireEvent.change(url, { target: { value: 'http://192.168.2.77' } });
+    fireEvent.mouseDown(url);
+    expect(urlOption('http://192.168.2.127:8317')).toBeTruthy();
+  });
+
+  it('保存成功的地址才进清单：存进 localStorage，形状是数组', async () => {
+    const onSave = vi.fn(async (_v: Settings) => {});
+    open({ ...settings, aiMode: 'api', ...at({ aiBaseUrl: 'http://192.168.2.127:8317', aiModel: 'm', aiKey: 'k' }) }, onSave);
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '保存')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(JSON.parse(localStorage.getItem('aiBaseUrlHistory')!)).toEqual(['http://192.168.2.127:8317']);
+  });
+
+  /**
+   * 存不上那次正是「地址很可能填错」的一次，把它推荐出来等于把错的那条钉在框下面。
+   */
+  it('保存失败不入清单', async () => {
+    const onSave = vi.fn(async (_v: Settings) => { throw new Error('存不上'); });
+    open({ ...settings, aiMode: 'api', ...at({ aiBaseUrl: 'http://192.168.2.127:8317', aiModel: 'm', aiKey: 'k' }) }, onSave);
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '保存')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(localStorage.getItem('aiBaseUrlHistory')).toBeNull();
+  });
+
+  /** `cli` 模式下地址框压根不渲染，`Settings` 里躺着的是一年前的残留值。 */
+  it('走本机命令行时存的那个地址不记——那是残留，不是这次用的', async () => {
+    const onSave = vi.fn(async (_v: Settings) => {});
+    open({ ...settings, aiMode: 'cli', ...at({ aiBaseUrl: 'http://192.168.2.127:8317' }) }, onSave);
+    fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '保存')!);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(localStorage.getItem('aiBaseUrlHistory')).toBeNull();
   });
 
   /**
@@ -547,7 +663,7 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
   it('云厂商预置的地址和默认模型来自 provider 目录', () => {
     open({ ...settings, aiMode: 'api' });
     fireEvent.click(screen.getByText('DeepSeek'));
-    expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
+    expect((urlInput()).value)
       .toBe('https://api.deepseek.com/chat/completions');
     expect(modelInput().value)
       .toBe('deepseek-flash');
@@ -575,7 +691,7 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
   });
 
   it('手填的地址查不到候选，但模型名照样能自己写', () => {
-    open({ ...settings, aiMode: 'api', aiBaseUrl: 'http://192.168.1.9:8080/v1' });
+    open({ ...settings, aiMode: 'api', ...at({ aiBaseUrl: 'http://192.168.1.9:8080/v1', aiModel: 'm' }) });
     const model = modelInput() as HTMLInputElement;
     fireEvent.mouseDown(model);
     expect(screen.queryByRole('option')).toBeNull();
@@ -589,6 +705,9 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
    */
   it('两个订阅套餐预置默认藏着；打开高级开关后出现，偏好写入 localStorage', () => {
     open({ ...settings, aiMode: 'api' });
+    // 先把那一层打开再断言「藏着」——不收起来的话它们本来就在收起的那一层里，
+    // 这条断言就成了真空通过。
+    openMore();
     expect(screen.queryByText('字节方舟 Coding Plan')).toBeNull();
     expect(screen.queryByText('阿里百炼 Token Plan')).toBeNull();
     // 其余预置照常显示，不是整块被藏了。
@@ -606,22 +725,24 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
   it('上次打开过开关，重新挂载后两个预置直接可见——偏好被记住', () => {
     localStorage.setItem('showCodingPlans', '1');
     open({ ...settings, aiMode: 'api' });
+    openMore();
     expect(screen.getByText('字节方舟 Coding Plan')).toBeTruthy();
     expect(screen.getByText('阿里百炼 Token Plan')).toBeTruthy();
   });
 
   it('打开开关后点订阅套餐预置，套餐端点地址和模型一起填好', () => {
     open({ ...settings, aiMode: 'api' });
+    openMore();
     fireEvent.click(screen.getByRole('switch', { name: '显示订阅套餐节点（Coding Plan / Token Plan）' }));
 
     fireEvent.click(screen.getByText('字节方舟 Coding Plan'));
-    expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
+    expect((urlInput()).value)
       .toBe('https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions');
     expect(modelInput().value)
       .toBe('doubao-seed-evolving');
 
     fireEvent.click(screen.getByText('阿里百炼 Token Plan'));
-    expect((screen.getByPlaceholderText('https://…/v1/chat/completions') as HTMLInputElement).value)
+    expect((urlInput()).value)
       .toBe('https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions');
     expect(modelInput().value)
       .toBe('qwen3.8-flash');
@@ -636,8 +757,11 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
     open({
       ...settings,
       aiMode: 'api',
-      aiBaseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions',
-      aiModel: 'doubao-seed-2.0-code',
+      ...at({
+        id: 'volcengine',
+        aiBaseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions',
+        aiModel: 'doubao-seed-2.0-code',
+      }),
     });
 
     // antd 6 的 CheckableTag 是 role="checkbox" 的 span，选中态在 aria-checked 上。
@@ -651,14 +775,15 @@ describe('设置 → AI 拆解：怎么叫 AI', () => {
     // 参数类型要写出来：`vi.fn(async () => {})` 的调用记录在类型上是个空元组，
     // 读 `calls[0][0]` 编译期就红。
     const onSave = vi.fn(async (_v: Settings) => {});
-    open({ ...settings, aiMode: 'api', aiBaseUrl: 'https://x.test/v1', aiModel: 'm', aiKey: '••••ijkl' }, onSave);
+    open({ ...settings, aiMode: 'api', ...at({ aiBaseUrl: 'https://x.test/v1', aiModel: 'm', aiKey: '••••ijkl' }) }, onSave);
     // antd 会在恰好两个汉字的按钮里插一个空格，按文字找要先把空白去掉——
     // 跟这个文件上面那两处同一个写法。
     fireEvent.click(screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '保存')!);
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0][0]).toMatchObject({
-      aiMode: 'api', aiBaseUrl: 'https://x.test/v1', aiModel: 'm', aiKey: '••••ijkl',
+      aiMode: 'api', aiEndpointId: 'x',
+      aiEndpoints: { x: { baseUrl: 'https://x.test/v1', model: 'm', key: '••••ijkl' } },
     });
   });
 });
@@ -677,7 +802,7 @@ describe('设置 → AI 拆解：测试连接', () => {
     );
     goto('AI 拆解');
   };
-  const apiCfg = { ...settings, aiMode: 'api' as const, aiBaseUrl: 'https://x.test/v1', aiModel: 'm', aiKey: '••••ijkl' };
+  const apiCfg = { ...settings, aiMode: 'api' as const, ...at({ aiBaseUrl: 'https://x.test/v1', aiModel: 'm', aiKey: '••••ijkl' }) };
   const btn = () => screen.getAllByRole('button').find((b) => b.textContent?.replace(/\s/g, '') === '测试连接')!;
 
   beforeEach(() => { testAi.mockClear(); testAi.mockResolvedValue({ ok: true }); });
@@ -692,7 +817,7 @@ describe('设置 → AI 拆解：测试连接', () => {
     fireEvent.change(modelInput(), { target: { value: '刚改的模型' } });
     fireEvent.click(btn());
     await waitFor(() => expect(testAi).toHaveBeenCalled());
-    expect(testAi.mock.calls[0][0]).toEqual({ baseUrl: 'https://x.test/v1', model: '刚改的模型', apiKey: '••••ijkl' });
+    expect(testAi.mock.calls[0][0]).toEqual({ endpointId: 'x', baseUrl: 'https://x.test/v1', model: '刚改的模型', apiKey: '••••ijkl' });
   });
 
   it('通了说一句连接成功', async () => {
@@ -726,7 +851,7 @@ describe('设置 → AI 拆解：测试连接', () => {
     fireEvent.click(btn());
     await waitFor(() => expect(screen.getByText(/连接成功/)).toBeDefined());
 
-    fireEvent.change(screen.getByPlaceholderText('https://…/v1/chat/completions'), { target: { value: 'https://换了.test/v1' } });
+    fireEvent.change(urlInput(), { target: { value: 'https://换了.test/v1' } });
     expect(screen.queryByText(/连接成功/)).toBeNull();
   });
 
@@ -836,5 +961,214 @@ describe('SettingsModal：导入数据', () => {
     fireEvent.click(replaceBtn()!);
     await waitFor(() => expect(document.querySelector('.ant-message-error')).toBeTruthy());
     expect(screen.getByText(/tasks\[0\]/)).toBeTruthy();
+  });
+});
+
+/**
+ * 开关的名字。`Form.Item` 的 `label` 在没有 `name` 时生成不出 `htmlFor`，那串
+ * 中文就只停在标签那一格里，控件本身对读屏只剩「开关，未选中」——设计稿探针
+ * 在「设置·AI 那一节」量出来的正是这一颗。
+ *
+ * **判据是「按 role 收齐、逐颗查属性」**，不是 `getByRole('switch', {name})`：
+ * 按名字查的那几条本来就要求有名字才查得到，名字删掉它们照红，但那种红挡不住
+ * 「以后新加一颗没名字的」——按名字查的永远是已命名的那几颗，没名字的那颗
+ * 从来不在任何查询里出现过。
+ */
+describe('SettingsModal：每一颗开关都说得出自己是什么', () => {
+  const SECTIONS = ['提醒与通知', '日期与时间', '智能识别', 'AI 拆解'];
+
+  it('这四页上的开关，每一颗都带 aria-label', async () => {
+    render(
+      <AntApp>
+        <SettingsModal {...NAV} open value={settings} onClose={noop} onSave={async () => {}} />
+      </AntApp>,
+    );
+    for (const section of SECTIONS) {
+      goto(section);
+      // 先等这一页真的画出来。不等的话 `getAllByRole` 拿到空数组，循环一次不跑，
+      // 这条测试会「什么都没检查」地通过。
+      await waitFor(() => expect(screen.getAllByRole('switch').length).toBeGreaterThan(0));
+      for (const sw of screen.getAllByRole('switch')) {
+        expect(sw.getAttribute('aria-label'), `${section} 页上有一颗开关没名字`).toBeTruthy();
+      }
+    }
+  });
+});
+/**
+ * 那一排分区挂着 `role="tablist"`，代码里那句注释写着「方向键也能切」——**而
+ * 这个组件从来没有过那个处理器**（全仓库只有分栏界线 `ColGrip` 处理过方向键）。
+ * 读屏按 tablist 那套规矩念给用户听的，是一个键盘上走得动的组；Tab 一路过十个
+ * 按钮不是那件事。这一组用例把注释承诺的东西补上，并钉住 roving tabindex
+ * （只有选中那一颗在 Tab 顺序里，Tab 键因此是「进出这一组」而不是「数完十颗」）。
+ */
+describe('设置那一排分区的键盘走位', () => {
+  const open = () => render(
+    <AntApp><SettingsModal {...NAV} open value={settings} onClose={noop} onSave={async () => {}} /></AntApp>,
+  );
+  const tab = (label: string) => screen.getByRole('tab', { name: label });
+  const selected = () => screen.getAllByRole('tab')
+    .find((t) => t.getAttribute('aria-selected') === 'true')!.textContent;
+  const last = SETTING_SECTIONS[SETTING_SECTIONS.length - 1].label;
+
+  it('右方向键下一节、左方向键上一节，两头绕得回去', () => {
+    open();
+    expect(selected()).toBe('功能模块');
+    fireEvent.keyDown(tab('功能模块'), { key: 'ArrowRight' });
+    expect(selected()).toBe('智能清单');
+    // **焦点得跟着高亮走**：不 focus 的话用户按第二下还是从原来那颗上按的，
+    // 读屏念的是那颗（「未选中」），而屏幕上的高亮已经走到别处了。
+    expect(document.activeElement, '高亮走了，焦点没走').toBe(tab('智能清单'));
+    fireEvent.keyDown(tab('智能清单'), { key: 'ArrowLeft' });
+    expect(selected()).toBe('功能模块');
+    fireEvent.keyDown(tab('功能模块'), { key: 'ArrowLeft' });
+    expect(selected()).toBe(last);
+  });
+
+  it('只有选中那一颗在 Tab 顺序里，而且跟着高亮换', () => {
+    open();
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.length, '分区数变了——这条用例认的是「十节」').toBe(SETTING_SECTIONS.length);
+    expect(tabs.filter((t) => t.tabIndex === 0).map((t) => t.textContent)).toEqual(['功能模块']);
+    fireEvent.keyDown(tab('功能模块'), { key: 'ArrowRight' });
+    expect(tab('智能清单').tabIndex, '新选中那颗没进 Tab 顺序').toBe(0);
+    expect(tab('功能模块').tabIndex, '旧的那颗还留在 Tab 顺序里').toBe(-1);
+  });
+});
+/**
+ * 「谁来拆」这一节重排之后钉的东西。原来那一屏是八格一列排到底：三十多枚厂商
+ * chip 铺成一面墙、「谁来拆」和「什么时候拆」之间没有缝、点一家之后焦点还站在
+ * 地址框里。这几条各钉一处改动，删掉任何一处都会红。
+ */
+describe('设置 → AI 拆解：厂商那一排与小分组', () => {
+  const open = (value: Settings) => {
+    render(
+      <AntApp><SettingsModal {...NAV} open value={value} onClose={noop} onSave={async () => {}} /></AntApp>,
+    );
+    goto('AI 拆解');
+  };
+  const api = (over: Parameters<typeof at>[0] = {}) => open({ ...settings, aiMode: 'api', ...at(over) });
+  const chip = (label: string) => screen.getByText(label).closest('.ant-tag') as HTMLElement;
+  const keyBox = () => screen.getByPlaceholderText('留空 = 不带密钥');
+
+  beforeEach(() => localStorage.clear());
+
+  it('默认只露一排常用的，其余收在「更多厂商」那颗后面，报的数对得上', () => {
+    api();
+    const shown = document.querySelectorAll('.ant-tag-checkable');
+    expect(shown.length, '默认那一排不该超过十枚').toBeLessThanOrEqual(10);
+    const more = screen.getByRole('button', { name: /更多厂商（(\d+)）/ });
+    // 那颗上写的数**在点之前取**：点完它的文字就变成「收起厂商」，再读同一个节点
+    // 只剩一个没有数字的 label。
+    const rest = Number(more.textContent!.match(/(\d+)/)![1]);
+    // 展开之后：收起的那批全出来，那颗按钮自己变成「收起厂商」。
+    fireEvent.click(more);
+    expect(document.querySelectorAll('.ant-tag-checkable').length).toBe(shown.length + rest);
+    fireEvent.click(screen.getByRole('button', { name: '收起厂商' }));
+    expect(document.querySelectorAll('.ant-tag-checkable').length).toBe(shown.length);
+  });
+
+  it('没存过地址时，本机那几家在收起的那一层里', () => {
+    api();
+    expect(screen.queryByText('Ollama（本机）')).toBeNull();
+  });
+
+  /**
+   * Ollama 在目录里排得很后，默认那一轮里没有它；**存过一次地址就该被提到前排**。
+   * 这条钉的是 `commonAiPresets` 里「用过的排前面」那一档——本机那几家恰恰是最会被
+   * 反复用的，收在「更多」里只该是第一次用之前的事。
+   *
+   * 分两条用例而不是在一条里连开两次弹层：上一条的弹层不会自己消失，第二条里
+   * 那些 `getByText` 会一下撞到两份。
+   */
+  it('这台机器上存过的地址，那一排里排得进来——不用先展开', () => {
+    localStorage.setItem('aiBaseUrlHistory', JSON.stringify(['http://127.0.0.1:11434/v1/chat/completions']));
+    api();
+    expect(screen.getByText('Ollama（本机）'), '用过一次就该回到前排').toBeTruthy();
+  });
+
+  it('当前地址落在收起那一层时，那一枚仍留在前排并且是选中的', () => {
+    // 「已选的配置不能被藏没」——跟订阅套餐那两条 hidden 同一条规矩。Kimi 在目录里
+    // 排第七八位之后，不展开也应该看得见它，而且带着选中态。
+    api({ aiBaseUrl: 'https://api.moonshot.cn/v1/chat/completions' });
+    expect(screen.queryByRole('button', { name: /收起厂商/ })).toBeNull();
+    const k = chip('Kimi (Moonshot)');
+    expect(k.getAttribute('aria-checked'), '已选的那一枚不能被收进「更多」里').toBe('true');
+  });
+
+  it('点一家厂商：地址和模型一起填好，焦点交给密钥框，不留在地址框里', () => {
+    api();
+    fireEvent.mouseDown(urlInput());
+    urlInput().focus();
+    fireEvent.click(screen.getByText('DeepSeek'));
+    expect(urlInput().value).toBe('https://api.deepseek.com/chat/completions');
+    expect(modelInput().value).toBe('deepseek-flash');
+    expect(document.activeElement, '焦点该落在下一格要填的东西上').toBe(keyBox());
+  });
+
+  /**
+   * 「自定义」是按一家**新的**来配的：地址、密钥、模型名一律从空白开始。
+   * 带过来的话就等于承认「这条新记录该用别家的模型名」，那正是刚消灭的东西；
+   * 拿同一个模型走自己反代的人重敲一次名字，比让两家互相串干净。
+   */
+  it('「自定义」那颗：起一条空白的记录，光标进地址框', () => {
+    api({ id: 'deepseek', aiBaseUrl: 'https://api.deepseek.com/chat/completions', aiModel: 'deepseek-flash', aiKey: 'sk-deepseek-key' });
+    fireEvent.click(screen.getByRole('button', { name: '自定义' }));
+    expect(urlInput().value).toBe('');
+    expect(modelInput().value).toBe('');
+    expect((screen.getByLabelText('密钥') as HTMLInputElement).value).toBe('');
+    expect(document.activeElement).toBe(urlInput());
+  });
+
+  it('地址不在目录里时，那一格下面说清「这三格全是你自己的」', () => {
+    api({ aiBaseUrl: 'http://192.168.1.9:8080/v1/chat/completions' });
+    expect(screen.getByText(/不在厂商目录里/)).toBeTruthy();
+  });
+
+  it('地址落在某一家预置上时，那句「不在目录里」不出现', () => {
+    api({ aiBaseUrl: 'https://api.deepseek.com/chat/completions' });
+    expect(screen.queryByText(/不在厂商目录里/)).toBeNull();
+  });
+
+  /**
+   * 目录里没有模型清单的那几家（本机服务），存过名字之后屏幕上得有一句话说清
+   * 「这个名字是之前填的、不是从清单来的」。触发条件从「刚按了一下本机芯片」
+   * 改成「当前这一条记录自己存着名字」——那才是这句话为真的时候。
+   */
+  it('本机那一家存过模型名时，说清那个名字是之前填的', () => {
+    api({ id: 'ollama', aiBaseUrl: 'http://127.0.0.1:11434/v1/chat/completions', aiModel: 'qwen2.5:7b' });
+    expect(urlInput().value).toBe('http://127.0.0.1:11434/v1/chat/completions');
+    expect(modelInput().value).toBe('qwen2.5:7b');
+    expect(screen.getByText(/是之前填的/), '屏幕上得有一句话说这个模型名是旧的').toBeTruthy();
+  });
+
+  it('这一节分成「谁来拆」和「什么时候拆」两块，中间那道缝看得见', () => {
+    api();
+    const heads = [...document.querySelectorAll('.ink-set-group')].map((h) => h.textContent);
+    expect(heads).toEqual(['谁来拆', '什么时候拆']);
+  });
+
+  /**
+   * 这三格一直**没有名字**，只是量不到：这一面从来不在表里（夹具的 `aiMode` 写的是
+   * cli，那一屏画的是命令行那几个单选），这一轮补上 `mode: 'api'` 才第一次进表，
+   * 探针当场报出「无名字控件 3」。
+   *
+   * 名字按探针那把尺子**算**出来，不是读 `aria-label` 这个属性：`aria-labelledby`
+   * 要跟到那个元素去读文本，外面包着的 `<label>` 也算——尺子不认的修法等于没修。
+   * **占位符不算名字**（一落笔就没了，而读屏每次焦点都得念得出来），而 `Form.Item`
+   * 的 `label` 只有配上 `name` 才会变成 `<label for>`，这一屏的草稿不是 antd 受控
+   * 表单，所以「接口地址」那两个字原本在 DOM 里跟这个框一点关系都没有。
+   */
+  it('接口地址 / 模型 / 密钥 三格各有名字——读屏焦点进来念得出来', () => {
+    api();
+    const accName = (el: Element): string => {
+      const by = el.getAttribute('aria-labelledby');
+      const viaIds = by
+        ? by.split(/\s+/).map((id) => document.getElementById(id)?.textContent?.trim()).filter(Boolean).join(' ')
+        : '';
+      return viaIds || el.getAttribute('aria-label') || el.closest('label')?.textContent?.trim() || '';
+    };
+    expect(accName(urlInput()), '地址框没名字：焦点进来只念得出「组合框」').toBe('接口地址');
+    expect(accName(modelInput()), '模型框没名字').toBe('模型');
+    expect(accName(keyBox()), '密钥框没名字').toBe('密钥');
   });
 });

@@ -1,0 +1,373 @@
+<!doctype html>
+<!--
+  打磨稿 · batch1 —— 现状审计格。
+
+  每一格是一个**同源的真 app iframe**，不是截图：量出来的数就是屏幕上那个数。
+
+  ## 跑法（三张表共用这一份，batch2 / floors 不再各写一遍）
+
+  夹具数据由 `tools/preview-fixture.mjs` 铺到某个 `<BASE>` 目录（仓库外，默认
+  `../.preview-data`），然后**带 `DESIGN_PREVIEW=1` 起服务**：这套稿子住在
+  `tools/design-preview/`，不在 `web/dist` 里（那儿的东西会随安装包上线），不带
+  那个开关时 `/design-preview/*` 一律 404，那句话会自己说明原因。
+
+    node tools/preview-fixture.mjs <BASE>/data <BASE>/device.json   # 要哪一面就带哪个开关，见该文件头部
+    DESIGN_PREVIEW=1 PORT=30096 NO_OPEN=1 \
+      DATA_DIR=<BASE>/data DEVICE_CONFIG=<BASE>/device.json AGENT_CWD=<BASE> \
+      node server/dist/index.js
+
+  再开 `http://127.0.0.1:30096/design-preview/batch1.html`。两条容易踩的：
+
+  - **`AGENT_CWD` 必须指到 `<BASE>` 那一级**，否则 `aiSeesSameData` 那道守卫会在
+    起 AI 进程之前就拒掉，「叫 AI」那两格直接 409。
+  - **`DEVICE_CONFIG` 必须指走**，不然是读写本机那份真设置。
+
+  **改稿子不用重构建**——`tools/design-preview/` 是原样端出去的，而且这一层
+  no-store（见 `server/src/index.ts` 里那段），存盘刷新就是新版。要
+  `npm run build -w web` 的是**被量的那一侧**：每一格 iframe 里跑的是
+  `web/dist` 的应用，改了 `web/src` 不重构建，量到的还是旧界面。
+
+  为什么先做「现状」而不是「改后」：这个仓库的每一处改版都要求先有账
+  （`feedback-measure-distribution-before-setting-lines` 那条判据）——「点击目标
+  够不够 24px」「哪一行折了」「哪句文案在两个地方说了两遍」，先量出来再决定改谁。
+  改后格在 batch2 起，同一条格子左边现状右边改后。
+
+  格子**逐格 boot**，不并发：localStorage 是同源共享的，密度/视图这些偏好
+  上一格设的值会被下一格读到，并发起来读数会互相踩。
+
+  **顶上那两条报错横幅（同步冲突 / 打不开的文件）不是「点了才出现」，也不是
+  `?cells=` 能切出来的——它是磁盘上的数据**：`node tools/preview-fixture.mjs
+  <data目录> <device.json> --errors` 往夹具目录里多写一份冲突副本和一个坏
+  JSON，夹具服务就会报出来，任何一格都带着这两条横幅。收回去：删掉那两个文件
+  **并重启那个夹具服务**（坏文件那份记在服务的内存里，不重启不会自己消失）。
+  这一族不单独设一格：它跟每一屏同框，设一格反而让其余格子量的是「没有横幅的
+  那一面」而看不出处置。
+
+  **顶上那条「AI 拆解失败」不用开关——那是默认档**：夹具写 device.json 时把设置里
+  的「命令行工具路径」指到一个不存在的二进制，之后每一次「叫 AI」都立刻真的
+  失败（不是稿子编的状态），而这台服务碰不到真额度。`?cells=` 里那两格自己会打
+  一次 `/api/expand` 并等横幅出现。要绿色那条「拆解完成」得带 `--agent-stub`
+  （见下面那两格的注释）——那也是一面，只是不是这两格要量的那面。
+
+  **`--scheduled` 开的是另一类**：把 `autoExpand` 打开、延迟拉到上限 3600 秒，
+  那条「下次自动拆解」的倒计时横幅就一直挂着（SSE 的重放缓冲让后开的页面也
+  读得到）。它**跟上面几条不一样，必须重启那个夹具服务**才生效——`device.json`
+  在 `data/` 外面，不在文件监听器的名单里。而 **`--errors --scheduled` 一起开**
+  是最后那两格（「横幅那一摞」）要的那面：几条页面级横幅各自都量过，叠在一起
+  没有。判据（屏幕上得有任务）写在 `drive.js` 的 `bannerPile` 上。
+
+  **`--no-trash` 把垃圾箱清空**（不铺那两条待删任务）。「垃圾箱 · 1280（空态）」
+  那格以前没有断言，而夹具一铺这两条，它量的就是有东西那一屏——标签成了一句
+  假话，两格读数还一样漂亮。现在那格带一条 `trashEmpty` 断言，不带这个开关跑
+  它报实话。这一条**也要重启夹具服务**——服务把垃圾箱那份记在自己内存里，盘上
+  删干净了 `GET /api/trash` 还照吐那两条。
+-->
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>办事师爷 · 打磨稿 batch1 · 现状审计</title>
+<style>
+  body { margin: 0; background: #1b1a18; color: #e8e4dc; font: 14px/1.6 "Segoe UI", system-ui, sans-serif; }
+  header { padding: 18px 22px 8px; }
+  h1 { margin: 0 0 6px; font-size: 18px; }
+  .legend { color: #a8a196; font-size: 12.5px; max-width: 92ch; }
+  .legend code { color: #d8c9a8; }
+  #audit { margin: 14px 22px; padding: 12px 14px; background: #232120; border-radius: 8px; font: 12px/1.7 Consolas, monospace; white-space: pre-wrap; min-height: 40px; }
+  #audit b { color: #f0b429; }
+  #audit .hint { color: #7e776b; font-size: 11px; margin: 0 0 6px 12px; }
+  #grid { display: flex; flex-wrap: wrap; gap: 18px; padding: 0 22px 30px; }
+  figure { margin: 0; }
+  figcaption { padding: 6px 2px; color: #a8a196; font-size: 12px; }
+  iframe { display: block; width: 100%; height: 100%; border: 0; background: #efece6; border-radius: 6px; }
+  .cell { border: 1px solid #3a3733; border-radius: 8px; padding: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>办事师爷 · 打磨稿 batch1 · 现状审计</h1>
+  <p class="legend">
+    夹具覆盖 <code>todo/doing/done/later/abandoned</code>、过期、被父亲挡着、在等谁、
+    周重复、艾宾浩斯、习惯、待决建议、AI 拆解理由、置顶、优先级、长标题折行。
+    下面每格是一个真 app；跑完自动出一份审计（横向溢出、裁掉又没说全文的字、
+    点击目标小于 24px、没有名字的控件、没有 alt 的图、被挤成一列一个字）。<br>
+    <b>已裁决、不再改的几条</b>（各自都是按设计在裁，全文都落在同一屏的另一处）：
+    ① 行档 <code>.ink-trow-meta</code> 在窄屏被裁尾。<code>theme.css</code> 里写明
+    「裁掉末尾好过竖排」（不这么写的话「整理」「健康」这种两字标签会被压成一列
+    一个字，一行变两行高），窄屏还给整行加了右缘渐隐当线索，点开详情看得全。
+    ② <code>「＋ 加一项」</code>那一行右边点名的 <code>.ink-frow-hint</code> 在
+    390 宽上被省略号收掉。同一条 <code>theme.css</code> 注释写着「永不折行」——
+    上一轮它是为了不把那一行从 32px 顶到 50px 才改成这样的，而它点开的菜单里
+    全名一个不少。
+    ③ 习惯屏那张月历只有 179px 宽（<code>repeat(7, 23px)</code> 写死），右边
+    一整条空白：390 上空 140px，1280 上空 993px，而它下面那张年度热力图是铺满
+    整宽的。写死七列那条 <code>theme.css</code> 注释认的代价是「最后一行最多
+    六格空白」，没认过这一条——但改成均分七列，桌面上就是一格 165px 见方、里面
+    一个 11px 的数字，而「每行第一格总指向同一个周几」这条承诺两边都还在。
+    探针不知道设计意图，会照报——但别再为它们动 UI。
+  </p>
+  <div id="audit">booting…</div>
+</header>
+<div id="grid"></div>
+
+<script src="./probe.js"></script>
+<script src="./drive.js"></script>
+<script>
+// 每格：{ 标签, hash 路由, 密度, 视口 }
+const ALL_CELLS = [
+  { label: '今天 · 卡档 · 1280', hash: '#/today', density: 'card', w: 1280, h: 900 },
+  { label: '今天 · 行档 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900 },
+  { label: '全部 · 卡档 · 1280', hash: '#/all', density: 'card', w: 1280, h: 900 },
+  { label: '接下来 · 分组 · 1280', hash: '#/upcoming', density: 'card', w: 1280, h: 900 },
+  { label: '收件箱 · 1280', hash: '#/inbox', density: 'row', w: 1280, h: 900 },
+  { label: '回顾 · 1280', hash: '#/review', density: 'row', w: 1280, h: 900 },
+  { label: '日历 · 1280', hash: '#/calendar', density: 'row', w: 1280, h: 900 },
+  { label: '四象限 · 1280', hash: '#/quadrant', density: 'card', w: 1280, h: 900 },
+  { label: '纪念日 · 1280', hash: '#/countdown', density: 'row', w: 1280, h: 900 },
+  { label: '今天 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844 },
+  { label: '收件箱 · 手机 390', hash: '#/inbox', density: 'row', w: 390, h: 844 },
+  { label: '详情面板 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900, openFirst: true },
+  // ── 扩出来的那一批：之前只量了任务列表那几屏，弹层、面板、空态、其余去处
+  //    一格都没进过表。它们大多不是「导航过去就有」——得先点一下、按一下，
+  //    所以格子多了 `drive` 这一步（见下面那张表）。
+  { label: '已完成 · 1280', hash: '#/done', density: 'row', w: 1280, h: 900, drive: 'doneItems' },
+  { label: '已完成 · 手机 390', hash: '#/done', density: 'row', w: 390, h: 844, drive: 'doneItems' },
+  { label: '垃圾箱 · 1280（空态）', hash: '#/trash', density: 'row', w: 1280, h: 900, drive: 'trashEmpty' },
+  { label: '按来源 · 1280', hash: '#/source', density: 'card', w: 1280, h: 900 },
+  { label: '未归类 · 1280', hash: '#/nolist', density: 'row', w: 1280, h: 900 },
+  { label: '一份清单 · 1280', hash: '#/list:L-work', density: 'card', w: 1280, h: 900 },
+  { label: '一个标签 · 1280', hash: '#/tag:整理', density: 'row', w: 1280, h: 900 },
+  { label: '不存在的东西 · 空态', hash: '#/tag:zzz不存在', density: 'row', w: 1280, h: 900 },
+  { label: '习惯 · 1280', hash: '#/habits', density: 'row', w: 1280, h: 900 },
+  { label: '专注统计 · 1280', hash: '#/focus', density: 'row', w: 1280, h: 900 },
+  { label: '设置 · 功能模块', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '功能模块' },
+  { label: '设置 · 智能清单', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '智能清单' },
+  { label: '设置 · 提醒与通知', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '提醒与通知' },
+  { label: '设置 · 日期与时间', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '日期与时间' },
+  { label: '设置 · 任务默认值', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '任务默认值' },
+  { label: '设置 · 智能识别', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '智能识别' },
+  { label: '设置 · AI 那一节 · 本机命令行', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: 'AI 拆解', mode: 'cli' },
+  // 「调接口」才是被改过的那一面（厂商那一排收成常用的一排 + 「更多厂商」+「自定义」）。
+  // 夹具默认 aiMode 是 cli，所以原来这一格一直量的是命令行那一面——这一格和下面
+  // 展开那格、以及 390 那一格都靠 `mode: 'api'` 走真控件点到那一面。
+  { label: '设置 · AI 那一节 · 调接口', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: 'AI 拆解', mode: 'api' },
+  // 展开「更多厂商」之后那一层：三十多枚 chip + 订阅套餐那颗开关只有在这儿才在屏幕上，
+  // 不单独进表的话这一面永远只量到收起的那一排。
+  { label: '设置 · AI 那一节 · 调接口 · 展开更多厂商', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: 'AI 拆解', mode: 'api', more: true },
+  { label: '设置 · 专注', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '专注' },
+  { label: '设置 · 数据与服务', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '数据与服务' },
+  { label: '设置 · 关于', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'settings', section: '关于' },
+  // ── 同样这十节，**在 390 上再来一遍**。手机上这个弹层是另一套版面（全屏
+  //    sheet、标签那排要横滚、每一节里的控件从两列塌成一列），而十节里哪一节
+  //    会挤坏只有真开一遍才知道。这一族不带断言：十节都在那里，量错面这件事
+  //    由 `settings` 那条驱动自己报（它找不到那一节就红）。
+  { label: '设置 · 功能模块 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '功能模块' },
+  { label: '设置 · 智能清单 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '智能清单' },
+  { label: '设置 · 提醒与通知 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '提醒与通知' },
+  { label: '设置 · 日期与时间 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '日期与时间' },
+  { label: '设置 · 任务默认值 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '任务默认值' },
+  { label: '设置 · 智能识别 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '智能识别' },
+  { label: '设置 · AI 那一节 · 本机命令行 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: 'AI 拆解', mode: 'cli' },
+  { label: '设置 · AI 那一节 · 调接口 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: 'AI 拆解', mode: 'api' },
+  { label: '设置 · 专注 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '专注' },
+  { label: '设置 · 数据与服务 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '数据与服务' },
+  { label: '设置 · 关于 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'settings', section: '关于' },
+  { label: '命令面板', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'palette' },
+  { label: '快捷键一览', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'help' },
+  { label: '搜索空态', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'searchEmpty' },
+  { label: '卡片编辑态', hash: '#/today', density: 'card', w: 1280, h: 900, drive: 'editForm' },
+  { label: '新建任务表单', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'compose' },
+  { label: '手机抽屉 · 导航', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'drawer' },
+  // ── 手机上那一组 + 两个「点了才出现」的状态。之前手机上只有三格（列表、
+  //    收件箱、抽屉），批量条、详情、表单、搜索、日历这几面在 390 宽里长什么样
+  //    一次都没进过表——而窄屏恰恰是最容易挤的一边。
+  { label: '桌面 · 批量条', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'select2' },
+  { label: '手机 · 批量条', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'select2' },
+  { label: '手机 · 任务详情', hash: '#/today', density: 'row', w: 390, h: 844, openFirst: true },
+  { label: '手机 · 新建任务表单', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'compose' },
+  { label: '手机 · 搜索有结果', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'search' },
+  // 桌面那一面原来没进过表：搜索结果列表只在手机上量过。弹层是固定 560 宽，
+  // 一行装得下的字数跟 390 完全不同一种，两档各量一遍才知道「折两行」在两档上
+  // 各是什么样子。
+  { label: '桌面 · 搜索有结果', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'search' },
+  { label: '手机 · 日历', hash: '#/calendar', density: 'row', w: 390, h: 844 },
+  { label: '日期面板摊开', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'datePanel' },
+  // ── 离线那一组。这面之前一次没进过表：它不是「点了才出现」，是**连不上**
+  //    才出现（`apiBase` 指到一个没人听的端口 ⇒ `/api/health` 失败 ⇒ 整条
+  //    `route()` 走本地层）。那条横幅是这个应用里最长的一段常驻文案，两种人
+  //    （桌面没起服务的 / 手机上从没填过地址的）都靠它指路。
+  //    **量到的其实是「读不到」那一面，不是离线横幅**，理由记在这儿免得下一轮
+  //    误读：这一格跟稿子同源，同源那儿有一个**活着**的服务，`getApiBase()`
+  //    那份内存镜像是异步填的，第一次探测赶在填好之前，打的是相对路径 ⇒ 探到
+  //    200 ⇒ `offline` 记号翻不过来（下一次翻要等 60 秒那次心跳，比一轮取证长）。
+  //    任务那一行倒是用死地址发的，于是停在「没能读到」——本轮要抓的那句谎
+  //    （「还没有任何任务」）正是在这一面现形的。真·离线横幅那一路有单测盯着
+  //    （App.test.tsx / OfflineWrite.test.tsx），不在这里补第二套。
+  { label: '离线 · 今天（有本地快照）', hash: '#/today', density: 'row', w: 1280, h: 900, offline: true },
+  { label: '离线 · 收件箱', hash: '#/inbox', density: 'row', w: 1280, h: 900, offline: true },
+  { label: '离线 · 设置·数据与服务', hash: '#/today', density: 'row', w: 1280, h: 900, offline: true, drive: 'settings', section: '数据与服务' },
+  { label: '离线 · 手机', hash: '#/today', density: 'row', w: 390, h: 844, offline: true },
+  { label: '新设备 · 离线（本地也什么都没有）', hash: '#/today', density: 'row', w: 1280, h: 900, offline: true, fresh: true },
+  // ── 事件驱动那一族：**默认档就是这一面**（夹具把「命令行工具路径」指到一个不
+  //    存在的二进制，跑完拆解是真的失败，屏幕上出现的是红色那条失败横幅）。
+  { label: 'AI 拆解失败那条横幅 · 1280', hash: '#/inbox', density: 'row', w: 1280, h: 900, drive: 'agentFail' },
+  { label: 'AI 拆解失败那条横幅 · 手机 390', hash: '#/inbox', density: 'row', w: 390, h: 844, drive: 'agentFail' },
+  // ── 跑完了那一面：**需要夹具服务带 `--agent-stub` 起来**（假 AI 真被 spawn，
+  //    产物走的是服务自己的合并/取文件那条路）。不带这个开关跑这两格，看到的
+  //    是上一次遗留的状态或压根没有横幅。
+  { label: 'AI 总览那条多行汇报 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'boardOk' },
+  { label: 'AI 总览那条多行汇报 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'boardOk' },
+  // 导入被服务端拒掉的那句原话（喂一份客户端放得过、服务端会拒的 JSON）。
+  { label: '导入被拒的那句回执 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'importReject' },
+  { label: '导入被拒的那句回执 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'importReject' },
+  // ── 第二轮补的那一批「从来没开过的面」（跟 `floors.html` 同一批格子）。
+  //    它们不是「点了才出现」那么轻：每一面都有一整套控件（星期格子、× 那颗、
+  //    上下挪那两颗…），而小目标 / 没名字这两把尺子在此之前一次都没落到它们身上。
+  { label: '日历 · 安排任务那栏', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'schedPanel' },
+  { label: '日历 · 周档', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'calMode', mode: 'week' },
+  { label: '日历 · 年档', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'calMode', mode: 'year' },
+  { label: '日历 · 日程档', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'calMode', mode: 'agenda' },
+  { label: '日历 · 点一天新建', hash: '#/calendar', density: 'row', w: 1280, h: 900, drive: 'calCompose' },
+  { label: '表单 · 重复那一行', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'repeatEditor' },
+  { label: '表单 · 标签那一行', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'tagEditor' },
+  { label: '表单 · 优先级', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'priRow' },
+  { label: '表单 · 斜杠插入菜单', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'slashMenu' },
+  { label: '搜索结果那一屏', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'searchJump' },
+  { label: '筛选栏摊开', hash: '#/all', density: 'row', w: 1280, h: 900, drive: 'filterPanel' },
+  { label: '侧栏 · 标签改名', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'renameTag' },
+  { label: '卡片编辑态 · 检查事项', hash: '#/all', density: 'card', w: 1280, h: 900, drive: 'subtaskEdit' },
+  { label: '行档 · 今天那颗 ⋯', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'rowMenu' },
+  { label: '卡片 · 批量勾选', hash: '#/all', density: 'card', w: 1280, h: 900, drive: 'selCheck' },
+  { label: '习惯 · 展开月历', hash: '#/habits', density: 'row', w: 1280, h: 900, drive: 'habitMonth' },
+  { label: '今天 · 推荐摊开', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'suggestPanel' },
+  { label: '详情 · 带附件那条', hash: '#/all', density: 'row', w: 1280, h: 900, drive: 'attachRow' },
+  { label: '看板 · AI 理由收两行', hash: '#/source', density: 'card', w: 390, h: 844, drive: 'marginExpand' },
+  { label: '垃圾箱 · 里面有东西', hash: '#/trash', density: 'row', w: 1280, h: 900 },
+  //    390 那一档排在「刚还原那一下」**之前**：还原那颗点下去那条就真回任务里了，
+  //    同一份夹具跑几轮垃圾箱会被抽干。前置断言在 `trashItems` 里。
+  { label: '垃圾箱 · 里面有东西 · 手机 390', hash: '#/trash', density: 'row', w: 390, h: 844, drive: 'trashItems' },
+  { label: '随手添加那行打了字', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'quickAdd' },
+  { label: '随手添加那行 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'quickAdd' },
+  // ── 番茄钟跑着的那三面。之前表里只有「专注统计」和「设置·专注」，而人日常
+  //    看见的是跑起来那一段：跳秒的数字、「取消计时」那颗、被别的卡占着时那对
+  //    disabled。一格都没有过。
+  { label: '专注 · 跑着', hash: '#/today', density: 'card', w: 1280, h: 900, drive: 'focusRun' },
+  { label: '专注 · 正计时跑着', hash: '#/today', density: 'card', w: 1280, h: 900, drive: 'focusUp' },
+  { label: '专注 · 被另一张卡占着那颗', hash: '#/today', density: 'card', w: 1280, h: 900, drive: 'focusBlocked' },
+  // ── 倒数纪念日「正在改那一行」。那一屏只量过列表档，而改名字/改日期是另一套
+  //    DOM（输入框 + 原生日期控件 + 一颗保存），窄屏上三个控件挤一格。
+  { label: '纪念日 · 改那一行', hash: '#/countdown', density: 'row', w: 1280, h: 900, drive: 'cdEdit' },
+  { label: '纪念日 · 改那一行 · 手机 390', hash: '#/countdown', density: 'row', w: 390, h: 844, drive: 'cdEdit' },
+  //    **这一格要夹具带 `--fast-focus` 才跑得动**（一轮番茄 1 分钟，不然它老实
+  //    等 25 分钟然后报超时——那是对的）。休息那半段只有专注真走完才出现，演不
+  //    得：演出来的休息是稿子编的一个 div。
+  { label: '专注 · 休息中', hash: '#/today', density: 'card', w: 1280, h: 900, drive: 'focusBreak' },
+  // ── 侧栏里一份清单的 ⋯。这一层从没上过屏，而它比标签那颗的菜单长得多。
+  //    两格各量一支：普通清单有「让 AI 回顾」没有「编辑筛选条件」，智能清单
+  //    正好相反（判据在 Sidebar.tsx 那两段注释里）。
+  { label: '侧栏 · 一份清单的 ⋯', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'listMenu', which: '师爷' },
+  { label: '侧栏 · 智能清单的 ⋯', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'listMenu', which: '本周到期' },
+  //    第三格量那份**一条任务都没挂**的清单（夹具里叫「读书」）：它的 ⋯ 里
+  //    「让 AI 回顾这份清单」带着括号那半句理由，是这一族最长的一行。
+  { label: '侧栏 · 空清单的 ⋯（那句理由）', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'listMenu', which: '读书' },
+  //    **一次性的面**：点下去那条就回任务里了，第二次跑这一格垃圾箱是空的
+  //    （要再看先重跑生成器）。跟「到点横幅」那两条同一条道理。
+  { label: '垃圾箱 · 刚还原那一下', hash: '#/trash', density: 'row', w: 1280, h: 900, drive: 'trashRestore' },
+  // ── 专注统计另两面：那一屏原来只有 1280 一格（四块数字 + 两周柱状 + 年度
+  //    热力图 + 三张排行 + 补记表单，全在 390 上叠成一列，一格都没量过），
+  //    而「一次都没专注过」那一面在新装的机器上是常态，从来没上过屏。
+  { label: '专注统计 · 手机 390', hash: '#/focus', density: 'row', w: 390, h: 844, drive: 'focusFull' },
+  //    **这一格要夹具带 `--no-focus` 才量得到**（抹掉所有专注记录）。两格各带
+  //    一条前置断言（`focusFull` / `focusEmpty`）：量错面的话两屏都「没有溢出
+  //    没有小目标」，读数一样漂亮，只能靠验一句只有那一面才有的话拦住。
+  { label: '专注统计 · 一次都没专注过', hash: '#/focus', density: 'row', w: 1280, h: 900, drive: 'focusEmpty' },
+  // ── 习惯那条格子带在 390 上：`HabitStats.tsx` 写着「窄屏不受展开那套管，
+  //    手机上本来是一行一张卡、月历常驻」。这一格**什么都不点**——它要量的正是
+  //    「不点也摊着」这件事，所以那条驱动里只有一句前置断言（`habitMonthMobile`）。
+  { label: '习惯 · 月历 · 手机 390', hash: '#/habits', density: 'row', w: 390, h: 844, drive: 'habitMonthMobile' },
+  // ── 到点提醒那两条横幅。这个应用里最打断人的一屏，原来一次都没量过：夹具
+  //    确实备了 dp-19 / dp-20 两条「五分钟前」的提醒，可那是**响一次就没了**的
+  //    状态，服务一起来就发掉了，稿子后开。所以这三格各带一条驱动，自己经
+  //    `PATCH /api/tasks/:id` 重新挂一次（判据和为什么不能直接编 DOM，都在
+  //    `drive.js` 的 `dueStack` 上面那段）。
+  { label: '到点提醒 · 那一摞 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'dueStack' },
+  { label: '到点提醒 · 那一摞 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'dueStack' },
+  { label: '到点提醒 · 只剩一条 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'dueOne' },
+  // ── 「下次自动拆解」那条倒计时横幅：唯一还没进过表的、带动作那一排的 Alert。
+  //    它要夹具带 `--scheduled` 才有（而且那条开关**必须重启夹具服务**才生效——
+  //    理由写在 `tools/preview-fixture.mjs` 里 `--scheduled` 那段）。不带那条开关
+  //    跑，这两格报的是实话，不是一条假读数。
+  { label: '自动拆解排期那条横幅 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'scheduled' },
+  { label: '自动拆解排期那条横幅 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'scheduled' },
+  // ── **几条页面级横幅同框**那一面：每一条都是各自量过的，叠在一起没有。
+  //    要夹具带 `--errors --scheduled` 两个开关（再叠一条真的到点，那一格自己挂）。
+  //    390 那一格**今天是有意的红**：四条 463px，占掉 55% 的屏幕，第一条任务落在
+  //    882px（屏幕 844）——判据和为什么让它红着，写在 `drive.js` 的 `bannerPile` 上。
+  { label: '横幅那一摞 · 1280', hash: '#/today', density: 'row', w: 1280, h: 900, drive: 'bannerPile' },
+  { label: '横幅那一摞 · 手机 390', hash: '#/today', density: 'row', w: 390, h: 844, drive: 'bannerPile' },
+];
+
+
+/**
+ * **一次跑几格，由 `?cells=` 决定**（如 `?cells=0,1,11`）。默认全跑，但十几格
+ * 真 app iframe 一起 boot 会把浏览器会话压死（实测 MCP 调用直接超时、页面卡在
+ * 第六格）——分片不是优化，是这套稿子能反复跑的前提。格子清单会长，分片这件事
+ * 跟具体有几格无关。
+ */
+const picked = new URLSearchParams(location.search).get('cells');
+/** `&keep`：量完不释放格子（要拿眼睛对版式时用）。默认释放，见循环里那段。 */
+const KEEP = new URLSearchParams(location.search).has('keep');
+const CELLS = picked
+  ? picked.split(',').map((n) => ALL_CELLS[Number(n)]).filter(Boolean)
+  : ALL_CELLS;
+
+const out = document.getElementById('audit');
+const grid = document.getElementById('grid');
+const log = [];
+
+(async () => {
+  for (const c of CELLS) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    // **iframe 按声明的真实宽度渲染，再用 transform 缩进格子里**——直接把格子
+    // 设成 620px 的话，量出来的是窄屏布局，而稿子上写着「1280」，读数就是假的
+    // （第一版栽在这儿：详情面板那一格「首帧没等到」，其实是 620px 下压根不开面板）。
+    const k = Math.min(1, 620 / c.w);
+    cell.style.width = Math.round(c.w * k) + 'px';
+    cell.style.height = Math.round(c.h * k) + 'px';
+    cell.innerHTML = `<figure style="margin:0;height:100%"><iframe style="width:${c.w}px;height:${c.h}px;transform:scale(${k});transform-origin:0 0"></iframe><figcaption>${c.label} · 真宽 ${c.w}px，显示缩到 ${(k * 100) | 0}%</figcaption></figure>`;
+    grid.appendChild(cell);
+    const f = cell.querySelector('iframe');
+    prepareCell(c);
+    try {
+      await bootCell(f, c);
+      await settle(f);
+      await injectProbe(f);
+      // 探针本身也要有上限：回顾那一屏节点多，一次同步扫描卡住就会把整轮带走，
+      // 而「整轮停在第 6 格」比「第 6 格没量到」难查得多。
+      const found = await Promise.race([
+        Promise.resolve(f.contentWindow.__probe(c)),
+        new Promise((_, fail) => setTimeout(() => fail(new Error('探针超时')), 8000)),
+      ]);
+      log.push({ cell: c.label, ...found });
+    } catch (err) {
+      // 一格量不到不能让整轮停：报出来，剩下的格子继续跑。
+      log.push({ cell: c.label, nodes: -1, overflow: 0, guarded: 0, clipped: 0, smallTargets: 0, unmeasured: 0, covered: 0, scrolledOut: 0, noName: 0, imgNoAlt: 0, squeezed: 0, hint: `量不到：${String(err && err.message || err)}` });
+    }
+    out.innerHTML = log.map((r) => `<div>${renderRow(r)}<div class="hint">${r.hint}</div></div>`).join('');
+    /**
+     * 量完就把这一格放掉。**四格真 app 同时活着会把浏览器会话压死**（实测：
+     * MCP 的 evaluate 直接超时，页面卡在第三格）——稿子可以同时摆很多格给人
+     * 看，但量数的时候并发数必须是 1。`&keep` 留着最后一格给人眼对，其余照放。
+     */
+    if (!KEEP) {
+      f.src = 'about:blank';
+      cell.querySelector('figcaption').textContent = `${c.label} · 已量完，格子已释放`;
+      cell.style.opacity = '.45';
+    }
+  }
+})();
+
+
+</script>
+</body>
+</html>

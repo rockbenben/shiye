@@ -1,9 +1,9 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readAll, syncAll } from './entityStore.js';
+import { readAll, renameIntoPlace, syncAll } from './entityStore.js';
 import { migrate } from './migrate.js';
 
 // 模型层（类型/常量/默认值）切到了 `model.ts`：网页那边也要用它们，而这个
@@ -12,6 +12,7 @@ import { migrate } from './migrate.js';
 export * from './model.js';
 import type { InboxItem, Insight, List, Folder, Countdown, Proposal, Settings, Task, TrashItem, OutboxEntry, OutboxUpdateEntry, OutboxInsightEntry } from './model.js';
 import { DEFAULT_SETTINGS } from './model.js';
+import { withLegacyAi } from './aiEndpoints.js';
 
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -28,7 +29,7 @@ export const dataDir = (): string => process.env.DATA_DIR ?? join(here, '..', '.
  * AI 那边的工作目录：默认是仓库根，Electron 打包后由 `AGENT_CWD` 显式指过来。
  *
  * 两条路都用它：CLI 那条拿它当子进程的 cwd（`AGENTS.md` 里全是
- * `data/inbox.json` 这样的相对路径），API 那条拿它去读 `AGENTS.md` 和
+ * `data/inbox/<id>.json` 这样的相对路径），API 那条拿它去读 `AGENTS.md` 和
  * `workflows/*.md` 的原文当提示词。**曾经 expand.ts 里另有一份一模一样的
  * 定义**，收在这儿一份——两份的话，哪天打包路径变了只会有一边跟上。
  */
@@ -55,10 +56,10 @@ export const agentDataDir = (): string => join(agentCwd(), 'data');
 export const aiSeesSameData = (): boolean => resolve(dataDir()) === resolve(agentDataDir());
 
 /**
- * 七个「一目录一张表」的目录路径。**不包含 settings**——它是扁平文件，
+ * 八个「一目录一张表」的目录路径。**不包含 settings**——它是扁平文件，
  * 而且不在 `data/` 里：装的是跟这台机器绑定的东西（webhook 地址、系统
  * 通知开关……），放进 `data/` 会跟着同步盘跑到别的设备上互相覆盖，见
- * `deviceConfigPath` 的注释。混在同一个返回值里，七个是目录、一个是文件，
+ * `deviceConfigPath` 的注释。混在同一个返回值里，八个目录中间夹一个文件，
  * 容易被当成目录误用。`readSettings`/`writeSettings` 直接拼自己的路径，
  * 见下面。**也不包含 `meta.json`**——那是 `migrate.ts` 自己的状态（记
  * schemaVersion），只有它一处会读写，这里加一个没有第二个调用点的键只是
@@ -94,13 +95,18 @@ export const nowIso = (): string => new Date().toISOString();
  *
  * 缩进 2 空格是有意的：这是接口文件，AI 要读、人要看 diff（现在唯一的调用方
  * 是 `writeSettings`，但格式约定不因为调用方只剩一个就该放松）。
+ *
+ * **改名那一步带重试**（`entityStore.ts` 的 `renameIntoPlace`）：Windows 上
+ * `MoveFileEx(REPLACE_EXISTING)` 会偶发 EPERM——目标文件刚写完、句柄还没完全
+ * 释放。实测这台机器上每轮全量测试随机红 2~3 条，红的全是这一条；落在生产里
+ * 就是「保存设置回 500、那次修改没落盘」。理由和退避表写在那儿。
  */
 function writeAtomic(file: string, value: unknown): void {
   mkdirSync(dirname(file), { recursive: true });
   if (existsSync(file)) copyFileSync(file, `${file}.bak`);
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  renameSync(tmp, file);
+  renameIntoPlace(tmp, file);
 }
 
 function readJson<T>(file: string, fallback: T): T {
@@ -270,7 +276,32 @@ export const deviceConfigPath = (): string =>
  * 回落默认值）——这条规矩没有因为搬了家而失效：`device.json` 现在是这个项目里
  * 少数几个「单个文件承载全部内容」的地方之一，正是这条规矩为它定的。
  */
-export const readSettings = (): Settings => ({ ...DEFAULT_SETTINGS, ...readJson<Partial<Settings>>(deviceConfigPath(), {}) });
+/**
+ * 读设置。**旧文件里的平铺三格在这里当场升成一条记录**（`aiEndpoints.ts` 的
+ * `withLegacyAi()`），不写盘、不需要 schemaVersion——`{ ...DEFAULT_SETTINGS, ...raw }`
+ * 这一行展开有个坏习惯：读不到的新键静默落回默认值，旧键就留在文件里没人认领，
+ * 全程一声不响。派生是幂等的，用户哪天存一次设置，落盘就是新形状。
+ *
+ * ## 那三格**不能**跟着返回
+ *
+ * `withLegacyAi()` 只**读**那三格、不删那三格。于是 `{ ...DEFAULT_SETTINGS, ...raw }`
+ * 这一行展开会把 `aiKey` 一起带进返回的对象——而打码只发生在 `aiEndpoints[*].key`
+ * 那一层（`app.ts` 的 `maskAiEndpoints`）。结果：**老机器（升级了但还没保存过一次
+ * 设置）`GET /api/settings` 会把明文密钥原样发出去**，导出的备份里也带着同一把
+ * 密钥出现两次。
+ *
+ * 这条路不是理论上的：这个服务能绑到局域网上（`lanBind.ts`），同一个 Wi-Fi 里的
+ * 任何设备都能 GET 它。实测（2026-10-21）：老形状的 device.json 一放进去，
+ * 响应里就是 `"aiKey":"sk-LEGACY-SECRET-0001"` 明文。
+ *
+ * 所以这里**读完就把那三格摘掉**：它们已经被派生成记录了，留着只会多一条漏出
+ * 密钥的路。原始文件里那三格不动（读时派生，不写盘）。
+ */
+export const readSettings = (): Settings => {
+  const raw = readJson<Record<string, unknown>>(deviceConfigPath(), {});
+  const { aiBaseUrl: _b, aiKey: _k, aiModel: _m, ...rest } = raw;
+  return withLegacyAi({ ...DEFAULT_SETTINGS, ...rest } as Settings, raw);
+};
 export const writeSettings = (v: Settings): void => writeAtomic(deviceConfigPath(), v);
 
 /**
@@ -330,7 +361,7 @@ export function strayOutboxFiles(): string[] {
 }
 
 /**
- * outbox 不在 `ensureDataFiles` 铺的那三个文件里——它不是常驻状态，是 AI
+ * outbox 不在 `ensureDataFiles` 铺的那八个目录里——它不是常驻状态，是 AI
  * 拆解一次留下的临时产物，合并完就该消失。没有文件就是「没有待合并的东西」，
  * 这个空状态本身就合法，不需要预先铺一个空数组。
  */
@@ -349,6 +380,10 @@ export const readOutboxFile = (file: string): Array<OutboxEntry | OutboxUpdateEn
  * 不走 `writeAtomic`：那个会额外留一份 `.bak`，而 outbox 是合并完就该消失的
  * 临时产物——留下 `outbox-xxx.json.bak` 只会在 `data/` 里堆垃圾，
  * 还正好落在 `strayOutboxFiles()` 会当成「写错名字」报出来的形状里。
+ *
+ * 改名那一步同样带重试（`renameIntoPlace`）：这一条失败的后果比别处更重——
+ * outbox 文件是**接口模式**下 AI 拆解结果的唯一落地方式，rename 抖一下，
+ * 那一次拆解就整个没了。
  */
 export function writeOutboxFile(entries: unknown[]): string {
   const dir = dataDir();
@@ -357,7 +392,7 @@ export function writeOutboxFile(entries: unknown[]): string {
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(entries, null, 2)}
 `, 'utf8');
-  renameSync(tmp, file);
+  renameIntoPlace(tmp, file);
   return file;
 }
 

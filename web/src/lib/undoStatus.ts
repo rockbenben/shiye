@@ -8,17 +8,40 @@ import { nextAfterDone } from '../../../server/src/repeat.js';
 import { descendantIds } from '../../../server/src/mutate.js';
 
 /**
- * 勾完之后那一次「撤销」（仿滴答清单：点完成，屏幕下方弹一条带撤销的提示）。
+ * 改完状态之后那一次「撤销」（仿滴答清单：点完成，屏幕下方弹一条带撤销的提示）。
  *
  * 补的是这个应用里最高频那一下之后的一个坑：**点完成，那张卡当场从眼前消失**
  * ——每个视图都会（看板/清单/四象限按状态或筛选摆卡，日历只画没了结的），
  * 点错了想改回来，得先想起来去「已完成」里翻。`isDoneToday` 那一节只补了
  * 「今天」一个视图（它自己的注释就是这么说的），别的地方一直是空的。
  *
- * 只认**完成**这一下，不认「搁置」「放弃」：那两个走的是卡片菜单，是想过
- * 才点的；勾选框是一个手滑就中的目标，两者不是同一类动作。
+ * ## 为什么搁置和放弃也有一份撤销
+ *
+ * 原来这里只认「完成」一个，理由写在注释里：「搁置/放弃走的是卡片菜单，是想过
+ * 才点的；勾选框是一个手滑就中的目标」。**这个理由对完成成立，对搁置/放弃不
+ * 成立**——它假设了人会点自己看懂了的那一格。
+ *
+ * 而这两格恰恰是全站最难看懂的两个词：「搁置」和「放弃」只差一个字，含义是
+ * 「以后还会回来」和「决定不做了」（区别写在 `lib/taskView.ts` 的 `STATUSES`
+ * 上方，而那段注释只在源码里）。**猜错的那一下原本没有任何退路**——而「完成」
+ * 有六秒撤销。风险大的那一边反而没有兵器。
+ *
+ * 结论是：**菜单也会点错，跟手滑是同一件事。** 搁置/放弃同样给一次撤销。
+ *
+ * ## 为什么这两档的 `partial` 恒为 false
+ *
+ * 服务端那边 `mutate.ts` 只有三处会连带改别的东西——生成重复的下一条
+ * （`maybeSpawnNextInstance`）、连带完成子任务、父任务上卷——**三处都只认
+ * `status === 'done'`**（`:211` 那个判据）。搁置和放弃除了状态本身不碰任何别
+ * 的东西（它们只是不再发提醒、退出那些视图，而那是状态的**后果**，改回去就跟着
+ * 回去）。所以撤销这一下是完整的，不带任何「只改回一部分」。
+ *
+ * 那为什么还需要 `to`：提示语要说「已搁置」还是「已放弃」，不能写死「已完成」。
  */
-export interface UndoDone {
+export interface UndoPlan {
+  /** 改完之后落成的那一档。**提示语拿它拼动词**（`STATUS_LABEL`），不另抄一份
+   *  「已完成 / 已搁置 / 已放弃」的话——抄一份的话，加第六个状态那天它就开始说错。 */
+  to: Status;
   /** 撤销要发的 patch——**改回它原来那个状态**，不是一律 `todo`：从「进行中」
    *  勾完的，撤销该回到「进行中」。 */
   patch: { status: Status };
@@ -39,7 +62,7 @@ export interface UndoDone {
    * 了『有事发生』、不交代『发生了什么』**的话，人读完还得自己去猜是哪一条被
    * 动了。现在改了什么就说什么：「连带做完了 3 条子任务」「「装修」也跟着完成了」。
    *
-   * **重复那一条不在这儿**（它由 `nextDue` 拼成「下次 9 月 1 日」，日期格式是
+   * **重复那一条不在这儿**（它由 `nextDue` 拼成「下次 9月1日」，日期格式是
    * 界面的事）——除非那条重复任务压根没有截止时间：那时候报不出日期，但
    * 「下一条排上了」这件事仍然要说，于是这里补一句。
    *
@@ -63,7 +86,7 @@ export interface UndoDone {
    *
    * **它说的是规则算出来的下一次，不是「我刚刚造了一条」**：服务端还会查一次
    * 「是不是已经有一条同样的了」（`hasTwinInstance`），那种情形下新的一条不会
-   * 生成——但「下一次是 9 月 1 日」这句话照样成立（那条卡已经在了）。
+   * 生成——但「下一次是 9月1日」这句话照样成立（那条卡已经在了）。
    */
   nextDue: string | null;
 }
@@ -73,17 +96,24 @@ export interface UndoDone {
 const short = (s: string): string => (s.length > 16 ? `${s.slice(0, 16)}…` : s);
 
 /**
- * 这一次 patch 算不算「勾完了一条」，算的话撤销要发什么。不算就返回 `null`。
+ * 这一次 patch 算不算「刚改过一档状态」，算的话撤销要发什么。不算就返回 `null`。
  *
  * 纯函数，`rows` 是发这一下之前的全部任务（连带判断要看兄弟和孩子）。`t` 收
  * `undefined`：调用方是 `tasks.find(...)`，表里没有（刚被别处删掉、id 打错）
  * 时不该为了「有没有撤销」这种事把一次写挡下来。
  */
-export function undoDonePlan(t: Task | undefined, patch: Partial<Task>, rows: Task[], now: Date): UndoDone | null {
+export function undoPlan(t: Task | undefined, patch: Partial<Task>, rows: Task[], now: Date): UndoPlan | null {
   if (!t) return null;
-  // done → done（改个备注顺手带上状态）什么连带都不会触发，也没什么可撤销的
-  // ——跟服务端三个连带函数的第一行判据一致：看的是**跃迁**，不是终态。
-  if (patch.status !== 'done' || t.status === 'done') return null;
+  const to = patch.status;
+  // 只认「跃迁」：done → done（改个备注顺手带上状态）什么连带都不会触发，也
+  // 没什么可撤销的——跟服务端三个连带函数的第一行判据一致：看的是**跃迁**，
+  // 不是终态。
+  if (to === undefined || t.status === to) return null;
+  // 搁置 / 放弃：干净的一下，撤销就是改回去。理由见上面「partial 恒为 false」。
+  if (to === 'later' || to === 'abandoned') {
+    return { to, patch: { status: t.status }, partial: false, title: short(t.title), nextDue: null, cascades: [] };
+  }
+  if (to !== 'done') return null;
   const next = nextAfterDone(t, now);
   const cascades: string[] = [];
   // 重复：有日期时那句「下次 X」由调用方拿 `nextDue` 拼（要本地日期格式，
@@ -104,6 +134,7 @@ export function undoDonePlan(t: Task | undefined, patch: Partial<Task>, rows: Ta
   const parent = rollUpParent(t, rows);
   if (parent) cascades.push(`「${short(parent.title)}」也跟着完成了`);
   return {
+    to,
     patch: { status: t.status },
     // **不再是「有 repeat 就算连带」那种多报**：次数用完（`count` 为 0）的那一次
     // 是最后一次，服务端不会再生成任何东西，撤销确实能把这一下整个抹掉。判据
@@ -128,7 +159,7 @@ export function undoDonePlan(t: Task | undefined, patch: Partial<Task>, rows: Ta
  *
  * 服务端在重复那一支还会查一次「是不是已经有一条同样的了」（`hasTwinInstance`，
  * 完成→取消→再完成的情形），那份判据留在服务端不复制过来——多报一次「下一条
- * 排上了」，比复制一份会跟着飘的判据强，何况那种情形下「下一次是 9 月 1 日」
+ * 排上了」，比复制一份会跟着飘的判据强，何况那种情形下「下一次是 9月1日」
  * 照样成立（那张卡已经在了）。
  */
 function rollUpParent(t: Task, rows: Task[]): Task | null {

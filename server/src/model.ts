@@ -7,8 +7,8 @@
  * 是最早那条）。于是这样一条链成立了：
  *
  * ```
- * web/src/lib/habit.ts  →  store.js            （为了一个 HABIT_EVERY）
- * web/src/lib/dataSource.ts → mutate.js → task.js → store.js
+ * web/src/lib/habit.ts  →  model.js            （为了一个 canBeHabit）
+ * web/src/lib/dataSource.ts → mutate.js → task.js → model.js
  * ```
  *
  * `store.ts` 顶层有一句 `const here = dirname(fileURLToPath(import.meta.url))`。
@@ -41,9 +41,9 @@ export type TaskContext = 'computer' | 'out' | 'home' | 'contact' | 'easy';
  * 一周从周几开始（仿滴答清单「日期与时间 → 每周开始于」，它给的就是这三档）。
  * `1` = 周一（默认，也是加这个设置之前写死的值），`0` = 周日，`6` = 周六。
  *
- * **提成一个具名类型、而不是在用到的地方各写一遍 `0 | 1 | 6`**：这个值有五个
- * 消费方（日历格、月视图表头、周视图表头、专注统计的「本周」、习惯热力图的
- * 列对齐），字面量各写一份的话，加一档就要五处跟上，漏一处不会编译报错、
+ * **提成一个具名类型、而不是在用到的地方各写一遍 `0 | 1 | 6`**：这个值有七八个
+ * 消费方（日历各视图的表头、专注统计的「本周」、习惯统计与热力图、今天的习惯条），
+ * 字面量各写一份的话，加一档就要七八处跟上，漏一处不会编译报错、
  * 只会让那一处静默停在旧的档位集合上。`TaskContext` 上面那段说的是同一件事。
  */
 export type WeekStart = 0 | 1 | 6;
@@ -93,7 +93,7 @@ export interface FocusSession {
  *
  * `every: 'ebbinghaus'` 是艾宾浩斯记忆法（背单词那种）：间隔不固定，按遗忘
  * 曲线越拉越长。这一档下 `interval`/`weekdays` 都用不上，走到第几步看
- * `step`——**只有这一档会读 `step`**，别的四档它恒为 0、也没人看。间隔表和
+ * `step`——**只有这一档会读 `step`**，别的八档它恒为 0、也没人看。间隔表和
  * 它是怎么从帮助文档那句「1，2，4，7，15」推出来的，见 `repeat.ts` 的
  * `EBBINGHAUS_GAPS`。
  *
@@ -481,6 +481,39 @@ export interface InboxItem {
   taskIds: string[];
 }
 
+/**
+ * 一条「接口配置」：地址 + **配给这个地址的**密钥 + 这家默认用哪个模型名。
+ *
+ * **三个字段是一个整体，不许拆开单独编辑。** 这条形状是为了堵一个真实的 401：
+ * 以前这里是平铺的三格、全应用只有**一把**密钥，而界面上密钥那格回填的是打码串，
+ * 保存时打码串会被换回存着的真值——**那次换回不看地址有没有变**。于是「点了另一家
+ * 服务商的芯片、没碰密钥格」这个最常见的动作，实际是把上一家的密钥发到了新地址上，
+ * 接口回 `Invalid API key`，报错文案却让人去查模型名和地址。密钥绑在记录里之后，
+ * 换服务商就是整条换，「跨家串钥匙」这件事在数据结构这一层就不成立了。
+ *
+ * 存在 `Settings.aiEndpoints` 里，一条一个键。键由**客户端**挑：provider 目录里
+ * 那一家的 `key`，手填的地址落进 `custom:<归一化地址>`。服务端把键当**不透明字符串**
+ * 对待、只按它合并，不解释也不改写它——目录住在 `web/src/vendor/`，服务端够不着，
+ * 硬要服务端也算一遍 id 就是让两个包各写一份归一化规则，迟早飘。
+ */
+export interface AiEndpoint {
+  /**
+   * 打到哪儿。填完整地址（`…/v1/chat/completions`）、base（`…/v1`）、或者光一个
+   * 域名都认，`aiApi.ts` 的 `chatUrl` 负责补齐。
+   */
+  baseUrl: string;
+  /**
+   * 接口密钥。**`GET /api/settings` 和 `PUT` 的响应都逐条打码**（`••••` 加后四位），
+   * 真值一步都不离开这台机器——这个服务会绑到局域网上（见 `lanBind.ts`），同一个
+   * Wi-Fi 里的任何人都能读它；只有 `/api/settings/export` 给明文（换机是导入的主场景）。
+   *
+   * 本机跑的 Ollama / LM Studio 那类不要钥匙，留空就行。
+   */
+  key: string;
+  /** 模型名，原样发给接口。各家的默认值互不相同，猜不了，所以跟着记录走。 */
+  model: string;
+}
+
 export interface Settings {
   webhookUrl: string;
   toastEnabled: boolean;
@@ -492,7 +525,7 @@ export interface Settings {
   focusMinutes: number;
   /**
    * 一轮之后歇多久，分钟（仿滴答清单番茄钟的「短休息」）。**0 = 不休息**，
-   * 那就是加这个字段之前的行为：倒计时走完直接回到「开始专注」。
+   * 那就是加这个字段之前的行为：倒计时走完直接回到「番茄钟」。
    *
    * 番茄工作法本来就是「专注一段 + 歇一小段」两半，这个应用一直只有前一半：
    * 倒计时归零、记一条记录，然后什么都不说——真正需要被提醒的那件事
@@ -658,23 +691,23 @@ export interface Settings {
   aiCliCustomArgs: string;
 
   /**
-   * `aiMode: 'api'` 时打到哪儿。填完整地址（`…/v1/chat/completions`）、base
-   * （`…/v1`）、或者光一个域名都认，`aiApi.ts` 的 `chatUrl` 负责补齐。
+   * `aiMode: 'api'` 时用哪一条记录。**一个 id，不是一串格子**——选服务商 = 选记录，
+   * 地址、密钥、模型名一起跟着这条记录走。
+   *
+   * 空串，或者指到 `aiEndpoints` 里没有的键，都算「还没选」：判据上等同于
+   * 「接口地址还没填」（`aiApi.ts` 的 `configProblem`），三颗 AI 按钮因此灰着，
+   * 而不是拿一条空配置去撞一次注定失败的请求。
    */
-  aiBaseUrl: string;
+  aiEndpointId: string;
 
   /**
-   * 接口密钥。**`GET /api/settings` 只回打码后的形状**（`••••` 加后四位），
-   * 真值一步都不离开这台机器——这个服务会绑到局域网上（见 `lanBind.ts`），
-   * 同一个 Wi-Fi 里的任何人都能 GET 它。`PUT` 收到打码值 = 保持原样，收到
-   * 空串 = 真的清掉，见 app.ts 那段。
+   * 这台机器上配过的接口，一条一个键（键的规矩见 `AiEndpoint` 顶部）。
    *
-   * 本机跑的 Ollama / LM Studio 那类不要钥匙，留空就行。
+   * 旧版这里是平铺的 `aiBaseUrl` / `aiKey` / `aiModel` 三格。读到旧形状时由
+   * `aiEndpoints.ts` 的 `withLegacyAi()` 当场派生出一条记录，**不写盘**——每次读都
+   * 重新派生，所以它是幂等的，用户打开设置页保存一次就自然落成新的形状。
    */
-  aiKey: string;
-
-  /** 模型名，原样发给接口。`aiMode: 'api'` 时必填——各家的默认值互不相同，猜不了。 */
-  aiModel: string;
+  aiEndpoints: Record<string, AiEndpoint>;
 }
 
 /**
@@ -686,13 +719,13 @@ export interface Settings {
  * **AI 不直接改任务。** 直接改的话，改完之后卡片上那个时间是谁定的就说不清了：
  * 说石墨黑，是把 AI 的推断冒充成你的决定；说群青，是把你原本手填过这件事抹掉。
  * 提议式让这条线保持干净——群青的提议摆在那儿，你点了「接受」，那一刻它才
- * 变成你的决定。见 2026-08-12-ai-proposals.md。
+ * 变成你的决定。
  */
 export interface Proposal {
   /** 服务端在合并 outbox 时生成，AI 不写这个字段。 */
   id: string;
   taskId: string;
-  /** 只可能含 title/notes/due/reminders/subtasks，见 task.ts 的 sanitizeProposalPatch。 */
+  /** 只可能含 `PROPOSABLE` 那份名单上的字段（见 task.ts 的 `PROPOSABLE`）。 */
   patch: Partial<Task>;
   reason: string;
   createdAt: string;
@@ -706,8 +739,8 @@ export interface Proposal {
 /**
  * 存起来的一组筛选条件。智能清单就是它——不拥有任务，只是一次保存下来的查询。
  *
- * 七个维度之间是**且**，一个维度内部（多选那几个）是**或**——这是滴答清单
- * 「普通筛选」的语义。另外两个字段是它的「高级筛选」那一半：
+ * 十一个维度之间是**且**，一个维度内部（多选那几个）是**或**——这是滴答清单
+ * 「普通筛选」的语义。另外几个字段是它的「高级筛选」那一半：
  *
  * - `tagsAll`：把标签这一维内部从「或」改成「且」。**只有标签有这个开关**，
  *   跟它一样——「同时打了 #工作 和 #紧急」是个真实需求，而「状态既是待办又是
@@ -756,7 +789,7 @@ export interface SmartFilter {
   /**
    * 只看**还没到开始时间**的（OmniFocus 的 `Availability: Unavailable`）。
    *
-   * 判据复用 `taskView.ts` 的 `notStarted`，跟卡片上那个「9 月 1 日 开始」
+   * 判据复用 `taskView.ts` 的 `notStarted`，跟卡片上那个「9月1日 开始」
    * 的记号、「接下来」里那一组、四象限的排除是同一个函数——这一维要是自己
    * 写一遍「什么叫还没开始」，就会出现「筛出来的那条卡片上没有那个记号」。
    */
@@ -913,7 +946,8 @@ export const DEFAULT_SETTINGS: Settings = {
   smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true,
   showLunar: true, showHolidays: true,
   // AI 默认还是走 `claude` 子进程——这是这个应用一直以来的行为，也是本事最大的
-  // 那条。另外三格留空：地址和模型没有一个「多数人都对」的默认值（各家互不相同），
+  // 那条。接口那两栏留空：地址和模型没有一个「多数人都对」的默认值（各家互不相同），
   // 猜一个填进去，只会让「我明明没配过，怎么会报 401」变成一次没必要的排查。
-  aiMode: 'cli', aiCli: 'claude', aiCliPath: '', aiCliCustomArgs: '', aiBaseUrl: '', aiKey: '', aiModel: '',
+  // 一家都没配过 = `aiEndpointId` 空 + `aiEndpoints` 空表，不是一个假的 id。
+  aiMode: 'cli', aiCli: 'claude', aiCliPath: '', aiCliCustomArgs: '', aiEndpointId: '', aiEndpoints: {},
 };

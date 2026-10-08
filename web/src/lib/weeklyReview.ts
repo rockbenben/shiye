@@ -73,7 +73,7 @@ export function stalledToReview(tasks: Task[], now: Date): Task[] {
 }
 
 /**
- * **这一屏该拿出来问的「一拖再拖」**——改过 `POSTPONE_MIN` 次以上期的，减去他
+ * **这一屏该拿出来问的「一拖再拖」**——推迟过 `POSTPONE_MIN` 次以上的，减去他
  * 最近已经看过的。次数多的排前面：这一组的信息量全在那个数字上。
  *
  * ## 它跟「推荐任务」面板里那一组是什么关系
@@ -115,9 +115,14 @@ export function weeklyReview(tasks: Task[], inbox: InboxItem[], now: Date): Revi
   const rows: ReviewRow[] = [];
 
   // ① 清空收件箱——GTD 每周回顾的第一步，也是这个应用最本命的一步。
+  //
+  // **这一屏六行的句式是一条：「数字 + 量词 + 什么事」。** 原来第一行写成
+  // 「收件箱还有 2 条没处理」——数字夹在句子中间，而它下面五行全是「2 条…」
+  // 开头，扫读的时候眼睛要在一屏里换两套找数字的办法。「待拆解」跟顶部导航、
+  // 收件箱那一栏的小标题是同一个词，不在这儿另起一套叫法。
   const unprocessed = inbox.filter((x) => !x.processed).length;
   if (unprocessed > 0) {
-    rows.push({ key: 'inbox', count: unprocessed, go: 'inbox', text: `收件箱还有 ${unprocessed} 条没处理` });
+    rows.push({ key: 'inbox', count: unprocessed, go: 'inbox', text: `${unprocessed} 条待拆解` });
   }
 
   // ② 过期的。判据复用 `countStale`（就是卡片上那个红标签的条件），不另定义。
@@ -141,7 +146,10 @@ export function weeklyReview(tasks: Task[], inbox: InboxItem[], now: Date): Revi
       key: 'postponed',
       count: postponed,
       go: null,
-      text: `${postponed} 条改过 ${POSTPONE_MIN} 次以上期，一直没动`,
+      // 用「推迟过 N 次」——卡片上那个记号就是这四个字（`TaskCard` 的
+      // `.ink-overdue-mark`），同一件事在同一屏里不该有第二种说法。原来这句写的是
+      // 「改过 2 次以上期」，「以上」插在「2 次」和「期」中间，读一遍得停一下。
+      text: `${postponed} 条推迟过 ${POSTPONE_MIN} 次以上、一直没动`,
     });
   }
 

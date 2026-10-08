@@ -82,7 +82,11 @@ export function SearchModal({ open, onClose, query, onQuery, hits, hasAnyTask, n
           className="ink-searchmodal-input"
           type="search"
           aria-label="搜索任务"
-          placeholder="搜索任务、标签"
+          // 原来写的是「搜索任务、标签」——那句话在这个框上面 12 像素的地方已经
+          // 说过一遍完整范围了（「标题、备注、标签、子任务都在找的范围里」），
+          // 而这里挑两个字段说，读起来像在收窄：**「任务、标签」是「找哪些字段」
+          // 的半句话，而半句话会被当成全部**。占位符只管说这是干什么的。
+          placeholder="搜索任务"
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -114,6 +118,12 @@ export function SearchModal({ open, onClose, query, onQuery, hits, hasAnyTask, n
                   <button
                     type="button"
                     className="ink-searchmodal-hit"
+                    // 标题折两行还是装不下的那一种（超长 + 窄屏），悬停读全名。
+                    // 挂在外层这颗按钮上、不挂在里面那个 `<span>`：跟任务行
+                    // 同一处、同一个理由（`TaskRow.tsx` 里 `title={t.title}`
+                    // 那条注释）——里面再挂一个，等于在整颗按钮上挖一块悬停
+                    // 读不到标题的死区。
+                    title={t.title}
                     onClick={() => { onOpen(t.id); onClose(); }}
                   >
                     <span className="ink-searchmodal-title">{t.title}</span>

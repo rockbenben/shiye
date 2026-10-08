@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { setBaseTitle, releaseTitle } from '../lib/pageTitle.js';
-import { FocusTimer } from './FocusTimer.js';
+import { FocusTimer, FOCUS_BLOCKED_HINT, FOCUS_UP_TOO_SHORT } from './FocusTimer.js';
 
 // 跟 ScheduledBanner.test.tsx 同一条约定：这个文件不涉及 hash 路由，用完整的
 // vi.useFakeTimers()（不是日历那批 App.test.tsx 里限定 toFake: ['Date'] 的
@@ -13,28 +13,28 @@ afterEach(() => {
 });
 
 describe('FocusTimer：开始 → 倒计时 → 结束', () => {
-  it('初始只有「开始专注」按钮，没有倒计时显示', () => {
+  it('初始只有「番茄钟」按钮，没有倒计时显示', () => {
     render(<FocusTimer minutes={25} onComplete={vi.fn()} />);
-    expect(screen.getByRole('button', { name: '开始专注' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '番茄钟' })).toBeTruthy();
     expect(screen.queryByText(/^\d{2}:\d{2}$/)).toBeNull();
   });
 
-  it('点「开始专注」：换成倒计时 + 「取消专注」，「开始专注」不再出现', () => {
+  it('点「番茄钟」：换成倒计时 + 「取消计时」，「番茄钟」不再出现', () => {
     vi.useFakeTimers();
     render(<FocusTimer minutes={5} onComplete={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
 
     expect(screen.getByText('05:00')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '取消专注' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '开始专注' })).toBeNull();
+    expect(screen.getByRole('button', { name: '取消计时' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '番茄钟' })).toBeNull();
   });
 
   it('时长可配：minutes=45 时初始倒计时是 45:00，不是写死的 25:00', () => {
     vi.useFakeTimers();
     render(<FocusTimer minutes={45} onComplete={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
 
     expect(screen.getByText('45:00')).toBeTruthy();
   });
@@ -42,26 +42,26 @@ describe('FocusTimer：开始 → 倒计时 → 结束', () => {
   it('倒计时跟着时间推进——过 10 秒，05:00 变成 04:50', () => {
     vi.useFakeTimers();
     render(<FocusTimer minutes={5} onComplete={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
 
     act(() => { vi.advanceTimersByTime(10_000); });
 
     expect(screen.getByText('04:50')).toBeTruthy();
   });
 
-  it('倒计时走完：调用一次 onComplete，参数是 { startedAt: 开始那一刻的 ISO 字符串, minutes: 配置的时长 }；按钮变回「开始专注」', () => {
+  it('倒计时走完：调用一次 onComplete，参数是 { startedAt: 开始那一刻的 ISO 字符串, minutes: 配置的时长 }；按钮变回「番茄钟」', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-17T03:00:00.000Z'));
     const onComplete = vi.fn();
     render(<FocusTimer minutes={1} onComplete={onComplete} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     act(() => { vi.advanceTimersByTime(60_000); });
 
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith({ startedAt: '2026-08-17T03:00:00.000Z', minutes: 1 });
-    expect(screen.getByRole('button', { name: '开始专注' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '取消专注' })).toBeNull();
+    expect(screen.getByRole('button', { name: '番茄钟' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '取消计时' })).toBeNull();
   });
 
   /**
@@ -72,16 +72,16 @@ describe('FocusTimer：开始 → 倒计时 → 结束', () => {
    * 这里守的是「中途放弃不记」：取消之后 onComplete 一次都不会被调用，哪怕
    * 之后继续推进时间——不是「暂停了一下还会自己完成」，是彻底不算数了。
    */
-  it('中途点「取消」：onComplete 不会被调用（哪怕之后继续推进时间），按钮回到「开始专注」', () => {
+  it('中途点「取消」：onComplete 不会被调用（哪怕之后继续推进时间），按钮回到「番茄钟」', () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();
     render(<FocusTimer minutes={5} onComplete={onComplete} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
-    fireEvent.click(screen.getByRole('button', { name: '取消专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消计时' }));
 
-    expect(screen.getByRole('button', { name: '开始专注' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '取消专注' })).toBeNull();
+    expect(screen.getByRole('button', { name: '番茄钟' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '取消计时' })).toBeNull();
 
     act(() => { vi.advanceTimersByTime(5 * 60_000); });
     expect(onComplete).not.toHaveBeenCalled();
@@ -90,7 +90,7 @@ describe('FocusTimer：开始 → 倒计时 → 结束', () => {
 
 /**
  * 「同一时刻只有一个在跑」——task-4-brief 明说这条要有上限断言，不能出现
- * 两个同时倒计时。这里选的口径是「挡住」：第二个的「开始专注」按钮直接
+ * 两个同时倒计时。这里选的口径是「挡住」：第二个的「番茄钟」按钮直接
  * disabled，不是抢过来把第一个的倒计时打断。
  *
  * **这两条现在就是 C1 的直接回归测试。** 组件不再收 `taskId` prop（见
@@ -104,12 +104,12 @@ describe('FocusTimer：开始 → 倒计时 → 结束', () => {
  * 调用方传的标识符，这两条测试也就自动覆盖了 C1 的场景。
  */
 describe('FocusTimer：全局同一时刻只能有一个在跑（上限断言）', () => {
-  it('A 开始之后，B 的「开始专注」被禁用；A 结束之后 B 重新可点', () => {
+  it('A 开始之后，B 的「番茄钟」被禁用；A 结束之后 B 重新可点', () => {
     vi.useFakeTimers();
     const a = render(<FocusTimer minutes={1} onComplete={vi.fn()} />);
     const b = render(<FocusTimer minutes={1} onComplete={vi.fn()} />);
-    const btnA = within(a.container).getByRole('button', { name: '开始专注' }) as HTMLButtonElement;
-    const btnB = within(b.container).getByRole('button', { name: '开始专注' }) as HTMLButtonElement;
+    const btnA = within(a.container).getByRole('button', { name: '番茄钟' }) as HTMLButtonElement;
+    const btnB = within(b.container).getByRole('button', { name: '番茄钟' }) as HTMLButtonElement;
 
     expect(btnB.disabled).toBe(false);
 
@@ -120,7 +120,7 @@ describe('FocusTimer：全局同一时刻只能有一个在跑（上限断言）
 
     act(() => { vi.advanceTimersByTime(60_000); });   // A 走完，释放锁
 
-    expect(within(b.container).getByRole('button', { name: '开始专注' }).hasAttribute('disabled')).toBe(false);
+    expect(within(b.container).getByRole('button', { name: '番茄钟' }).hasAttribute('disabled')).toBe(false);
   });
 
   /**
@@ -140,25 +140,25 @@ describe('FocusTimer：全局同一时刻只能有一个在跑（上限断言）
    * ② 按钮**仍然是 disabled**（不是为了让 tooltip 出来就把锁松掉）；③ 没被挡住
    * 的时候类名和两份 title 都不在——不然「永远挂着 blocked 样式」也能让前两条
    * 全绿；④ 两种状态之间**是同一颗按钮节点**，不是卸载重挂——键盘停在这颗按钮
-   * 上的人不该因为别的卡开始专注就把焦点掉回 <body>。
+   * 上的人不该因为别的卡番茄钟就把焦点掉回 <body>。
    */
   it('被挡住时那句解释 span 和按钮上各一份、按钮照旧 disabled；解锁后都不在，且全程是同一颗按钮', () => {
     vi.useFakeTimers();
     const a = render(<FocusTimer minutes={1} onComplete={vi.fn()} />);
     const b = render(<FocusTimer minutes={1} onComplete={vi.fn()} />);
-    const btnB = within(b.container).getByRole('button', { name: '开始专注' }) as HTMLButtonElement;
+    const btnB = within(b.container).getByRole('button', { name: '番茄钟' }) as HTMLButtonElement;
 
     // ③ 没被挡住：类名和那句话都不在。
     expect(b.container.querySelector('.ink-focus-blocked')).toBeNull();
     expect(within(b.container).queryAllByTitle(/一次只能跑一个/)).toHaveLength(0);
 
-    fireEvent.click(within(a.container).getByRole('button', { name: '开始专注' }));
+    fireEvent.click(within(a.container).getByRole('button', { name: '番茄钟' }));
 
     // ① 两条通道都在：外层 span（鼠标）+ **每一颗按钮自己**（读屏的
     //    accessible description）。数字不写死——闲着时那儿现在有两颗按钮
-    //    （「开始专注」和「正计时」），将来多一颗的话这条该跟着一起过，
+    //    （「番茄钟」和「正计时」），将来多一颗的话这条该跟着一起过，
     //    而不是为了一个魔法数字变红。
-    const HINT = '已经在专注另一件事了，一次只能跑一个';
+    const HINT = FOCUS_BLOCKED_HINT;
     const holders = within(b.container).getAllByTitle(HINT);
     const btns = within(b.container).getAllByRole('button');
     expect(holders).toHaveLength(btns.length + 1);
@@ -171,7 +171,7 @@ describe('FocusTimer：全局同一时刻只能有一个在跑（上限断言）
     expect(wrap.contains(btnB)).toBe(true);
     // ② 锁没有因为这次改写而松掉。④ 而且还是最初那一颗（引用没换）。
     expect(btnB.disabled).toBe(true);
-    expect(within(b.container).getByRole('button', { name: '开始专注' })).toBe(btnB);
+    expect(within(b.container).getByRole('button', { name: '番茄钟' })).toBe(btnB);
 
     act(() => { vi.advanceTimersByTime(60_000); });   // A 走完，释放锁
 
@@ -179,21 +179,54 @@ describe('FocusTimer：全局同一时刻只能有一个在跑（上限断言）
     expect(b.container.querySelector('.ink-focus-blocked')).toBeNull();
     expect(within(b.container).queryAllByTitle(/一次只能跑一个/)).toHaveLength(0);
     expect(btnB.disabled).toBe(false);
-    expect(within(b.container).getByRole('button', { name: '开始专注' })).toBe(btnB);
+    expect(within(b.container).getByRole('button', { name: '番茄钟' })).toBe(btnB);
   });
 
-  it('A 开始后中途取消：B 的锁也跟着释放，不是只有「走完」才放', () => {
+  /**
+   * **触屏上点那对被占住的按钮，得有一句话说出口。**
+   *
+   * 上面那条钉住了「span 和按钮各一份 title」，可那两条通道一条是鼠标、一条是
+   * 读屏——**触屏两个都没有**。`.ink-hover-only` 自己就写着这件事（那个
+   * `@media (hover: hover)` 闸门：「手机没有悬停这回事，无条件收起来就是永远
+   * 点不到」），所以这两颗在安卓包上是常驻可见的。于是手机上点一下：按钮
+   * disabled 不派发事件，外层 span 那句 title 没有 hover 去揭，屏幕一个字都不动。
+   * 这跟这个仓库最怕的「点下去了、什么也没发生」是同一种形状。
+   *
+   * 走 `onHint` 这条回调，不在组件里 import antd 的浮层：`FocusTimer` 现在不
+   * 认识 message（`onAbandon` 同一个形状——**说什么在这儿，怎么摆给调用方定**），
+   * 测试也因此不用套一层 `<App>`。
+   */
+  it('被占着时点那层外壳：同一句话从 `onHint` 说出口；没被占着时不说话', () => {
     vi.useFakeTimers();
+    const onHint = vi.fn();
+    const a = render(<FocusTimer minutes={5} onComplete={vi.fn()} />);
+    const b = render(<FocusTimer minutes={5} onComplete={vi.fn()} onHint={onHint} />);
+
+    // 没被占着：点外壳不该有任何话——那层 span 平时就是「番茄钟」那一支。
+    fireEvent.click(b.container.querySelector('span')!);
+    expect(onHint).not.toHaveBeenCalled();
+
+    fireEvent.click(within(a.container).getByRole('button', { name: '番茄钟' }));
+    const wrap = b.container.querySelector('.ink-focus-blocked')!;
+    expect(wrap).toBeTruthy();
+    fireEvent.click(wrap);
+
+    expect(onHint).toHaveBeenCalledTimes(1);
+    // 钉的是**同一份字串**而不是抄一遍：将来改文案，title 和回执不会分叉。
+    expect(onHint).toHaveBeenCalledWith(FOCUS_BLOCKED_HINT);
+  });
+
+  it('A 开始后中途取消：B 的锁也跟着释放，不是只有「走完」才放', () => {    vi.useFakeTimers();
     const a = render(<FocusTimer minutes={5} onComplete={vi.fn()} />);
     const b = render(<FocusTimer minutes={5} onComplete={vi.fn()} />);
-    const btnA = within(a.container).getByRole('button', { name: '开始专注' });
+    const btnA = within(a.container).getByRole('button', { name: '番茄钟' });
 
     fireEvent.click(btnA);
-    expect((within(b.container).getByRole('button', { name: '开始专注' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(b.container).getByRole('button', { name: '番茄钟' }) as HTMLButtonElement).disabled).toBe(true);
 
-    fireEvent.click(within(a.container).getByRole('button', { name: '取消专注' }));
+    fireEvent.click(within(a.container).getByRole('button', { name: '取消计时' }));
 
-    expect((within(b.container).getByRole('button', { name: '开始专注' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((within(b.container).getByRole('button', { name: '番茄钟' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   /**
@@ -209,12 +242,12 @@ describe('FocusTimer：全局同一时刻只能有一个在跑（上限断言）
     const a = render(<FocusTimer minutes={5} onComplete={vi.fn()} />);
     const b = render(<FocusTimer minutes={5} onComplete={vi.fn()} />);
 
-    fireEvent.click(within(a.container).getByRole('button', { name: '开始专注' }));
-    expect((within(b.container).getByRole('button', { name: '开始专注' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(a.container).getByRole('button', { name: '番茄钟' }));
+    expect((within(b.container).getByRole('button', { name: '番茄钟' }) as HTMLButtonElement).disabled).toBe(true);
 
     a.unmount();
 
-    expect((within(b.container).getByRole('button', { name: '开始专注' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((within(b.container).getByRole('button', { name: '番茄钟' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
@@ -233,7 +266,7 @@ describe('FocusTimer：onComplete 走 ref，不钉死在开始那一刻', () => 
     const second = vi.fn();
     const { rerender } = render(<FocusTimer minutes={1} onComplete={first} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     rerender(<FocusTimer minutes={1} onComplete={second} />);
     act(() => { vi.advanceTimersByTime(60_000); });
 
@@ -250,28 +283,28 @@ describe('FocusTimer：一轮之后的休息', () => {
   /** 跑满 `minutes` 分钟。定时器每秒一跳，多跳一秒确保过了零点。 */
   const runOut = (minutes: number) => act(() => { vi.advanceTimersByTime(minutes * 60_000 + 1000); });
 
-  it('**breakMinutes 不给就是加这个之前的行为**：走完直接回到「开始专注」', () => {
+  it('**breakMinutes 不给就是加这个之前的行为**：走完直接回到「番茄钟」', () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();
     render(<FocusTimer minutes={1} onComplete={onComplete} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     runOut(1);
     expect(onComplete).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: '开始专注' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '番茄钟' })).toBeTruthy();
   });
 
   it('breakMinutes 是 0 也一样——0 有明确含义「不休息」', () => {
     vi.useFakeTimers();
     render(<FocusTimer minutes={1} breakMinutes={0} onComplete={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     runOut(1);
-    expect(screen.getByRole('button', { name: '开始专注' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '番茄钟' })).toBeTruthy();
   });
 
   it('设了就接着走休息：出现「休息」两个字和「跳过休息」，倒计时重新开始', () => {
     vi.useFakeTimers();
     render(<FocusTimer minutes={1} breakMinutes={5} onComplete={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     runOut(1);
 
     expect(screen.getByText('休息')).toBeTruthy();
@@ -283,7 +316,7 @@ describe('FocusTimer：一轮之后的休息', () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();
     render(<FocusTimer minutes={1} breakMinutes={1} onComplete={onComplete} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     runOut(1);
     expect(onComplete).toHaveBeenCalledTimes(1);
     // 记的时长是专注那一段，跟休息无关。
@@ -291,17 +324,17 @@ describe('FocusTimer：一轮之后的休息', () => {
 
     runOut(1);
     expect(onComplete).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: '开始专注' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '番茄钟' })).toBeTruthy();
   });
 
-  it('「跳过休息」当场回到「开始专注」，也不发记录', () => {
+  it('「跳过休息」当场回到「番茄钟」，也不发记录', () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();
     render(<FocusTimer minutes={1} breakMinutes={5} onComplete={onComplete} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     runOut(1);
     fireEvent.click(screen.getByRole('button', { name: '跳过休息' }));
-    expect(screen.getByRole('button', { name: '开始专注' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '番茄钟' })).toBeTruthy();
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
 
@@ -313,11 +346,11 @@ describe('FocusTimer：一轮之后的休息', () => {
         <span data-testid="乙"><FocusTimer minutes={1} breakMinutes={5} onComplete={vi.fn()} /></span>
       </>,
     );
-    fireEvent.click(within(screen.getByTestId('甲')).getByRole('button', { name: '开始专注' }));
+    fireEvent.click(within(screen.getByTestId('甲')).getByRole('button', { name: '番茄钟' }));
     runOut(1);
-    // 甲在休息；乙那颗「开始专注」还是禁用的。
+    // 甲在休息；乙那颗「番茄钟」还是禁用的。
     expect(within(screen.getByTestId('甲')).getByRole('button', { name: '跳过休息' })).toBeTruthy();
-    expect(within(screen.getByTestId('乙')).getByRole('button', { name: '开始专注' }).hasAttribute('disabled')).toBe(true);
+    expect(within(screen.getByTestId('乙')).getByRole('button', { name: '番茄钟' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('休息走完把锁放掉，别的卡又能开了', () => {
@@ -328,10 +361,10 @@ describe('FocusTimer：一轮之后的休息', () => {
         <span data-testid="乙"><FocusTimer minutes={1} breakMinutes={1} onComplete={vi.fn()} /></span>
       </>,
     );
-    fireEvent.click(within(screen.getByTestId('甲')).getByRole('button', { name: '开始专注' }));
+    fireEvent.click(within(screen.getByTestId('甲')).getByRole('button', { name: '番茄钟' }));
     runOut(1);
     runOut(1);
-    expect(within(screen.getByTestId('乙')).getByRole('button', { name: '开始专注' }).hasAttribute('disabled')).toBe(false);
+    expect(within(screen.getByTestId('乙')).getByRole('button', { name: '番茄钟' }).hasAttribute('disabled')).toBe(false);
   });
 });
 
@@ -347,7 +380,7 @@ describe('FocusTimer：中途被卸载', () => {
     vi.useFakeTimers();
     const onAbandon = vi.fn();
     const { unmount } = render(<FocusTimer minutes={25} onComplete={vi.fn()} onAbandon={onAbandon} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     act(() => { vi.advanceTimersByTime(60_000); });
 
     unmount();
@@ -362,12 +395,12 @@ describe('FocusTimer：中途被卸载', () => {
     expect(onAbandon).not.toHaveBeenCalled();
   });
 
-  it('**自己点「取消专注」之后再卸载：不说话**——那一下是他自己按的，已经知道了', () => {
+  it('**自己点「取消计时」之后再卸载：不说话**——那一下是他自己按的，已经知道了', () => {
     vi.useFakeTimers();
     const onAbandon = vi.fn();
     const { unmount } = render(<FocusTimer minutes={25} onComplete={vi.fn()} onAbandon={onAbandon} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
-    fireEvent.click(screen.getByRole('button', { name: '取消专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消计时' }));
 
     unmount();
 
@@ -379,7 +412,7 @@ describe('FocusTimer：中途被卸载', () => {
     const onComplete = vi.fn();
     const onAbandon = vi.fn();
     const { unmount } = render(<FocusTimer minutes={1} breakMinutes={5} onComplete={onComplete} onAbandon={onAbandon} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     runOut(1);
     expect(onComplete).toHaveBeenCalledTimes(1);
 
@@ -392,7 +425,7 @@ describe('FocusTimer：中途被卸载', () => {
     vi.useFakeTimers();
     const onAbandon = vi.fn();
     const { unmount } = render(<FocusTimer minutes={1} onComplete={vi.fn()} onAbandon={onAbandon} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     runOut(1);
 
     unmount();
@@ -403,7 +436,7 @@ describe('FocusTimer：中途被卸载', () => {
   it('不给 onAbandon 也不炸——加这个之前的调用方一个字都不用改', () => {
     vi.useFakeTimers();
     const { unmount } = render(<FocusTimer minutes={25} onComplete={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
     expect(() => unmount()).not.toThrow();
   });
 });
@@ -425,7 +458,7 @@ describe('FocusTimer：写进浏览器标签页', () => {
   // 字符串就会红，而红的样子像计时器坏了。
   const ORIGINAL = '今天 · 办事师爷';
   const setUp = () => { setBaseTitle('今天'); };
-  const start = () => fireEvent.click(screen.getByRole('button', { name: '开始专注' }));
+  const start = () => fireEvent.click(screen.getByRole('button', { name: '番茄钟' }));
 
   afterEach(() => { releaseTitle(); setBaseTitle(''); });
 
@@ -488,14 +521,14 @@ describe('FocusTimer：写进浏览器标签页', () => {
    * 标题永久钉在某个时刻上——而卸载不止「关掉页面」：切视图、换密度、这张卡
    * 被筛掉，都会卸载它（这个组件的 `onAbandon` 上面写着同一件事）。
    */
-  it('点「取消专注」：标题还原', () => {
+  it('点「取消计时」：标题还原', () => {
     vi.useFakeTimers();
     setUp();
     render(<FocusTimer minutes={5} label="写周报" onComplete={vi.fn()} />);
     start();
     expect(document.title).not.toBe(ORIGINAL);
 
-    fireEvent.click(screen.getByRole('button', { name: '取消专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消计时' }));
 
     expect(document.title).toBe(ORIGINAL);
   });
@@ -525,7 +558,7 @@ describe('FocusTimer：写进浏览器标签页', () => {
     start();
     act(() => { vi.advanceTimersByTime(3_000); });
 
-    fireEvent.click(screen.getByRole('button', { name: '取消专注' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消计时' }));
 
     expect(document.title).toBe(ORIGINAL);
   });
@@ -544,14 +577,14 @@ describe('FocusTimer：正计时', () => {
   /**
    * **两个汉字的按钮要按正则找。** antd 会在两个 CJK 字符之间插一个空格
    * （「结束」渲染成「结 束」），`{ name: '结束' }` 精确匹配不上——三个字
-   * 以上的（「正计时」「开始专注」）不受影响，所以这个文件里别的查询照旧。
+   * 以上的（「正计时」「番茄钟」）不受影响，所以这个文件里别的查询照旧。
    */
   const btn = (name: string) =>
     screen.getByRole('button', { name: new RegExp(name.split('').join('\\s*')) }) as HTMLButtonElement;
 
   it('闲着的时候两种开始方式并排摆着——它们是并列的两个问题，藏一个等于说它次要', () => {
     render(<FocusTimer minutes={25} onComplete={vi.fn()} />);
-    expect(screen.getByRole('button', { name: '开始专注' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '番茄钟' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '正计时' })).toBeTruthy();
   });
 
@@ -610,6 +643,47 @@ describe('FocusTimer：正计时', () => {
     expect(btn('结束').disabled).toBe(false);
   });
 
+  /**
+   * **不满一分钟点那颗「结束」，触屏上得听见为什么。**
+   *
+   * 上面那条钉住了 `title`，可 title 只有鼠标读得到（读屏走按钮自己那份），而
+   * disabled 的按钮不派发指针事件——手机上点它一个字都不动，正是那条注释自己
+   * 说的「点下去了、什么也没发生」。修法跟被别的卡占着那对一模一样：外层挂一次
+   * 点击，说同一句话（`.ink-focus-blocked` 那两条声明本来就是为这件事写的）。
+   */
+  it('不满一分钟点「结束」那层外壳：那句话从 `onHint` 说出口，满了之后不再说', () => {
+    vi.useFakeTimers();
+    const onHint = vi.fn();
+    const { container } = render(<FocusTimer minutes={25} onComplete={vi.fn()} onHint={onHint} />);
+    startUp();
+    act(() => { vi.advanceTimersByTime(20_000); });
+
+    const wrap = container.querySelector('.ink-focus-blocked');
+    expect(wrap, '没有那层外壳——触屏上这一下就是无声的').toBeTruthy();
+    // 壳只包「结束」那一颗。**把整组按钮都套进去**是个看起来更省事的写法，而
+    // `.ink-focus-blocked > .ant-btn` 会把里面每一颗的指针事件都关掉——「取消」
+    // 跟着变成点不动，人就被关在这一分钟里出不去了。
+    expect(wrap!.textContent?.replace(/\s+/g, '')).toBe('结束');
+    fireEvent.click(wrap!);
+    expect(onHint).toHaveBeenCalledTimes(1);
+    // 钉的是**同一份字串**：将来改文案，title 和回执不会分叉。
+    expect(onHint).toHaveBeenCalledWith(FOCUS_UP_TOO_SHORT);
+
+    act(() => { vi.advanceTimersByTime(40_000); });
+    expect(btn('结束').disabled).toBe(false);
+    /**
+     * **壳跟着 `disabled` 一起摘掉。** 这条钉的不是行为而是耦合：那层壳的
+     * `pointer-events: none` 是 CSS（`.ink-focus-blocked > .ant-btn`），jsdom 不
+     * 跑样式——壳要是不随「满了」摘掉，按钮在真浏览器里会**永远点不动**，而这一族
+     * 在 jsdom 里全绿。同 `theme.css.test.ts` 里那条「span 还在、title 还在、
+     * 测试还绿，而那句话在真浏览器里一次都不出现」是一个形状的洞。
+     */
+    expect(container.querySelector('.ink-focus-blocked'), '满了之后壳还挂着——真浏览器里这颗再也点不动').toBeNull();
+    fireEvent.click(btn('结束'));
+    // 这一下是「结束并记账」，不是又抱怨一遍。
+    expect(onHint).toHaveBeenCalledTimes(1);
+  });
+
   it('「取消」不记——跟倒计时中途退出同一条规矩', () => {
     vi.useFakeTimers();
     const onComplete = vi.fn();
@@ -632,7 +706,7 @@ describe('FocusTimer：正计时', () => {
     const b = render(<FocusTimer minutes={25} onComplete={vi.fn()} />);
     fireEvent.click(within(a.container).getByRole('button', { name: '正计时' }));
 
-    for (const name of ['开始专注', '正计时']) {
+    for (const name of ['番茄钟', '正计时']) {
       const el = within(b.container).getByRole('button', { name }) as HTMLButtonElement;
       expect(el.disabled, `${name} 该被挡住`).toBe(true);
     }
@@ -642,7 +716,7 @@ describe('FocusTimer：正计时', () => {
     vi.useFakeTimers();
     const a = render(<FocusTimer minutes={25} onComplete={vi.fn()} />);
     const b = render(<FocusTimer minutes={25} onComplete={vi.fn()} />);
-    fireEvent.click(within(a.container).getByRole('button', { name: '开始专注' }));
+    fireEvent.click(within(a.container).getByRole('button', { name: '番茄钟' }));
     expect((within(b.container).getByRole('button', { name: '正计时' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -654,7 +728,7 @@ describe('FocusTimer：正计时', () => {
     act(() => { vi.advanceTimersByTime(120_000); });
     // 同样按正则找：这颗按钮在 a 那份容器里，helper 用的是全局 screen。
     fireEvent.click(within(a.container).getByRole('button', { name: /结\s*束/ }));
-    expect((within(b.container).getByRole('button', { name: '开始专注' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((within(b.container).getByRole('button', { name: '番茄钟' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('**标签页上写的是已经走了多久**，跟屏幕上一致——切走之后它是唯一的进度来源', () => {
@@ -674,5 +748,38 @@ describe('FocusTimer：正计时', () => {
     // 回到闲着，不是进休息。
     expect(screen.getByRole('button', { name: '正计时' })).toBeTruthy();
     expect(screen.queryByText('休息')).toBeNull();
+  });
+});
+
+/**
+ * `quietIdle`：卡片档把这两颗**开始键**交给 CSS 收起（悬停/聚焦到这张卡才显形，
+ * 收的方式钉在 theme.css 的 `.ink-hover-only` 那一节）。
+ *
+ * 组件这边只钉两件事：**类挂在闲置那一支上**（不挂就根本没有收起这回事，界面
+ * 回到一屏几十颗按钮，而截图看不出问题），以及**一旦跑起来就不挂**——那个
+ * 倒计时是这张卡上唯一说明「正在计时」的东西，被一起收走等于计时凭空消失。
+ */
+describe('FocusTimer：quietIdle 只作用于闲置那一支', () => {
+  it('不传（详情面板、行档那条路）：一个类都不挂，摆法一字不变', () => {
+    const { container } = render(<FocusTimer minutes={25} onComplete={vi.fn()} />);
+    expect(container.querySelector('.ink-hover-only')).toBeNull();
+    expect(within(container).getByRole('button', { name: '番茄钟' })).toBeTruthy();
+  });
+
+  it('传了：闲置那两颗带类；点了开始之后类消失、倒计时留在原地', () => {
+    const { container } = render(<FocusTimer minutes={25} quietIdle onComplete={vi.fn()} />);
+    expect(container.querySelector('.ink-hover-only'), 'quietIdle 没把闲置那一支交给 CSS').toBeTruthy();
+
+    fireEvent.click(within(container).getByRole('button', { name: '番茄钟' }));
+
+    expect(container.querySelector('.ink-hover-only'), '跑着了还带类——倒计时会被一起收起来').toBeNull();
+    expect(within(container).getByText('25:00')).toBeTruthy();
+  });
+
+  it('正计时那一支同理：跑起来之后不带类', () => {
+    const { container } = render(<FocusTimer minutes={25} quietIdle onComplete={vi.fn()} />);
+    fireEvent.click(within(container).getByRole('button', { name: '正计时' }));
+    expect(container.querySelector('.ink-hover-only')).toBeNull();
+    expect(within(container).getByText('00:00')).toBeTruthy();
   });
 });

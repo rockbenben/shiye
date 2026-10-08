@@ -23,6 +23,7 @@ function wire(over: Partial<BatchBarProps> = {}): BatchBarProps {
     lists: LISTS,
     onChangeStatus: vi.fn(),
     onReschedule: vi.fn(),
+    onRescheduleDay: vi.fn(),
     onPostpone: vi.fn(),
     onChangeList: vi.fn(),
     onAddTag: vi.fn(),
@@ -106,19 +107,19 @@ describe('BatchBar：改状态', () => {
 describe('BatchBar：改清单', () => {
   it('选一个清单，onChangeList 收到那个清单的 id', () => {
     const { props } = show();
-    fireEvent.change(screen.getByLabelText('批量改清单'), { target: { value: 'L1' } });
+    fireEvent.change(screen.getByLabelText('改清单'), { target: { value: 'L1' } });
     expect(props.onChangeList).toHaveBeenCalledWith('L1');
   });
 
   it('选「不属于任何清单」，onChangeList 收到 null——不是字符串 "__none__"', () => {
     const { props } = show();
-    fireEvent.change(screen.getByLabelText('批量改清单'), { target: { value: '__none__' } });
+    fireEvent.change(screen.getByLabelText('改清单'), { target: { value: '__none__' } });
     expect(props.onChangeList).toHaveBeenCalledWith(null);
   });
 
   it('归档的清单不进候选', () => {
     show();
-    const select = screen.getByLabelText('批量改清单') as HTMLSelectElement;
+    const select = screen.getByLabelText('改清单') as HTMLSelectElement;
     const optionLabels = [...select.options].map((o) => o.textContent);
     expect(optionLabels).not.toContain('归档了的');
   });
@@ -128,7 +129,7 @@ describe('BatchBar：改清单', () => {
   // 不看 listId），见 task-4-brief 要点③。
   it('智能清单不进候选——上限', () => {
     show();
-    const select = screen.getByLabelText('批量改清单') as HTMLSelectElement;
+    const select = screen.getByLabelText('改清单') as HTMLSelectElement;
     const optionLabels = [...select.options].map((o) => o.textContent);
     // 中间断言：先证明普通清单确实在候选里，不是整个下拉是空的
     // （上限断言在功能没接上时天然成立，见 parked-all.md 第 97 条）。
@@ -252,3 +253,23 @@ describe('BatchBar：改期 / 推迟', () => {
     expect(w.onPostpone).toHaveBeenCalledWith(60);
   });
 });
+
+  /**
+   * 「改到某天」那颗日期选择器。**这一档只在批量条上有，单条的 ⋯ 菜单里没有**：
+   * 单条有编辑表单里那个 DatePicker 兜着，菜单里再放一个是把同一个控件包两层；
+   * 批量没有那个兜——八条各开一次表单不算「批量」。
+   * 规矩本身（原来几点还是几点）钉在 `lib/reschedule.test.ts`。
+   */
+  it('有「改到某天」那颗日期选择器，选一天报出去一个 Date', async () => {
+    const onRescheduleDay = vi.fn();
+    render(<NoMotion><AntApp><BatchBar {...wire({ onRescheduleDay })} /></AntApp></NoMotion>);
+    const box = screen.getByLabelText('改到某天') as HTMLInputElement;
+    fireEvent.mouseDown(box);
+    fireEvent.change(box, { target: { value: '2026-10-12' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(onRescheduleDay).toHaveBeenCalled());
+    expect(onRescheduleDay.mock.calls[0][0]).toBeInstanceOf(Date);
+    // 报的是他选的那一天，不是「今天 + N 天」那种相对量。
+    const d = onRescheduleDay.mock.calls[0][0] as Date;
+    expect([d.getFullYear(), d.getMonth() + 1, d.getDate()]).toEqual([2026, 10, 12]);
+  });

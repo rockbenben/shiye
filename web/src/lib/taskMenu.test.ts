@@ -2,8 +2,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { decodeTaskMenu, taskMenuItems, type MenuItem } from './taskMenu.js';
 import { task } from '../test-utils.js';
-import { CONTEXTS } from './taskView.js';
-import type { List, Repeat } from '../types.js';
+import { CONTEXTS, STATUSES, STATUS_MOVES } from './taskView.js';
+import type { List, Repeat, Task } from '../types.js';
 
 // 跳过本次和改期都按本地墙钟算日历——钉死时区，断言才不跟着宿主机飘。
 beforeEach(() => { vi.stubEnv('TZ', 'Asia/Shanghai'); });
@@ -99,6 +99,36 @@ describe('taskMenuItems', () => {
       { key: 'tag:家里', label: '家里' },
     ]);
   });
+
+  /**
+   * 卡面只摆「此刻最可能按的那一颗」，其余几步、以及紧凑行那一整排（行上一颗
+   * 状态按钮都不摆）都从这一组走。
+   *
+   * **五个状态逐个对着 `STATUS_MOVES` 比**，不是抽查一个：少一项（比如只有
+   * 搁置才有的「放弃」）在卡片上看不出来——那张卡本来就不摆它；而在行档那就是
+   * 这条状态唯一的一条出路，少了就是彻底没有。
+   */
+  it('「改状态」那一组就是 `STATUS_MOVES` 的整排，五个状态一个都不许少', () => {
+    for (const st of STATUSES) {
+      const grp = items({ status: st }).find((i) => 'children' in i && i.label === '改状态') as { children: MenuItem[] };
+      expect(grp, `${st} 的菜单里没有「改状态」那一组`).toBeTruthy();
+      expect(grp.children.map((c) => ('key' in c ? c.key : ''))).toEqual(STATUS_MOVES[st].map((m) => `move:${m.to}`));
+      expect(grp.children.map((c) => ('label' in c ? c.label : ''))).toEqual(STATUS_MOVES[st].map((m) => m.label));
+    }
+  });
+
+  it('**状态是不认识的字符串时按 todo 摆**——不能让 undefined 的一组把整份菜单炸掉', () => {
+    // 文件是接口，手改或者 AI 手滑都能写出别的字符串；这一排跟卡面那颗用同一个
+    // 兜底（`TaskCard.tsx` 的 `moves`），两处判据必须是一样的判据。
+    const grp = items({ status: '待定' as Task['status'] }).find((i) => 'children' in i && i.label === '改状态') as { children: MenuItem[] };
+    expect(grp.children.map((c) => ('key' in c ? c.key : ''))).toEqual(['move:doing', 'move:later']);
+  });
+
+  it('「改状态」排在「改期」前面——先问这条还做不做，再问什么时候做', () => {
+    const at = (label: string) => items().findIndex((i) => 'children' in i && i.label === label);
+    expect(at('改状态')).toBeGreaterThanOrEqual(0);
+    expect(at('改状态')).toBe(at('改期') - 1);
+  });
 });
 
 describe('decodeTaskMenu', () => {
@@ -112,6 +142,15 @@ describe('decodeTaskMenu', () => {
 
   it('置顶取反', () => {
     expect(decodeTaskMenu('pin', t, NOW())).toEqual({ kind: 'patch', patch: { pinned: true } });
+  });
+
+  it('「改状态」那一项发的就是那一步，别的字段一个都不碰', () => {
+    expect(decodeTaskMenu('move:later', t, NOW())).toEqual({ kind: 'patch', patch: { status: 'later' } });
+    expect(decodeTaskMenu('move:doing', t, NOW())).toEqual({ kind: 'patch', patch: { status: 'doing' } });
+  });
+
+  it('`move:` 后面是不认识的状态返回 null——菜单是数据，不能把脏值当 patch 发出去', () => {
+    expect(decodeTaskMenu('move:待定', t, NOW())).toBeNull();
   });
 
   it('改期保留原来的钟点', () => {

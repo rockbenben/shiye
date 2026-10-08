@@ -40,7 +40,7 @@ const isEntityFile = (f: string): boolean => f.endsWith('.json') && !CONFLICT_RE
  * 缺这道关会把这一整层「一实体一文件」的地基烧穿：`writeOne` 直接
  * `join(dir, id + '.json')`，AI 在 outbox 里写的任务 id 是外部输入、没有
  * 经过这一层校验——写一个 `"../../逃出去的任务"` 就能把文件写到 `data/`
- * 目录之外，而且是静默的：横幅照样说「新增 1 个任务」，`tasks.json` 却是
+ * 目录之外，而且是静默的：横幅照样说「新增 1 个任务」，`data/tasks/` 却是
  * 空的，收件箱那条被标成 `processed: true`、`taskIds` 指向一个哪儿都读不到
  * 的任务——这个仓库反复在防的静默失败，三样在这一个漏洞里同时踩中。
  *
@@ -302,6 +302,68 @@ export function readOne<T>(dir: string, id: string): T | null {
 }
 
 /**
+ * 同步睡一会儿。**必须是同步的**——调用方（`writeOne` / `writeAtomic`）都是同步
+ * 函数，中途让出事件循环等于让别人看见「写了一半」的中间态，那正是原子写要避免的。
+ * `Atomics.wait` 是 Node 里唯一能这么睡的写法（浏览器主线程上会被禁掉，这里不是）。
+ */
+const sleepSync = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+/**
+ * 这几个错误码是「等一下就好」，不是「做不了」：
+ *
+ * - `EPERM` / `EACCES`：Windows 上目标文件刚被写完、句柄还没完全释放（或者杀毒
+ *   软件、索引器正扫着这个目录），`MoveFileEx(MOVEFILE_REPLACE_EXISTING)` 就会拒绝替换。
+ * - `EBUSY`：文件被别的东西占着（同步盘、备份软件）。
+ *
+ * 别的错误（`EXDEV` 跨卷、`ENOENT` 临时文件没了、`EISDIR` 路径被占成目录）重试也
+ * 救不回来，直接抛——掩过去只会把真问题变成更难查的样子。
+ */
+const RETRYABLE_RENAME = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * 原子写的最后一步：把临时文件改名成正式文件。**Windows 上这一步会偶发失败，
+ * 所以要重试。**
+ *
+ * ## 实测（2026-10-21，这台机器）
+ *
+ * `renameSync` 偶发抛
+ * `EPERM: operation not permitted, rename '…\device.json.tmp' -> '…\device.json'`，
+ * 同样的错也落在 `data\tasks\<uuid>.json` 上。**整份测试每轮随机红 2~3 条，
+ * 红的全是这一条**——而且换个机器、换个时刻红的又是别的用例（这个仓库在
+ * `vitest.config.ts` 里把「全量随机红」记成「一定是超时」，那是**不完整**的诊断：
+ * 这一族是断言失败，不是超时）。
+ *
+ * ## 它为什么在生产里也要紧
+ *
+ * 这一条 EPERM 落在**写任务**上，那次修改就整个没落盘（接口回 500，用户看到
+ * 「保存失败」，而他刚才改的内容没了）；落在**写设置**上，就是导入/保存莫名其妙
+ * 失败，报一句跟真实原因毫无关系的「导入失败，已回滚」。不是测试环境的事——
+ * 桌面版跑在同一个 Windows 文件系统上。
+ *
+ * ## 退避
+ *
+ * 5ms → 10ms → 20ms → 40ms → 80ms → 100ms → 100ms，最长约 350ms。实测等一下
+ * 就好了：句柄释放是毫秒级的事。真的拿不到（权限问题）就抛出去，让上层照旧
+ * 报错——不吞。
+ */
+export function renameIntoPlace(tmp: string, dest: string): void {
+  let delay = 5;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, dest);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code ?? '';
+      if (!RETRYABLE_RENAME.has(code) || attempt >= 7) throw e;
+      sleepSync(delay);
+      delay = Math.min(delay * 2, 100);
+    }
+  }
+}
+
+/**
  * 原子写：同目录 `.tmp` 再 rename。跟 store.ts 的 writeAtomic 同一条规矩，
  * 但**不再生成 `.bak`**——历史版本交给同步服务，`.bak` 在同步目录里会让流量
  * 翻倍而且自己也会冲突。
@@ -311,13 +373,15 @@ export function readOne<T>(dir: string, id: string): T | null {
  * 而且第二份一旦漏掉 rename 那一步，冲突副本会以半截 JSON 的形态出现在同步目录里
  * （同步客户端照样把它传出去），比正本写歪还难查。**不导出**：外面拿 id 拼名字
  * 的入口只该有 writeOne / writeConflictCopy 两个，都各自过了 assertSafeId。
+ *
+ * 改名那一步走 `renameIntoPlace`（带重试），理由写在那儿。
  */
 function writeEntityFile(dir: string, name: string, entity: unknown): void {
   mkdirSync(dir, { recursive: true });
   const file = join(dir, name);
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(entity, null, 2)}\n`, 'utf8');
-  renameSync(tmp, file);
+  renameIntoPlace(tmp, file);
   invalidate(dir);
 }
 

@@ -352,7 +352,7 @@ export function rollUpParentDone(
  *   子任务留在 A，接受「把子任务都勾上」之后一条每周重复的任务就地断链。
  * - 离线改任务（`web/src/lib/dataSource.ts` 的 `patchTask`）同样只走
  *   `applyTaskPatch`：手机上勾掉一个三层的项目，提示语照样说「连带做完了 5 条
- *   子任务」（那句话是界面自己按服务端的规矩算的，见 `lib/undoDone.ts`），
+ *   子任务」（那句话是界面自己按服务端的规矩算的，见 `lib/undoStatus.ts`），
  *   而屏幕上那 5 条一条都没变。
  *
  * 三个调用点各自抄三行的写法下，「谁又漏了一条」没有任何东西挡得住——类型对、

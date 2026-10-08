@@ -1,6 +1,6 @@
 import { ConfigProvider } from 'antd';
 import type { PropsWithChildren } from 'react';
-import { fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import type { Task } from './types.js';
 
 /**
@@ -46,7 +46,7 @@ export function NoMotion({ children }: PropsWithChildren) {
  * 用别的名字的测试就要来改一次这里，而这个联合存在的意义正是「写错一个固定项的
  * 名字当场红」——两者不能兼得，数据驱动的那几项在各自的测试里自己点。
  */
-export async function pickCardMenu(label: '编辑' | '删除' | '今天' | '明天' | '下周' | '去掉截止时间' | '置顶' | '取消置顶' | '创建副本' | '跳过本次' | '让 AI 拆细', opts: { scope?: HTMLElement; nth?: number } = {}) {
+export async function pickCardMenu(label: '编辑' | '删除' | '今天' | '明天' | '下周' | '去掉截止时间' | '置顶' | '取消置顶' | '创建副本' | '跳过本次' | '让 AI 拆细' | '搁置' | '放弃', opts: { scope?: HTMLElement; nth?: number } = {}) {
   const { scope = document.body, nth = 0 } = opts;
   const triggers = [...scope.querySelectorAll('button')].filter((b) => b.textContent === '⋯');
   if (!triggers[nth]) throw new Error(`范围内只有 ${triggers.length} 颗 ⋯，取不到第 ${nth + 1} 颗`);
@@ -493,3 +493,15 @@ export const task = (p: Partial<Task> = {}): Task => ({
   completedAt: null, postponeCount: 0, waitingFor: null, context: null,
   attachments: [], estimateMinutes: null, focusSessions: [], habit: false, pinned: false, reviewedAt: null, parentId: null, ...p,
 });
+
+/**
+ * 把一条还没上的属性请出来：点「＋ 加一项」，再点那一维。
+ *
+ * 表单现在**只渲染上过屏的属性**（没填的不占地方，照滴答/Todoist/Things 那条
+ * 一致的做法），所以测试要改一个没设的字段，得跟真人一样先把它请出来。
+ * 认 aria-label 不认按钮文字：「添加」那颗是提交按钮，用文字会撞。
+ */
+export const addField = (label: string) => {
+  fireEvent.click(screen.getByLabelText('加一项属性'));
+  fireEvent.click(screen.getByLabelText(`加一项：${label}`));
+};

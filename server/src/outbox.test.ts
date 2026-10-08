@@ -383,10 +383,39 @@ describe('mergeOutbox：AI 判断都不是任务（C：produced-nothing 的另�
     expect(existsSync(outboxPath())).toBe(false);
     // 跟「收件箱里没有要拆的」用不一样的话——这里是有内容、AI 真处理了，
     // 只是判断都不算任务，两种「没有新任务」不能共用一句话糊弄过去。
+    //
+    // 末尾那一句是**差清单第 12 条**：光报「没有产出新任务」，用户不知道是哪一条
+    // 被判成了「不是一件要做的事」——那些条目从「待拆解」消失、掉进折叠的
+    // 「已拆解」，得自己翻才找得到。
     expect(seen).toEqual([{
       state: 'skipped',
-      message: 'AI 跑完了，但没有产出新任务（可能是内容都不算需要拆的任务，或者对应的任务已经存在）',
+      message: 'AI 跑完了，但没有产出新任务（可能是内容都不算需要拆的任务，或者对应的任务已经存在）'
+        + '，另有 1 条被 AI 判成了「不是一件要做的事」（在「已拆解」里写着「没拆出任务」的那几条）',
     }]);
+  });
+
+  /**
+   * **差清单第 12 条的正题**：3 条待拆、拆出 1 条，那 2 条去了哪儿？
+   *
+   * 横幅只报「新增 1 个任务」的话，用户完全看不出另外 2 条被 AI 判成了
+   * 「不是一件要做的事」——它们躺在折叠的「已拆解」里，**只有界面知道**。
+   */
+  it('拆出一部分、其余被判成「不是任务」：横幅说清是几条', () => {
+    writeInbox([inboxItem({ id: 'i1' }), inboxItem({ id: 'i2' }), inboxItem({ id: 'i3' })]);
+    writeOutbox([
+      { inboxId: 'i1', tasks: [rawTask({ id: 't1', title: '真的一条' })] },
+      { inboxId: 'i2', tasks: [] },
+      { inboxId: 'i3', tasks: [] },
+    ]);
+
+    const bus = new Bus();
+    const seen = statusEvents(bus);
+    mergeOutbox(bus);
+
+    expect(readTasks()).toHaveLength(1);
+    const msg = seen.at(-1) as { state: string; message: string };
+    expect(msg.message).toContain('新增 1 个任务');
+    expect(msg.message).toContain('另有 2 条被 AI 判成了「不是一件要做的事」');
   });
 });
 
@@ -548,7 +577,7 @@ describe('mergeOutbox：D——写入失败要跟校验失败分开说，且报�
 
 describe('AI 写不了的字段一律强制归零', () => {
   // 「打算花多久」跟 priority/order 同一类：AI 写什么都不算数——这件事要花
-  // **你**多久，它没有依据（stripForced 把它摘掉，toTask 落回 null）。
+  // **你**多久，它没有依据（stripForced 把它摘掉，checkTask 落回 null）。
   it('AI 填了 estimateMinutes 也不算数', () => {
     writeInbox([inboxItem()]);
     writeOutbox([{ inboxId: 'inbox-1', tasks: [rawTask({ id: 'e-1', estimateMinutes: 480 })] }]);

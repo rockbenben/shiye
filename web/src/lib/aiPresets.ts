@@ -1,5 +1,6 @@
 import { PROVIDER_CATALOG, findProvider } from '../vendor/providerCatalog.generated.js';
-import type { CatalogProvider } from '../vendor/providerCatalog.generated.js';
+import type { CatalogEndpoint, CatalogProvider } from '../vendor/providerCatalog.generated.js';
+import type { AiEndpoint, Settings } from '../types.js';
 
 /**
  * 「调接口」那栏的快捷预置，加上「模型」那格的候选清单。
@@ -28,6 +29,14 @@ export interface AiPreset {
   label: string;
   /** 完整 chat/completions 地址（预置只是起点，地址框照样能自己写） */
   url: string;
+  /** 去掉动作路径后的 base。认「同一个端点的两种写法」要用它比对 */
+  base: string;
+  /**
+   * 目录里那一家的持久 id——**它就是这条记录的键**（`Settings.aiEndpoints` 的键）。
+   * 一家一条记录、不按端点拆：同一家几个地域端点是同一个账号的同一把密钥，
+   * 拆成两条等于把一把钥匙存两份。目录的 id 不许改名（改名等于让用户存的密钥失主）。
+   */
+  providerKey: string;
   /** 点预置时顺带填的模型名；空串 = 不动当前模型名（llm 那组，装了什么只有他自己知道） */
   model: string;
   /**
@@ -49,9 +58,11 @@ const DISPLAY_NAME: Record<string, string> = {
 /** 127.0.0.1 / localhost 的加个「（本机）」，一眼看出不用密钥、也不用注册。 */
 const isLocalHost = (url: string) => /^https?:\/\/(127\.0\.0\.1|localhost)([:/]|$)/.test(url);
 
-const toPreset = (label: string, url: string, provider: CatalogProvider): AiPreset => ({
-  label: isLocalHost(url) ? `${label}（本机）` : label,
-  url,
+const toPreset = (label: string, endpoint: CatalogEndpoint, provider: CatalogProvider, id: string): AiPreset => ({
+  label: isLocalHost(endpoint.url) ? `${label}（本机）` : label,
+  url: endpoint.url,
+  base: endpoint.baseUrl,
+  providerKey: id,
   model: provider.models.length === 0 ? '' : (provider.defaultModel ?? ''),
   ...(provider.hidden ? { hidden: true as const } : {}),
 });
@@ -68,9 +79,9 @@ const GOOGLE_KEY = 'gemini-openai';
 
 const googleProvider = findProvider(GOOGLE_KEY);
 if (!googleProvider || googleProvider.protocol !== 'openai' || googleProvider.endpoints.length === 0) {
-  throw new Error(`providerCatalog 里没有可用的 ${GOOGLE_KEY} 行 —— 上游同步出问题了？`);
+  throw new Error(`providerCatalog 里没有可用的 ${GOOGLE_KEY} 行——上游同步出问题了？`);
 }
-const googlePreset = toPreset(googleProvider.label, googleProvider.endpoints[0]!.url, googleProvider);
+const googlePreset = toPreset(googleProvider.label, googleProvider.endpoints[0]!, googleProvider, GOOGLE_KEY);
 
 const catalogPresets: AiPreset[] = PROVIDER_CATALOG.flatMap((p) => {
   if (p.key === GOOGLE_KEY) return []; // 已经提到行首
@@ -79,9 +90,11 @@ const catalogPresets: AiPreset[] = PROVIDER_CATALOG.flatMap((p) => {
   if (p.protocol !== 'openai' || p.endpoints.length === 0) return [];
   // 独立产品各自成一家；同一家的变体只留第一个。
   if (p.endpoints.length > 1 && p.endpoints.every((e) => e.docs)) {
-    return p.endpoints.map((e) => toPreset(e.label, e.url, p));
+    // 拆开的每一行是一条自己的记录：按地址立身份（见 `customEndpointId`）。
+    return p.endpoints.map((e) => toPreset(e.label, e, p, customEndpointId(e.url)));
   }
-  return [toPreset(DISPLAY_NAME[p.key] ?? p.label, p.endpoints[0]!.url, p)];
+  // 一家一行 → 用目录的 provider key：一个账号一把钥匙，几个地域端点共用一条记录。
+  return [toPreset(DISPLAY_NAME[p.key] ?? p.label, p.endpoints[0]!, p, p.key)];
 });
 
 export const AI_PRESETS: readonly AiPreset[] = [googlePreset, ...catalogPresets];
@@ -95,6 +108,37 @@ export function visibleAiPresets(showHidden: boolean, currentUrl?: string): read
   return AI_PRESETS.filter((p) => !p.hidden || (currentUrl !== undefined && p.url === currentUrl));
 }
 
+/**
+ * 默认露出来的那一排。整排 30 多枚 chip 在弹层那 326px 宽的一列里铺成一面墙
+ * （实测 32 枚），而一行里真被点过的从来只有几枚。
+ *
+ * 排序就一条：**这台机器上存过地址的排前面**，其余按目录顺序（Google 打头那条
+ * 理由在上面）补到 `limit` 枚，剩下的收进「更多厂商」。
+ *
+ * 本机那几家（Ollama / LM Studio……）默认落在「更多」里不是漏了它们：这类地址
+ * 恰恰是最会被反复用的，用过一次就被上面那条规则提到前排。
+ *
+ * 当前地址正落在收起来那几家时，那一枚照样留在前排——**已选的配置不能被藏没**，
+ * 跟 `visibleAiPresets` 对 `hidden` 那几条同一条规矩。
+ */
+export function commonAiPresets(
+  showHidden: boolean,
+  currentUrl: string | undefined,
+  history: readonly string[],
+  limit = 10,
+): readonly AiPreset[] {
+  const all = visibleAiPresets(showHidden, currentUrl);
+  const used = new Set(history);
+  // 当前地址 → 存过 → 目录顺序。`Array.sort` 是稳定的，同一档里因此还是目录顺序。
+  const rank = (p: AiPreset) => (p.url === currentUrl ? 0 : used.has(p.url) ? 1 : 2);
+  const head = [...all].sort((a, b) => rank(a) - rank(b)).slice(0, limit);
+  if (currentUrl !== undefined && !head.some((p) => p.url === currentUrl)) {
+    const cur = all.find((p) => p.url === currentUrl);
+    if (cur) head.unshift(cur);
+  }
+  return head;
+}
+
 /** 「模型」那格的一项候选：`value` 原样发给接口，`label` 给人读。 */
 export interface AiModelOption {
   value: string;
@@ -102,7 +146,27 @@ export interface AiModelOption {
 }
 
 /** 把地址归一成不带结尾斜杠的形式，好让几种写法对上同一份候选。 */
-const normUrl = (url: string) => url.trim().replace(/\/+$/, '');
+function normUrl(url: string): string {
+  return url.trim().replace(/\/+$/, '');
+}
+
+/**
+ * 「自己填的地址」这一类记录的键。
+ *
+ * 服务端对它是**外来的、不透明的字符串**——它只按这个键合并那一条记录，从不解析
+ * 里面的地址（解析那份规则的 `server/src/aiEndpoints.ts` 只用于旧数据升级时给派生
+ * 出来的那条起个名，两边**不需要算出同一个串**）。所以这里只求稳定、可读，
+ * 带 `custom:` 前缀——永不跟目录里的 provider key 撞上。
+ *
+ * 除了手填的地址，目录里「一个端点就是一个独立产品」的那几行也用它：LM Studio 和
+ * Ollama 是两个进程、两个端口，共用一个 id 等于按一下就把另一家的地址和模型名盖掉
+ * ——那种行按「地址就是身份」命名，跟自己手填的那条同一个规矩。
+ *
+ * 是函数声明而不是 const：`catalogPresets` 在模块加载时就要调它。
+ */
+export function customEndpointId(baseUrl: string): string {
+  return `custom:${normUrl(baseUrl)}`;
+}
 
 /**
  * 地址 → 模型清单的反查表。建**全**目录（不只 openai 那几家），因为服务端虽然只讲
@@ -137,4 +201,37 @@ const MODEL_SUGGESTIONS: Map<string, readonly AiModelOption[]> = (() => {
  */
 export function modelSuggestionsFor(url: string): readonly AiModelOption[] {
   return MODEL_SUGGESTIONS.get(normUrl(url)) ?? [];
+}
+
+/** 同一个端点的两种写法（有没有结尾斜杠、写没写 `/chat/completions`）算不算一家。 */
+const sameEndpoint = (a: string, b: string): boolean => {
+  const strip = (u: string) => normUrl(u).replace(/\/chat\/completions$/i, '');
+  return strip(a) !== '' && strip(a) === strip(b);
+};
+
+/**
+ * 在这些记录里找出「就是这个端点」的那一条。
+ *
+ * **比的是地址值，不是 id。** 这一条是有来历的：旧版只有一格 `aiBaseUrl`，升级到
+ * 现在这套表之后，那条由服务端派生出来的记录键名叫 `custom:…`，而目录里这一家的
+ * id 是别的（比如 `deepseek`）。界面点芯片时如果只按 id 找，就会当「这家还没配过」
+ * 新建一条、把密钥空着——用户看到的正是「我配过的钥匙怎么没了」。按地址找就接得上。
+ *
+ * 反过来说，同一家几个地域端点**不**在这里合并：那是同一个账号的同一把密钥，
+ * 但地址确实不同，合并会替用户改掉他填的东西。芯片按 `providerKey` 找回自己那条。
+ */
+export function findEndpointByBase(
+  endpoints: Record<string, AiEndpoint>,
+  target: { url: string; base?: string },
+): { id: string; rec: AiEndpoint } | undefined {
+  for (const [id, rec] of Object.entries(endpoints)) {
+    if (sameEndpoint(rec.baseUrl, target.url)) return { id, rec };
+    if (target.base && sameEndpoint(rec.baseUrl, target.base)) return { id, rec };
+  }
+  return undefined;
+}
+
+/** 当前选中的那条记录；没选、或者 id 悬空都回 undefined（界面上等同于「没填」）。 */
+export function activeEndpoint(settings: Settings): AiEndpoint | undefined {
+  return settings.aiEndpoints[settings.aiEndpointId];
 }

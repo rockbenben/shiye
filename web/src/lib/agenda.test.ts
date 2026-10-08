@@ -25,6 +25,29 @@ describe('agendaSections', () => {
     expect(all.map((s) => s.key)).toEqual(['overdue', 'today', 'tomorrow', 'week', 'later', 'none', 'notStarted']);
   });
 
+  /**
+   * 「已过期」那一组带 `briefTime`（`dueSectionExtras`）：卡上只报时长，
+   * 「过期」两个字由组头说。
+   *
+   * 钉在**这一层**而不是只钉在 `taskView` 那层，是因为这是个「谁该带、谁不该带」
+   * 的判断——只有 overdue 那一组带。给别的组也带上，卡上就会出现一句没有上文的
+   * 「3 天」；不给 overdue 带，那一组就还是 19 个「过期」。
+   *
+   * 组头那句「最久的 N 天」**不在这里**：它按筛完还剩几条来算，接在
+   * `App.tsx` 的 `withOverdueHint`（那边有一条连着筛选的测试）。
+   */
+  it('只有「已过期」那一组带 briefTime', () => {
+    const secs = agendaSections([
+      t('a', localIso(2026, 8, 1, 12, 0)),        // 过期 13 天
+      t('b', localIso(2026, 8, 13, 12, 0)),       // 过期 1 天
+      t('c', localIso(2026, 8, 20, 12, 0)),       // 以后
+    ], NOW, new Set());
+    expect(secs.find((s) => s.key === 'overdue')!.briefTime).toBe(true);
+    for (const s of secs.filter((x) => x.key !== 'overdue')) {
+      expect(s.briefTime, `${s.key} 不该省「过期」两个字`).toBeFalsy();
+    }
+  });
+
   it('昨天到期 → 已过期', () => {
     expect(keyOf([t('a', localIso(2026, 8, 13, 12, 0))], 'a')).toBe('overdue');
   });

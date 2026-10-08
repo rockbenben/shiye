@@ -40,6 +40,15 @@ interface Props {
   onEditText: (id: string, text: string) => Promise<unknown>;
   onExpand: () => void;
   expanding: boolean;
+  /**
+   * 「现在点了也白点」的一句话，`null` = 能点。判据在 `lib/aiReady.ts`，三颗 AI
+   * 按钮共用一份（这里是第一颗）。
+   *
+   * **没有它的时候那颗按钮是亮的**：配置没配、离线，这两种都照样点得下去，点完
+   * 等一两分钟然后失败，而失败是服务端起子进程那一刻才报出来的。新用户装好第一
+   * 分钟撞的就是这堵墙。
+   */
+  aiBlocked: string | null;
 }
 
 interface RowProps {
@@ -209,7 +218,30 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
               // 意义，服务端那边也这么挡（PATCH /api/inbox/:id）。已处理的条目原来
               // 就有的「重新拆解」按钮还在，翻回未处理之后就能编辑了。
               ...(x.processed
-                ? [<RedoButton key="r" id={x.id} onRedo={onRedo} />]
+                ? [
+                  // **AI 判「这不是任务」的时候，把「变成任务」补回来。**
+                  // 那一刻的形状是 `processed: true` + `taskIds: []`
+                  // （`server/src/outbox.ts` 的 `mergeOutbox` 把这两样一起落盘）：条目从
+                  // 「待拆解」消失、掉进折叠的「已拆 N 条」，行上写着「已拆 0 条」，
+                  // 而这一行的动作只剩「重新拆解」和「删除」——**用户唯一顺手的
+                  // 路恰好没了**。想回到有出口的状态得先猜出「重新拆解」、填一句
+                  // 说明、再等 92 秒。
+                  //
+                  // 滴答那边不存在这个中间态：收集箱里躺的**本来就是任务**，
+                  // 不存在「被判成不是任务」这一步（`docs/dida365/添加任务.md`，
+                  // https://help.dida365.com/articles/6950658877373284352 ）。
+                  // 我们有这个中间态，就得给它留一条走出来的路。
+                  //
+                  // **只在真的没拆出东西时补**：拆出过东西的再变一条，就是凭空
+                  // 多一条重复的任务——`InboxSidebar.test.tsx` 里那条「已经拆过
+                  // 的没有这颗」正是在钉这个条件（夹具是 `taskIds: ['t1']`）。
+                  ...((x.taskIds ?? []).length === 0
+                    ? [
+                      <Button key="t" size="small" type="text" onClick={() => onMakeTask(x.id)}>变成任务</Button>,
+                    ]
+                    : []),
+                  <RedoButton key="r" id={x.id} onRedo={onRedo} />,
+                ]
                 : [
                   // **排在「编辑」前面**：这一行最常要做的事是「把它归位」，
                   // 不是「改改措辞」。没处理的才有这颗——已经拆过的再变一条
@@ -235,7 +267,7 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
                         onClick: () => onMakeTask(x.id, { later: true }),
                       }}
                     >
-                      <Button size="small" type="text" icon={<DownOutlined />} aria-label="变成任务的其它方式" />
+                      <Button size="small" type="text" icon={<DownOutlined />} aria-label="变成任务的其他" />
                     </Dropdown>
                   </Space.Compact>,
                   <Button key="e" size="small" type="text" icon={<EditOutlined />} onClick={startEdit}>编辑</Button>,
@@ -288,7 +320,16 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
             {x.processed && (
               // taskIds 缺失时兜底成空数组：跟 App.tsx reload() 里同一条教训，
               // GET /api/inbox 不校验文件写入的数据。
-              <span>已拆 {(x.taskIds ?? []).length} 条</span>
+              //
+              // **拆出 0 条时不说「已拆 0 条」**，改说发生了什么：那是 AI 判断它
+              // 不是一件要做的事，是一次判断（有可能是错的），不是一个计数。
+              // 「0」这个数答不了「那我怎么办」，而这一行此刻的动作区里
+              // 「变成任务」正好在（见上面那段），说得出口才接得上。
+              (x.taskIds ?? []).length === 0 ? (
+                <span>没拆出任务——AI 觉得它不是一件要做的事</span>
+              ) : (
+                <span>已拆 {(x.taskIds ?? []).length} 条</span>
+              )
             )}
             {/* 相对说法（「今天 08:12」「8月21日 09:00」），不是绝对时刻。
                 这个数字回答的是**「它在这儿躺多久了」**——你正要决定先拆哪条，
@@ -304,7 +345,7 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
   );
 }
 
-export function InboxSidebar({ items, now, onDelete, onRedo, onMakeTask, onEditText, onExpand, expanding }: Props) {
+export function InboxSidebar({ items, now, onDelete, onRedo, onMakeTask, onEditText, onExpand, expanding, aiBlocked }: Props) {
   // 编辑器开着的条目 id——哪怕 AI 把它拆解掉（processed 变 true），也要继续
   // 摆在「未处理」列表里，不能被挪进已拆解折叠面板。折叠面板是另一个 List
   // 实例，挪过去等于组件被卸载重建，正在编辑的草稿会跟着无声消失（自动展开
@@ -351,26 +392,75 @@ export function InboxSidebar({ items, now, onDelete, onRedo, onMakeTask, onEditT
           待拆解
           {/* 数的是真正未处理的条目——编辑器开着而临时留在这份列表里的那条
               不算，不然数字会比实际待处理的多一个，误导用户。这个数字是你自己
-              笔记的计数，不是 AI 产出，所以不用群青，走跟标签一样的灰。 */}
-          {unprocessedCount > 0 && ` · ${unprocessedCount}`}
+              笔记的计数，不是 AI 产出，所以不用群青，走跟标签一样的灰。
+              **形状跟下面那行「已拆解 N 条」同一个**：这一栏里两节并排，原来
+              一个写「待拆解 · 2」、一个写「已拆解 2 条」，同一屏两种计数写法。 */}
+          {unprocessedCount > 0 && ` ${unprocessedCount} 条`}
         </span>
         {/* unprocessedCount === 0 时禁用——待拆解是 0 条，点这个按钮什么也不会
             发生（服务端会走 'skipped' 那条路径，安全但没意义），按钮却还是
             醒目可点的黑字，看着像能做点什么。见 2026-08-12-ux-audit.md
-            「待拆解为 0 时立即拆解仍然醒目」。 */}
-        <Button size="small" icon={<ThunderboltOutlined />} loading={expanding} disabled={expanding || unprocessedCount === 0} onClick={onExpand}>
-          立即拆解
-        </Button>
+            「待拆解为 0 时立即拆解仍然醒目」。
+
+            `aiBlocked` 是同一条规矩的另一半：**「有活儿」不等于「能干活」**。
+            配置没配、连不上服务的时候活儿照样在那儿，按钮却亮着——点下去换来的
+            是一分半钟的等待和一句他不知道怎么修的错。判据见 `lib/aiReady.ts`。 */}
+        {/* 那句话挂在**外层 span** 上而不是按钮自己身上：浏览器不渲染 disabled
+            按钮的原生 tooltip（`FocusTimer.tsx` 那对 span/按钮注释记着这条实测
+            结论——那个 span 本身 role=generic、读屏不播报，但鼠标停上去说得清）。
+            读屏那一路靠下面那行常驻提示，它不是 tooltip、一直在树上。*/}
+        <span title={aiBlocked ?? undefined}>
+          <Button size="small" icon={<ThunderboltOutlined />} loading={expanding} disabled={expanding || unprocessedCount === 0 || aiBlocked !== null} onClick={onExpand}>
+            立即拆解
+          </Button>
+        </span>
       </div>
+      {/* **灰着的时候把原因说出来，而不是只把按钮变灰。** 一颗灰按钮单独摆着，
+          人只会觉得「坏了」；把他能去的地方一起说出来，这颗按钮才是在回答问题。
+          只在真的灰的时候占这一行，不常驻。
+
+          **后半句是这段的重点：把不需要 AI 的那条路指出来。** AI 跑不了不等于
+          用不了这个应用——每条下面「⋯」里那颗「变成任务」用的是同一份
+          `smartDraft` 本地规则，**不花额度、离线也能用**（「明天下午三点给猫买猫粮」
+          进去照样是一条带截止时间的任务）。而这句话**只在 AI 跑不了时说**，因为
+          平时它是一句噪音：能拆的时候没有人需要被介绍一条更慢的路。
+
+          换句话说，这一行不是「AI 用不了了」的道歉，是**「你照样能把活干完」**
+          的指路。上一批做的 AI 可用性守卫知道了什么时候该说这句话，这里是它
+          第一个兑现的地方。*/}
+      {aiBlocked && (
+        <span className="ink-hint">
+          {aiBlocked}不急——每条下面「⋯」里那颗「变成任务」不用配 AI 也能用，标题里的日期和标签照样认。
+        </span>
+      )}
       {/* 92 秒不算短，没这行提示用户会以为卡死了——只在跑的时候显示，不常驻占地方。 */}
-      {expanding && <span className="ink-hint">AI 正在拆解，一般要一两分钟……</span>}
+      {expanding && <span className="ink-hint">AI 正在拆解，一般要一两分钟…</span>}
 
       {pending.length === 0 ? (
         // 一行安静的字，不是 antd 自带的 Empty 插画——见 theme.css 里
         // .ink-empty-note 的注释。跟上面「待拆解」小标题、头部「收件箱 N 条
         // 待拆解」用同一个词，不再说成「没有等着拆的」，见规格「同一个概念
         // 三种说法」。
-        <p className="ink-empty-note">没有待拆解的</p>
+        //
+        // **第二句是下一步。** 光说「没有待拆解的」只回答了这一栏空着，没回答
+        // 东西从哪儿来——而这条链（随手记 → 收件箱 → 拆解）在这个界面上只有
+        // 这一屏说得出。两句都是同一档安静的字，不画插图。
+        //
+        // 第一句保持原样、不改成「还没有东西进来」：这一栏空着有两种情况——
+        // 真的什么都没记过，和记过几条但都拆完了（拆完的在下面的「已拆解」里）。
+        // 后者说「还没有东西进来」是一句假话。
+        <>
+          <p className="ink-empty-note">没有待拆解的</p>
+          {/* **AI 跑不了的时候不说「等着拆」。** 那是一句兑不出去的承诺——
+              没有 AI 可调，存进来的东西不会自己变成任务。换成那条真正兑现的
+              指路：「⋯ → 变成任务」。跟上面那颗按钮下面那半句同一条理由，见
+              那边 `aiBlocked` 那段。*/}
+          <p className="ink-empty-note">
+            {aiBlocked
+              ? '左下角「随手记」写一句，存进来就在这儿等着变成任务。'
+              : '左下角「随手记」写一句，存进来就在这儿等着拆。'}
+          </p>
+        </>
       ) : (
         <List className="ink-note-list" size="small" dataSource={pending} renderItem={row} rowKey="id" />
       )}

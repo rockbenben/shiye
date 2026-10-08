@@ -1,6 +1,6 @@
 import type { List, Task } from '../types.js';
-import { DUE_BUCKETS, dueBucketOf, endOfDay } from './agenda.js';
-import { asArray, byPinned, isSettled, isStatus, STATUS_LABEL, STATUSES } from './taskView.js';
+import { DUE_BUCKETS, dueBucketOf, dueSectionExtras, endOfDay } from './agenda.js';
+import { asArray, byPinned, isSettled, isStatus, PRI_FULL_LABEL, STATUS_LABEL, STATUSES } from './taskView.js';
 import { nestChildren } from './hierarchy.js';
 import { reschedulePatch } from './reschedule.js';
 import type { GridSection } from '../components/TaskGrid.js';
@@ -213,7 +213,7 @@ function sortTasks(tasks: Task[], gs: GroupSort): Task[] {
   });
 }
 
-interface Bucket { key: string; title: string; tasks: Task[] }
+interface Bucket { key: string; title: string; tasks: Task[]; briefTime?: boolean }
 
 /**
  * 时间分组。**分档本身不在这里写**——调 `agenda.ts` 的 `dueBucketOf`，跟「接下来」
@@ -230,7 +230,10 @@ interface Bucket { key: string; title: string; tasks: Task[] }
 function dueBuckets(tasks: Task[], now: Date): Bucket[] {
   const out = new Map<string, Task[]>(DUE_BUCKETS.map((b) => [b.key, [] as Task[]]));
   for (const t of tasks) out.get(dueBucketOf(t, now))!.push(t);
-  return DUE_BUCKETS.map(({ key, title }) => ({ key, title, tasks: out.get(key)! }));
+  // 「已过期」那一组的两个额外字段走 `agenda.ts` 那份——「接下来」和「按时间分组」
+  // 是同一个界面语言，省字规则和那句「最久的 N 天」在两处各写一遍的话，
+  // 迟早有一处不说（这一对分档逻辑当初就是这么飘的，见上面那段）。
+  return DUE_BUCKETS.map(({ key, title }) => ({ key, title, tasks: out.get(key)!, ...dueSectionExtras(key) }));
 }
 
 /**
@@ -430,13 +433,16 @@ function statusBuckets(tasks: Task[]): Bucket[] {
   }));
 }
 
-const PRI_TITLE: Record<number, string> = { 3: '高优先级', 2: '中优先级', 1: '低优先级', 0: '没有优先级' };
+/** 组头那四个名字读 `PRI_FULL_LABEL`——原来这里自己写了一份，0 档写的是
+ *  「没有优先级」，而四象限那一格写「没定优先级」：相邻两屏两个名字，读的人
+ *  以为有两档。单一出处在 `lib/taskView.ts`。 */
+const PRI_TITLE: Record<number, string> = PRI_FULL_LABEL;
 
 function priorityBuckets(tasks: Task[]): Bucket[] {
   return [3, 2, 1, 0].map((p) => ({
     key: `p${p}`,
     title: PRI_TITLE[p],
-    // 手改文件写出 priority: 7 这种越界值时归进「没有优先级」，不另开一档：
+    // 手改文件写出 priority: 7 这种越界值时归进 0 那一档，不另开一档：
     // `GET /api/tasks` 不校验文件里的东西（这个仓库到处是这条兜底）。
     tasks: tasks.filter((t) => ([0, 1, 2, 3] as number[]).includes(t.priority) ? t.priority === p : p === 0),
   }));
@@ -570,7 +576,16 @@ export function regroupSections(sections: GridSection[], gs: GroupSort, ctx: Gro
   // 等于把落点也一起藏了。
   return buckets
     .filter((b) => ctx.keepEmpty || b.tasks.length > 0)
-    .map((b) => ({ key: `g:${b.key}`, title: b.title, tasks: nestChildren(sortTasks(b.tasks, gs)) }));
+    // `briefTime` 只有时间分档的「已过期」那一组带着（见 `dueBuckets`）；其余轴
+    // 造出来的桶没有这个字段，摊过去等于没有。组头那句「最久的 N 天」不在这里
+    // 算——筛选是叠在这一步之后的，那句得按筛完还剩几条来算（见 `App.tsx` 的
+    // `withOverdueHint`）。
+    .map((b) => ({
+      key: `g:${b.key}`,
+      title: b.title,
+      tasks: nestChildren(sortTasks(b.tasks, gs)),
+      briefTime: b.briefTime,
+    }));
 }
 
 const AXIS_KEY = 'kanbanAxis';

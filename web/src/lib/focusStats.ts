@@ -60,11 +60,30 @@ const add = (a: FocusTotal, minutes: number): FocusTotal => ({ count: a.count + 
 const startOfDay = (d: Date, plusDays = 0): Date =>
   new Date(d.getFullYear(), d.getMonth(), d.getDate() + plusDays);
 
+/** 一档总览盖的那几天，本地墙钟，含首含尾。 */
+export interface FocusWindow {
+  from: Date;
+  to: Date;
+}
+
 export interface FocusTotals {
   today: FocusTotal;
   week: FocusTotal;
   month: FocusTotal;
   all: FocusTotal;
+  /**
+   * 今天 / 本周 / 本月各自数的是哪几天。**跟上面那几个数出自同一批边界变量**，
+   * 不是界面自己再算一遍：改一次周首、改一次「本月从哪天起」，那个数字和格子上
+   * 那行日期必须一起动，否则这一屏最该回答的问题（「本月为什么比本周少」）就
+   * 由两处各说一半。
+   *
+   * 上限一律截到今天。这一行说的是「这个数数了哪些天」，今天之后的那几天还在
+   * 前面，一条记录也没法落在里面——把整周摆成 `9月28日–10月4日` 而 10 月 4 日
+   * 还没到，读的人得自己把范围再裁一次才对得上那个数。
+   *
+   * `all` 没有窗口：它就是全部，没有哪一天被排除在外。
+   */
+  windows: { today: FocusWindow; week: FocusWindow; month: FocusWindow };
 }
 
 /**
@@ -80,9 +99,12 @@ export interface FocusTotals {
  * 一致（离线读不到设置时走的也是这条）。
  */
 export function focusTotals(tasks: Task[], now: Date, weekStartsOn: WeekStart = 1): FocusTotals {
-  const dayStart = startOfDay(now).getTime();
-  const weekStart = weekStartOf(now, weekStartsOn).getTime();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const dayStartDate = startOfDay(now);
+  const weekStartDate = weekStartOf(now, weekStartsOn);
+  const monthStartDate = new Date(now.getFullYear(), now.getMonth(), 1);
+  const dayStart = dayStartDate.getTime();
+  const weekStart = weekStartDate.getTime();
+  const monthStart = monthStartDate.getTime();
   let today = EMPTY; let week = EMPTY; let month = EMPTY; let all = EMPTY;
   for (const t of tasks) {
     for (const s of sessionsOf(t)) {
@@ -92,7 +114,14 @@ export function focusTotals(tasks: Task[], now: Date, weekStartsOn: WeekStart = 
       if (s.at >= dayStart) today = add(today, s.minutes);
     }
   }
-  return { today, week, month, all };
+  return {
+    today, week, month, all,
+    windows: {
+      today: { from: dayStartDate, to: dayStartDate },
+      week: { from: weekStartDate, to: dayStartDate },
+      month: { from: monthStartDate, to: dayStartDate },
+    },
+  };
 }
 
 /**

@@ -4,7 +4,7 @@ import type { Task } from '../types.js';
 // 五个字符串，注释还写着「跟着抄一份是既有做法」——而抄漏的那一份（TaskBoard
 // 的筛选条少了「已放弃」）就是那句话的代价，见 taskView.ts 里 STATUS_LABEL
 // 上面那段。
-import { isSettled, isStatus, sortByUrgency, STATUS_LABEL, STATUSES } from './taskView.js';
+import { isSettled, isStatus, PRI_FULL_LABEL, sortByUrgency, STATUS_LABEL, STATUSES } from './taskView.js';
 import { notStartedDeep } from './hierarchy.js';
 // `URGENT_WITHIN_DAYS` 原来定义在这个文件里。搬去 `agenda.ts` 了——行/卡上
 // 那颗「快到期」的 chip 用的是同一条边界，而「N 天内算急」跟四象限没有特殊
@@ -73,7 +73,7 @@ type QuadrantKey = (typeof QUADRANT_KEYS)[number];
 
 /**
  * 每一格对应哪一档 `priority`——**这一份是 `priority` 那套规则**：四格就是
- * 四档优先级（高/中/低/无），`due` 完全不参与。
+ * 四档优先级（高/中/低/没定优先级），`due` 完全不参与。
  *
  * 滴答清单内置**两套**规则，这个应用现在两套都有（`QuadrantRule`），
  * 出处都在《如何编辑四象限规则》：
@@ -119,27 +119,49 @@ const QUADRANT_PRIORITY_2D = new Map<QuadrantKey, number>([
 ]);
 
 /** 反过来：一档优先级落在哪一格。`priority` 不是 0..3 之一时（服务端不校验
- *  文件里写的东西，手改或者 AI 手滑都能写出别的数）落进「不重要也不紧急」，
- *  跟 `kanbanCells` 对不合法 `status` 的兜底同一条：不能凭空吃掉一条任务。 */
+ *  文件里写的东西，手改或者 AI 手滑都能写出别的数）落进 `min-later` 那一格
+ *  （默认规则下叫「没定优先级」），跟 `kanbanCells` 对不合法 `status` 的兜底
+ *  同一条：不能凭空吃掉一条任务。 */
 const QUADRANT_OF_PRIORITY = new Map<number, QuadrantKey>(
   [...QUADRANT_PRIORITY].map(([k, v]) => [v, k]),
 );
 
-const QUADRANT_TITLE: Record<QuadrantKey, string> = {
-  'imp-urg': '重要且紧急',
-  'imp-later': '重要不紧急',
-  'min-urg': '不重要但紧急',
-  'min-later': '不重要也不紧急',
+/**
+ * 四格叫什么，**跟着规则走**：名字要说得出这一格真的分的是什么。
+ *
+ * `priority`（默认那套）下四格就是四档优先级，`due` 完全不参与，所以格子叫
+ * 高 / 中 / 低 / **没定**优先级。这里原来沿用艾森豪威尔那套（重要且紧急 /
+ * 重要不紧急 / 不重要但紧急 / 不重要也不紧急），两句都是假的：
+ *
+ * - 词里有「紧急」，而这一套压根没算过时间——一条今天到期的和一条下月到期的
+ *   并排坐在「不紧急」格里，只读标题的人有理由认为这是算错了。当时那句常驻
+ *   说明（`.ink-quadrant-note`「四格就是四档优先级，跟截止时间无关」）就是在
+ *   给命名打补丁：需要解释「四格其实是四档优先级」，说明格子名字在说谎。
+ *   名字改对之后那句整行删了。
+ * - 第四格叫「不重要也不紧急」，而它装的是**全部没定过优先级的任务**。
+ *   `priority` 一律 0 是这个应用的规矩——AI 不许替他定，拆解时一律写 0（见
+ *   AGENTS.md 与 `server/src/outbox.ts` 的 `stripForced`），于是几十条从没表过
+ *   态的任务被格名替他判成了「不重要」。这一屏不许替人下他没下过的判断。
+ *
+ * `time-priority` 那套下四格真的是二维坐标（行 = 优先级，列 = 截止时间），
+ * 「重要」「紧急」两个词都是从数据里算出来的，沿用艾森豪威尔的叫法名副其实。
+ * 而且那一套是他**自己选的**（顶上那排单选钮），把优先级读成重要程度是他的
+ * 决定，不是我替他做的。
+ */
+const QUADRANT_TITLE: Record<QuadrantRule, Record<QuadrantKey, string>> = {
+  // 四档名字读 `PRI_FULL_LABEL`（`lib/taskView.ts`）——原来这里自己写了一份，
+  // 跟 `lib/grouping.ts` 那份在 0 档上差一个字，相邻两屏就成了两个名字。
+  priority: { 'imp-urg': PRI_FULL_LABEL[3], 'imp-later': PRI_FULL_LABEL[2], 'min-urg': PRI_FULL_LABEL[1], 'min-later': PRI_FULL_LABEL[0] },
+  'time-priority': { 'imp-urg': '重要且紧急', 'imp-later': '重要不紧急', 'min-urg': '不重要但紧急', 'min-later': '不重要也不紧急' },
 };
 
 /**
  * 四象限的四格，key 固定为 `'imp-urg' | 'imp-later' | 'min-urg' | 'min-later'`。
  *
- * **四格 = 四档优先级**（高/中/低/无），判据和出处都在 `QUADRANT_PRIORITY`
- * 那段注释里。`due` 不参与分格——所以一条三天后到期的低优先级任务
- * 待在「不重要但紧急」这一格里是对的：那一格的含义是「低优先级」，格子的
- * 名字沿用艾森豪威尔那套叫法。**空格子也在返回值里**：四个格子是一个坐标系，
- * 缺一个这个坐标系就不成立。
+ * **默认那套规则下四格 = 四档优先级**（高/中/低/没定），判据和出处都在
+ * `QUADRANT_PRIORITY` 那段注释里，格名见 `QUADRANT_TITLE`。`due` 不参与分格——
+ * 所以一条三天后到期的低优先级任务待在「低优先级」这一格里是对的。**空格子也在
+ * 返回值里**：四个格子是一个坐标系，缺一个这个坐标系就不成立。
  *
  * 已完成/已搁置/**还没到开始时间**的任务不参与——四象限回答的是「接下来做
  * 什么」，这三种都是他已经明确做过的决定（做完了 / 现在不做 / 那天之前别管它），
@@ -154,8 +176,8 @@ const QUADRANT_TITLE: Record<QuadrantKey, string> = {
  * 而它的标准视图默认不显示 Unavailable 的条目。
  *
  * 具体坏在哪：四象限是这个应用里唯一一屏「就这么多事，挑一件」。混进两条
- * 下个月才能动的任务，「重要且紧急」那一格的数字就是虚的——而这一格存在的
- * 全部意义就是那个数字可信。
+ * 下个月才能动的任务，第一格那个数字就是虚的——而那一格存在的全部意义就是
+ * 那个数字可信。
  *
  * **后来这一支从 `notStarted` 换成了 `notStartedDeep`：父亲还没开始的，
  * 孩子现在也做不了。** 在那之前 defer 只挡住父任务自己——给「装修」设了
@@ -193,7 +215,7 @@ export function quadrantCells(
     bins.get(key)!.push(t);
   }
   // 格内也按紧急度排，理由跟 `kanbanCells` 那段一字不差。
-  return QUADRANT_KEYS.map((key) => ({ key, title: QUADRANT_TITLE[key], tasks: sortByUrgency(bins.get(key)!, now) }));
+  return QUADRANT_KEYS.map((key) => ({ key, title: QUADRANT_TITLE[rule][key], tasks: sortByUrgency(bins.get(key)!, now) }));
 }
 
 /**

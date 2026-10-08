@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { startServer, waitUntilHealthy } from './serverChild.js';
+import { startServer, waitUntilHealthy, describeLaunchFailure } from './serverChild.js';
 import type { ResolvedPaths } from './paths.js';
 
 const paths: ResolvedPaths = {
@@ -162,6 +162,45 @@ describe('startServer：停', () => {
     expect(seen).toEqual([[null, false]]);
   });
 
+  // **「起不来」的原因不许再被丢掉。** 它是用户唯一能照着排查的线索：
+  // 「退出码 未知」既不知道是文件不在、也不知道是不是被安全软件拦了。
+  it('spawn 失败时把 errno 一起带出来（原来只给一个 null）', async () => {
+    const child = fakeChild();
+    const h = await startServer({ paths, port: 30035, spawnFn: (() => child) as never, fetchFn: notOurs });
+    const seen: Array<{ code: number | null; launchError: { code?: string; syscall?: string; message: string } | null }> = [];
+    h!.onExit((code, _killedByUs, launchError) => seen.push({ code, launchError }));
+
+    const err = Object.assign(new Error('spawn EPERM'), { code: 'EPERM', syscall: 'spawn' });
+    child.emit('error', err);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].code).toBeNull();
+    expect(seen[0].launchError?.code).toBe('EPERM');
+    expect(seen[0].launchError?.syscall).toBe('spawn');
+    expect(seen[0].launchError?.message).toBe('spawn EPERM');
+  });
+
+  it('正常退出不带 launchError——「起来了又退了」看退出码就够', async () => {
+    const child = fakeChild();
+    const h = await startServer({ paths, port: 30035, spawnFn: (() => child) as never, fetchFn: notOurs });
+    const seen: Array<unknown> = [];
+    h!.onExit((_code, _killedByUs, launchError) => seen.push(launchError));
+
+    child.emit('exit', 3, null);
+    expect(seen).toEqual([null]);
+  });
+
+  // 'exit' 的第二个参数是 signal（字符串），不是错误对象——早先那版把 settle
+  // 的第二个参数当错误接，会把一个 'SIGTERM' 字符串当成 launchError 传出去。
+  it("'exit' 的 signal 不许被当成启动失败的原因", async () => {
+    const child = fakeChild();
+    const h = await startServer({ paths, port: 30035, spawnFn: (() => child) as never, fetchFn: notOurs });
+    const seen: Array<unknown> = [];
+    h!.onExit((_code, _killedByUs, launchError) => seen.push(launchError));
+
+    child.emit('exit', 0, 'SIGTERM');
+    expect(seen).toEqual([null]);
+  });
+
   // 'exit'/'error' 必须在 spawn 之后立刻挂，不能等 onExit() 被调用才挂：
   // EventEmitter 不重放，调用方可能在 await startServer() 和挂 onExit() 之间
   // 还 await 了别的事（比如 win.loadURL()），子进程要是这段时间里退出，
@@ -243,5 +282,29 @@ describe('waitUntilHealthy：main.ts 在 loadURL 之前拿它等服务真的起�
     await waitUntilHealthy(30035, { fetchFn, sleepFn, nowFn, timeoutMs: 20 });
     expect(sleepFn).not.toHaveBeenCalled();
     expect(fetchCalls).toBe(1);
+  });
+});
+
+// 「为什么起不来」这句话是给用户看的——`EPERM` 那串 errno 谁都看不懂，
+// 但「多半被安全软件拦了」是能照着排查的。
+describe('describeLaunchFailure：把 errno 翻成人话', () => {
+  it('ENOENT：文件不在——安装目录可能不完整', () => {
+    expect(describeLaunchFailure({ code: 'ENOENT', message: 'spawn /x/y ENOENT' })).toContain('找不到');
+  });
+
+  it('EACCES / EPERM：系统不让建进程——多半被安全软件拦了', () => {
+    for (const code of ['EACCES', 'EPERM']) {
+      expect(describeLaunchFailure({ code, message: `spawn ${code}` })).toContain('安全软件');
+    }
+  });
+
+  // **不猜**：认不出来的码原样透出 Node 的话。猜错了比不猜更坏——人会照着
+  // 错的方向排查（看到「被安全软件拦了」却其实是自己权限不够，那更绕）。
+  it('认不出来的码原样透出，不替它编一个原因', () => {
+    expect(describeLaunchFailure({ code: 'EMFILE', message: 'spawn EMFILE' })).toBe('spawn EMFILE');
+  });
+
+  it('连 errno 都没有的时候也不许空着——那句话是弹给用户看的', () => {
+    expect(describeLaunchFailure({ message: 'something odd' })).toBe('something odd');
   });
 });

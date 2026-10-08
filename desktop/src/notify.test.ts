@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
-import { buildNotificationOptions, buildToastXml, SNOOZE_MINUTES, toNotification, type NotifyContent } from './notify.js';
+import { actionKindAt, actionUri, buildNotificationOptions, buildToastXml, NOTIFICATION_ACTIONS, SNOOZE_MINUTES, toNotification, type NotifyContent } from './notify.js';
 
 const task = (over: Record<string, unknown> = {}) => ({ id: 't1', title: '交房租', ...over });
 
@@ -302,5 +302,74 @@ describe('buildNotificationOptions：三个平台各拿到能用的东西', () =
     const o = buildNotificationOptions(summary, icon, 'darwin') as { title: string; body: string };
     expect(o.title).toBe('今天 3 件事');
     expect(o.body).toBe('交房租、买菜、写周报');
+  });
+});
+
+/**
+ * **mac/Linux 那两颗按钮**（Windows 走 toast XML 里的协议 URI，那条路连冷启动
+ * 都成立）。
+ *
+ * 跟 Windows 那两颗**是同一件事**：点一下都是「完成」或者「推迟」，只是送达
+ * 机制不同——这边靠 Electron 的 `action` 事件，**只在应用活着的时候送到**。
+ *
+ * Electron 45 起 Linux 的 Notification 也支持 action 按钮了（这一版之前是
+ * mac 和 Windows）——「Linux 压根不支持」那句是旧版事实。
+ */
+describe('mac/Linux 的两颗按钮', () => {
+  const icon = { fileUrl: 'file:///C:/app/icon.png', path: 'C:\app\icon.png' };
+  const n: NotifyContent = { id: 't1', title: '该做了', body: '交房租' };
+
+  for (const platform of ['darwin', 'linux'] as const) {
+    it(`${platform} 带着两颗按钮：完成 / 推迟`, () => {
+      const o = buildNotificationOptions(n, icon, platform) as { actions?: { type: string; text: string }[] };
+      expect(o.actions).toEqual([
+        { type: 'button', text: '完成' },
+        { type: 'button', text: '推迟' },
+      ]);
+    });
+  }
+
+  it('**没有任务 id 就不给按钮**——概览说的是一整天、成批提醒说的是一批，', () => {
+    // 它们的按钮都没有「是哪一条」可指（同 toast 那条规矩）。
+    const summary: NotifyContent = { id: null, title: '今天 3 件事', body: '交房租、买菜、写周报' };
+    const o = buildNotificationOptions(summary, icon, 'darwin') as { actions?: unknown };
+    expect(o.actions).toBeUndefined();
+  });
+
+  it('win32 那边不受影响——按钮在 toast XML 里，不在这条路上', () => {
+    const o = buildNotificationOptions(n, icon, 'win32') as { toastXml: string };
+    expect(o).not.toHaveProperty('actions');
+    expect(o.toastXml).toContain('完成');
+  });
+});
+
+describe('actionKindAt：按钮序号 → 动作', () => {
+  it('0 是完成、1 是推迟——**跟 NOTIFICATION_ACTIONS 的顺序一一对应**', () => {
+    expect(actionKindAt(0)).toBe('complete');
+    expect(actionKindAt(1)).toBe('snooze');
+  });
+
+  it('越界的序号当没有——Electron 那边给什么就是什么，不猜', () => {
+    expect(actionKindAt(-1)).toBeNull();
+    expect(actionKindAt(2)).toBeNull();
+  });
+
+  it('**顺序反了就是「点完成变成推迟」**——所以按钮的顺序被单独钉住', () => {
+    expect(NOTIFICATION_ACTIONS.map((a) => a.text)).toEqual(['完成', '推迟']);
+    expect(NOTIFICATION_ACTIONS.map((a) => a.type)).toEqual(['button', 'button']);
+    // 序号认出来的动作必须落在同一排按钮上。
+    expect(actionKindAt(0)).toBe('complete');
+    expect(actionKindAt(1)).toBe('snooze');
+  });
+});
+
+describe('actionUri：按钮点完之后拼出来的协议 URI', () => {
+  it('跟 Windows toast 里那条一模一样——两条路共用一个处理器', () => {
+    expect(actionUri('complete', 'abc')).toBe('todo-desktop://complete?id=abc');
+    expect(actionUri('snooze', 'abc')).toBe('todo-desktop://snooze?id=abc');
+  });
+
+  it('id 里有特殊字符要转义——URI 解析那边按 id 找任务', () => {
+    expect(actionUri('complete', 'a b&c')).toBe('todo-desktop://complete?id=a%20b%26c');
   });
 });

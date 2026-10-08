@@ -217,7 +217,7 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
     dir = mkdtempSync(join(tmpdir(), 'expand-api-'));
     process.env.DATA_DIR = join(dir, 'data');
     process.env.DEVICE_CONFIG = join(dir, 'device.json');
-    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'api', aiBaseUrl: 'https://x.test/v1', aiModel: 'm' });
+    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'api', aiEndpointId: 'x', aiEndpoints: { x: { baseUrl: 'https://x.test/v1', key: '', model: 'm' } } });
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -259,7 +259,7 @@ describe('createAgentRunner：设置成「调接口」时走 HTTP，不 spawn �
   });
 
   it('地址或模型没填就明确说缺哪一格，不把空 model 打出去', () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'api', aiBaseUrl: 'https://x.test/v1', aiModel: '' });
+    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'api', aiEndpointId: 'x', aiEndpoints: { x: { baseUrl: 'https://x.test/v1', key: '', model: '' } } });
     const f = vi.fn() as unknown as typeof fetch;
     const bus = new Bus();
     const seen = statusEvents(bus);
@@ -643,7 +643,7 @@ describe('createAgentRunner：拆细', () => {
 
   /** 接口那条路：照样把范围带进 `buildMessages`，而且一个子进程都不起。 */
   it('接口模式：范围照样进提示词，不 spawn 进程', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'api', aiBaseUrl: 'https://x.test/v1', aiModel: 'm' });
+    writeSettings({ ...DEFAULT_SETTINGS, aiMode: 'api', aiEndpointId: 'x', aiEndpoints: { x: { baseUrl: 'https://x.test/v1', key: '', model: 'm' } } });
     writeTasks([{ ...newTask({ title: '装修' }), id: 't1' }]);
     const spawnFn: Spawner = vi.fn(() => fakeProc());
     const bodies: string[] = [];

@@ -62,7 +62,7 @@ export interface FocusTimerProps {
   label?: string;
   /**
    * 一轮走完之后歇多久，分钟，来自 `Settings.breakMinutes`（默认 5）。
-   * **0 或不给 = 不休息**，走完直接回到「开始专注」，跟加这个之前一模一样。
+   * **0 或不给 = 不休息**，走完直接回到「番茄钟」，跟加这个之前一模一样。
    */
   breakMinutes?: number;
   /** 倒计时走完时调用一次，带上这次专注的记录——**追加不追加进
@@ -85,18 +85,80 @@ export interface FocusTimerProps {
    * 打断没有任何东西会丢。
    */
   onAbandon?: () => void;
+  /**
+   * **要说一句现成的话时走这条**——目前只有「被别的卡占着」那一处。
+   *
+   * 那句话原来有两条通道：外层 span 的 `title`（鼠标 hover）和按钮自己的
+   * `title`（读屏的 accessible description）。**触屏两条都到不了**——没有 hover，
+   * 而 disabled 的按钮不派发指针事件。安卓那边这两颗还是常驻可见的（`.ink-hover-only`
+   * 的 `@media (hover: hover)` 闸门），于是点一下，屏幕上一个字都不动。
+   *
+   * 不在组件里 import antd 的 message：`FocusTimer` 不认识浮层，跟 `onAbandon`
+   * 同一个形状——**说什么在这儿定，怎么摆给调用方**。
+   */
+  onHint?: (text: string) => void;
+  /**
+   * **没在跑的时候这两颗收进「悬停/聚焦到这张卡才显形」**（卡片档专用）。
+   *
+   * 为什么卡片档要收：一张卡摆着 ↑ ↓ 勾选 开始 搁置 番茄钟 正计时 ⋯ 八颗，
+   * 一屏「今天」下来是几十颗，读起来是一排工具条不是一列任务。
+   *
+   * **只管闲置那一支**：一旦跑起来，屏幕上那个倒计时是这张卡上唯一说明
+   * 「正在计时」的东西，绝不能跟着收——所以收不收由组件自己按 `running` 判，
+   * 不是调用方加一个 `display:none` 就把倒计时一起藏了（那样写过一版会连
+   * 跑着的计时一起看不见）。
+   *
+   * **只收视线，不收通路**：实现是 `opacity: 0`（见 theme.css 的
+   * `.ink-hover-only`），不是 `display: none`——后者会把这两颗同时从 Tab
+   * 顺序和读屏里抹掉，而触屏没有悬停这回事，那条媒体查询压根不生效。
+   */
+  quietIdle?: boolean;
 }
 
 /**
- * 卡片上的番茄钟。「开始专注」→ 倒计时 →走完自动调 `onComplete`；倒计时中途
- * 「取消专注」→ 什么都不发生，回到「开始专注」。
+ * 卡片上的番茄钟。「番茄钟」→ 倒计时 →走完自动调 `onComplete`；倒计时中途
+ * 「取消计时」→ 什么都不发生，回到「番茄钟」。
+ *
+ * **那颗按钮写「番茄钟」，不写「专注」——同一张卡上曾经有两个「开始」。**
+ * 悬停显形时那一排是「开始 搁置 番茄钟 正计时 ⋯」：最左边那颗「开始」是**状态**
+ * 动作（`STATUS_MOVES` 的 todo→doing，即「我着手做了这条」），而这颗是**计时**
+ * ——两件事毫不相干，却并排在四个字之内各带一个「开始」。读的人得停下来分辨
+ * 「开始什么」，而这一排其余按钮（搁置、正计时、⋯）都没有这个问题。
+ *
+ * 「正计时」那颗早就是同一个道理去掉「开始」的（见渲染处那段），这一颗只是
+ * 忘了跟上——两处撞名是同一类缺陷的两个实例。
+ *
+ * **⚠ 别把它缩成两个字（「专注」「计时」）。** 不是因为用户会看到「专 注」——
+ * `main.tsx` 已经全局 `button={{ autoInsertSpace: false }}` 关掉 antd 那条老规则
+ * 了（理由写在那儿：「开始」「搁置」本来会被插成「开 始」「搁 置」）。**真正
+ * 的代价在测试里**：组件测试是脱离 `main.tsx` 单独渲染的，拿不到那层
+ * ConfigProvider，于是「专注」在测试里仍然渲染成「专 注」，可访问名也是
+ * 「专 注」。要按名字找它，每一处都得先 `.replace(/\s/g, '')`——本文件里那种
+ * 找法有六十多处。三个字两边都对得上，一个字都不用改。
+ *
+ * （踩过一次：`getByRole('button', { name: '专注' })` 报「找不到名为专注的按钮」，
+ * 指向的是文案而不是这条规则。）
  *
  * **状态只活在这个组件实例的 `useState` 里，不持久化。** 关掉页面、这张卡被
  * 筛掉/删掉（组件卸载）都等于放弃——跟中途点取消是同一个结果：不追加、不
  * 发请求。这是规格「中途放弃不记」的延伸：持久化了就得回答「浏览器崩了算不算
  * 完成」，那个问题没有干净的答案，干脆不进这扇门。
  */
-export function FocusTimer({ minutes, label, breakMinutes = 0, onComplete, onAbandon }: FocusTimerProps) {
+/**
+ * 「被别的卡占着」那一句。**一份字串三个出口**：外层 span 的 title（鼠标）、
+ * 每颗按钮自己的 title（读屏）、点一下的回执（触屏）。导出是为了让测试钉住
+ * 「三个出口是同一句话」，而不是各抄一份、改文案时漏一处。
+ */
+export const FOCUS_BLOCKED_HINT = '已经在专注另一件事了，一次只能跑一个';
+
+/**
+ * 正计时「结束」不满一分钟那句。**一份字串三个出口**：外壳的 title（鼠标）、
+ * 按钮自己的 title（读屏）、点一下的回执（触屏）——导出同一个理由：让测试钉住
+ * 三个出口是同一句话，而不是各抄一份、改文案时漏一处。
+ */
+export const FOCUS_UP_TOO_SHORT = '不到一分钟，记下来也是 0 分钟';
+
+export function FocusTimer({ minutes, label, breakMinutes = 0, quietIdle, onHint, onComplete, onAbandon }: FocusTimerProps) {
   const [remainingSec, setRemainingSec] = useState<number | null>(null);
   // 现在跑的是哪一段。`'focus'` 是专注，`'break'` 是歇着——**用一个 phase 而
   // 不是再加一个 `resting` 布尔**：两个布尔能拼出「又在专注又在休息」这种
@@ -347,13 +409,23 @@ export function FocusTimer({ minutes, label, breakMinutes = 0, onComplete, onAba
           >{m}:{s}</span>
           {/* 不足一分钟时禁用，`title` 说明白为什么——一条 0 分钟的记录
               在统计里什么都不是。禁用按钮自己的 title 是它的 accessible
-              description，读屏读得到（下面那段注释为这件事考证过）。 */}
-          <Button
-            size="small"
-            onClick={finishUp}
-            disabled={!enough}
-            title={enough ? undefined : '不到一分钟，记下来也是 0 分钟'}
-          >结束</Button>
+              description，读屏读得到（下面那段注释为这件事考证过）。
+              **外面那层壳是触屏那条路**：disabled 的按钮不派发指针事件、手机又
+              没有 hover，那句只在 title 里的话到不了人手。壳跟「被别的卡占着」
+              那一族共用 `.ink-focus-blocked`（那两条声明要的就是这件事：按钮的
+              指针事件让给外层、光标补回 not-allowed），满了之后壳上什么都不挂。 */}
+          <span
+            className={enough ? undefined : 'ink-focus-blocked'}
+            title={enough ? undefined : FOCUS_UP_TOO_SHORT}
+            onClick={enough ? undefined : () => onHint?.(FOCUS_UP_TOO_SHORT)}
+          >
+            <Button
+              size="small"
+              onClick={finishUp}
+              disabled={!enough}
+              title={enough ? undefined : FOCUS_UP_TOO_SHORT}
+            >结束</Button>
+          </span>
           <Button size="small" onClick={cancel}>取消</Button>
         </span>
       );
@@ -369,7 +441,7 @@ export function FocusTimer({ minutes, label, breakMinutes = 0, onComplete, onAba
           aria-live="polite"
           aria-label={`${resting ? '休息' : '专注'}倒计时还剩 ${m} 分 ${s} 秒`}
         >{m}:{s}</span>
-        <Button size="small" onClick={cancel}>{resting ? '跳过休息' : '取消专注'}</Button>
+        <Button size="small" onClick={cancel}>{resting ? '跳过休息' : '取消计时'}</Button>
       </span>
     );
   }
@@ -377,8 +449,8 @@ export function FocusTimer({ minutes, label, breakMinutes = 0, onComplete, onAba
   // 被别的卡占着锁时那句解释，**span 和按钮上各挂一份，两份都要**——它们喂的是
   // 两条互不相通的通道，实测（CDP 读 Accessibility 树）确认过：
   //
-  //   <button disabled title="…">          name="开始专注"  description="已经在专注…"
-  //   <span title="…"><button disabled>     name="开始专注"  description="(无)"
+  //   <button disabled title="…">          name="番茄钟"  description="已经在专注…"
+  //   <span title="…"><button disabled>     name="番茄钟"  description="(无)"
   //   ↑ 那个 span 本身                       role=generic（AT 不会主动播报）
   //
   // 也就是说：**禁用按钮自己的 `title` 是它的 accessible description，读屏读得到**；
@@ -394,16 +466,25 @@ export function FocusTimer({ minutes, label, breakMinutes = 0, onComplete, onAba
   // 一层」：那样写过一版，两种状态的 JSX 结构不同，React 会把按钮卸载再挂一颗新的
   // ——键盘正停在这颗按钮上的人，会因为别的卡开始专注而把焦点掉回 <body>
   // （FocusTimer.test.tsx 里一条既有测试当场逮住了它，测试红只是表象）。
-  const blockedHint = blocked ? '已经在专注另一件事了，一次只能跑一个' : undefined;
+  const blockedHint = blocked ? FOCUS_BLOCKED_HINT : undefined;
+  // 跑着的那两支在上面就 return 了，能走到这里的只有闲置那一支——`quietIdle`
+  // 加的类因此只作用在「番茄钟」「正计时」这两颗上（见那条 prop 的注释）。
+  const idleClass = [quietIdle && 'ink-hover-only', blocked && 'ink-focus-blocked'].filter(Boolean).join(' ') || undefined;
   return (
-    <span className={blocked ? 'ink-focus-blocked' : undefined} title={blockedHint}>
-      <Button size="small" disabled={blocked} onClick={start} title={blockedHint}>开始专注</Button>
+    <span
+      className={idleClass}
+      title={blockedHint}
+      // 触屏那一族的出路：按钮被 CSS 让开了指针事件（`.ink-focus-blocked > .ant-btn`），
+      // 命中的是这层 span，于是点一下能听见为什么点不动。只在被占着时挂——
+      // 平时这层外壳就是那两颗按钮本身。
+      onClick={blocked ? () => onHint?.(FOCUS_BLOCKED_HINT) : undefined}
+    >
+      <Button size="small" disabled={blocked} onClick={start} title={blockedHint}>番茄钟</Button>
       {/* 正计时（仿滴答清单跟番茄计时并列的那一档，见上面 `upFrom` 那段）。
-          **摆成第二颗按钮，不是藏进菜单**：它跟「开始专注」是并列的两种开始
-          方式，藏一个起来等于说其中一种是次要的——而「这件事到底花我多久」
-          跟「我能不能坚持二十五分钟」是两个都常见的问题。
-          文案写「正计时」不写「开始正计时」：旁边那颗已经带了「开始」，
-          两颗并排时第二个「开始」是纯噪音。 */}
+          **摆成第二颗按钮，不是藏进菜单**：它跟上面那颗是并列的两种计时方式，
+          藏一个起来等于说其中一种是次要的——而「这件事到底花我多久」跟
+          「我能不能坚持二十五分钟」是两个都常见的问题。
+          文案写「正计时」不写「开始正计时」：两颗并排时第二个「开始」是纯噪音。 */}
       <Button size="small" disabled={blocked} onClick={startUp} title={blockedHint}>正计时</Button>
     </span>
   );

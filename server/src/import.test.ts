@@ -263,13 +263,42 @@ describe('POST /api/import（真 app）', () => {
    * 新机器第一次拆解才以 401 现形（这正是 2026-09-26 拍板掀开明文的原因）。
    */
   it('换机往返：导出端点给明文密钥，导入到空机器后真密钥落地', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl' });
+    writeSettings({
+      ...DEFAULT_SETTINGS, aiEndpointId: 'a',
+      aiEndpoints: { a: { baseUrl: 'https://a.test/v1', key: 'sk-abcdefghijkl', model: 'm-a' }, b: { baseUrl: 'https://b.test/v1', key: 'sk-bbbbbbbbcdef', model: 'm-b' } },
+    });
     const nine: Record<string, unknown> = { settings: await (await app.request('/api/settings/export')).json() };
     for (const k of IMPORT_KEYS) nine[k] = (await (await app.request(`/api/${k}`)).json()) as unknown;
     // 模拟新机器：设置从零开始
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: '' });
+    writeSettings({ ...DEFAULT_SETTINGS });
     const res = await postImport(nine);
     expect(res.status).toBe(200);
-    expect(readSettings().aiKey).toBe('sk-abcdefghijkl');
+    // 各家的密钥各归各家——一份文件里带回来的不是一把共用的
+    expect(readSettings().aiEndpoints.a.key).toBe('sk-abcdefghijkl');
+    expect(readSettings().aiEndpoints.b.key).toBe('sk-bbbbbbbbcdef');
+    expect(readSettings().aiEndpointId).toBe('a');
+  });
+
+  /**
+   * 用户手上躺着的是**旧版**导出的备份文件（平铺的 `aiBaseUrl` / `aiKey` / `aiModel`）。
+   * 导入不能把它读成「什么都没配」——那份密钥就静默没了，而导入的界面照样报成功。
+   */
+  /**
+   * 用户手上躺着的是**旧版**导出的备份文件。旧版那份没有 `aiEndpoints` 这个键——
+   * 别拿 `{ ...DEFAULT_SETTINGS }` 拼，那会带上一张空表，而空表在新版里是
+   * 「真的把所有家都删掉」的意思，跟老文件完全不是一回事。
+   */
+  it('老形状的导出文件（平铺三格）导入后落成一条记录', async () => {
+    writeSettings({ ...DEFAULT_SETTINGS });
+    const payload: Record<string, unknown> = {
+      settings: { aiMode: 'api', aiBaseUrl: 'https://旧.test/v1', aiKey: 'sk-旧的', aiModel: 'm-旧' },
+    };
+    for (const k of IMPORT_KEYS) payload[k] = [];
+    const res = await postImport(payload);
+    expect(res.status).toBe(200);
+    const s = readSettings();
+    expect(Object.values(s.aiEndpoints)).toEqual([{ baseUrl: 'https://旧.test/v1', key: 'sk-旧的', model: 'm-旧' }]);
+    expect(s.aiEndpointId).toBe(Object.keys(s.aiEndpoints)[0]);
+    expect(s.aiMode).toBe('api');
   });
 });

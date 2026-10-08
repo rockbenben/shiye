@@ -95,7 +95,7 @@ describe('CalendarGrid：三档切换（导航行 + 正文哪个组件）', () =
 
     const weekDays = calendarDays([], ANCHOR, 'week'); // 8/10（周一）- 8/16（周日）
     const { container: weekC } = setup({ mode: 'week', days: weekDays });
-    expect(weekC.querySelector('.ink-cal-heading')!.textContent).toBe('8月10日 - 8月16日');
+    expect(weekC.querySelector('.ink-cal-heading')!.textContent).toBe('8月10日–16日');
 
     const dayDays = calendarDays([], ANCHOR, 'day');
     const { container: dayC } = setup({ mode: 'day', days: dayDays });
@@ -113,13 +113,13 @@ describe('CalendarGrid：三档切换（导航行 + 正文哪个组件）', () =
     const crossMonthAnchor = new Date(2026, 8, 2, 12, 0, 0);
     const crossMonthDays = calendarDays([], crossMonthAnchor, 'week');
     const { container: crossMonthC } = setup({ mode: 'week', anchor: crossMonthAnchor, days: crossMonthDays });
-    expect(crossMonthC.querySelector('.ink-cal-heading')!.textContent).toBe('8月31日 - 9月6日');
+    expect(crossMonthC.querySelector('.ink-cal-heading')!.textContent).toBe('8月31日–9月6日');
 
     // 2026-12-30 是周三，mondayOf 落在 12/28（周一），周日是 2027-1-3——跨年。
     const crossYearAnchor = new Date(2026, 11, 30, 12, 0, 0);
     const crossYearDays = calendarDays([], crossYearAnchor, 'week');
     const { container: crossYearC } = setup({ mode: 'week', anchor: crossYearAnchor, days: crossYearDays });
-    expect(crossYearC.querySelector('.ink-cal-heading')!.textContent).toBe('12月28日 - 1月3日');
+    expect(crossYearC.querySelector('.ink-cal-heading')!.textContent).toBe('2026年12月28日–1月3日');
   });
 
   // 上限方向：周/日视图不能出现月格的任何一部分（星期表头 + CalendarFull

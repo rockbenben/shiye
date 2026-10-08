@@ -52,7 +52,24 @@ export function CalendarAgenda({ days, now, selectedKey, onSelectDay, onOpen }: 
   const withTasks = days.filter((d) => d.tasks.length > 0);
 
   if (withTasks.length === 0) {
-    return <p className="ink-empty-note">这个月还没有排任何事。</p>;
+    /**
+     * 原来只有半句「这个月还没有排任何事。」——那是一句**描述**，不是一条出路。
+     *
+     * 出路要说**这一屏此刻做得成的那两件**：翻月份（那两颗的名字是「上一页」/
+     * 「下一页」），或者切到「月」那一档去点一天——**不能说「点下面任意一天」**，
+     * 因为这句话正是在「一天都没有」时渲染的，下面什么都没有。而「在这天新建」
+     * 那颗只在选中某天之后才出现，所以真要给这个月加东西，得先离开这一档。
+     *
+     * 指路**按名字指，不按方位指**：跟 `SettingsModal.tsx` 里那句「不说『左边的』」
+     * 同一条理由——手机上那一排不在「上面」，照着方位找的人在最需要这句话的
+     * 那一档里找不到。
+     */
+    return (
+      <p className="ink-empty-note">
+        这个月还没有排任何事。换月份按「上一页」/「下一页」；要往这个月里加一条，
+        切到「月」那一档点一天，那天上面就会出「在这天新建」。
+      </p>
+    );
   }
 
   return (

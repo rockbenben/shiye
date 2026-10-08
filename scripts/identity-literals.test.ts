@@ -222,7 +222,7 @@ it('Node 最低版本：package.json / CI / README / 两句启动提示，五处
   // 启动脚本弹给用户的那两句。**按「N[.N] 以上」这个形状抓**——两个文件里
   // 那句的自然写法就是这样，改写了措辞就把锚点一起改（`toBeGreaterThan(0)`
   // 会先叫一声，不会静默变哑）。
-  // 小数部分可选：README 那句是「要 Node 24 以上」（只写大版本），而这两句
+  // 小数部分可选：README 那句是「要 Node 26 以上」（只写大版本），而这两句
   // 原来写的是「20.19 以上」（带小版本）——两种都得抓得住，否则把其中一种
   // 改成另一种写法时，这条断言会**因为抓不到而变哑**（`vers.length` 归零）。
   for (const file of ['no-node.txt', 'ended.txt']) {
@@ -370,4 +370,65 @@ it('builder 的 publish 指向的 owner/repo 就是仓库自己', () => {
   expect(yml).toMatch(/provider:\s*github/);
   expect(yml).toMatch(/owner:\s*rockbenben/);
   expect(yml).toMatch(/repo:\s*shiye/);
+});
+
+/**
+ * 第七对：**应用版本号，四个 package.json 写着同一个数。**
+ *
+ * 这个仓库是 npm workspaces：根 `package.json` 管着三个工作区（server / web /
+ * desktop），四个 package.json 各写了一份 `version`。**版本号是从发布流程里
+ * 冒出来的**：产物叫 `shiye-<version>-win-setup.exe`，那个 `<version>` 来自
+ * `desktop/package.json`（electron-builder 的 `app: desktop` 指的就是那个
+ * 目录），而 Release 挂在 tag `v<version>` 上。
+ *
+ * 四份不一样的时候**没有任何一步会红**：npm 不管 workspace 之间的 version
+ * 一致性（根包是 private，本来也不会被 publish 出去），electron-builder 只读
+ * desktop 那一份，tag 是人手动打的。于是出现「仓库里写着 0.1.7、打出来的包叫
+ * 0.1.6、Release 挂在 v0.1.7 上」——**自动更新就此废掉**：electron-updater
+ * 读的是 latest.yml 里的版本号，装的机器拿它跟本机版本比，对不上就永远收不到
+ * 更新，而且没有任何报错。
+ *
+ * `release.yml` 里那道「tag 与 desktop/package.json 的版本对账」拦的是**打 tag
+ * 那一刻**；这条守的是**仓库状态**——四处版本号在提交之间就已经撞散了的话，
+ * 发版那一步拦到的会是另一个数，白拦。
+ */
+it('应用版本号：根 / server / web / desktop 四个 package.json 写的是同一个', () => {
+  const files = ['package.json', 'server/package.json', 'web/package.json', 'desktop/package.json'];
+  const versions = files.map((f) => {
+    const v = (JSON.parse(read(...f.split('/'))) as { version?: string }).version;
+    // 先断「真的读到了」——少了它，两边都是 undefined 时 toBe 直接绿，
+    // 这条守卫会在它最该说话的那一刻变哑（同上面 appId 那对的写法）。
+    expect(v, `${f} 里没有 version 字段`).toBeTruthy();
+    return v!;
+  });
+
+  // 以 desktop 那份为准：**产物的名字是它定的**，其余三份跟着它。
+  const want = versions[3]!;
+  for (const [i, v] of versions.entries()) {
+    expect(v, `${files[i]} 的 version 与 desktop/package.json（${want}）对不上`).toBe(want);
+  }
+});
+
+/**
+ * 第八对：**发版那一步真的会拿 tag 和版本号对账。**
+ *
+ * 上面那条守的是仓库里四个版本号一致；这一条守的是**打 tag 的那一刻有没有人
+ * 去对**。两者是不同的事：仓库一致、tag 打错（`v0.1.7` 打在 0.1.6 上）一样
+ * 会让自动更新废掉，而 workflow 里少写一个步骤，**不会有人发现**——它只是
+ * 「不发版了」这么安静地过掉。
+ *
+ * 匹配的是 workflow 里那句**读 desktop/package.json** 的代码：那份才是产物名
+ * 的出处（electron-builder 的 `app: desktop`），拿根 package.json 对是错位的。
+ */
+it('release.yml 在出包前拿 tag 和 desktop/package.json 的版本对账', () => {
+  const rel = read('.github', 'workflows', 'release.yml');
+  // 匹配的是**代码里那一行**，不是注释和步骤名里提到的那几个字——只 match
+  // 「desktop/package.json」的话，把对账改成读根 package.json 照样绿（那
+  // 份不是产物名的出处），这条守卫就在它最该说话的那一刻变哑。
+  expect(rel, 'release.yml 里没找到读 desktop/package.json 版本号的那一行——tag 打在错的版本上会让自动更新静默失效')
+    .toMatch(/require\('\.\/desktop\/package\.json'\)/);
+  // 对得上：把 tag 的 v 前缀去掉之后跟 version 比。
+  expect(rel, 'release.yml 里没找到「去 v 前缀」的写法').toMatch(/\$\{GITHUB_REF_NAME#v\}/);
+  // 对不上就红：没有这条，错版本照样出包。
+  expect(rel, 'release.yml 里没找到「对不上就退出」的判据').toMatch(/exit 1/);
 });

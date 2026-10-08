@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS, dataDir, deleteOutboxFile, deviceConfigPath, ensureDataFiles, newTask, outboxFiles,
   paths, readLastOutboxError, readOutboxFile, readSettings, readTasks, takeBoardReport, writeSettings, writeTasks,
 } from './store.js';
+import * as entityStore from './entityStore.js';
 
 let dir: string;
 
@@ -69,6 +70,24 @@ describe('原子写', () => {
     const t = newTask({ title: 'x' });
     writeTasks([t]);
     expect(readFileSync(join(paths().tasks, `${t.id}.json`), 'utf8')).toContain('\n  ');
+  });
+
+  /**
+   * **写设置走的是「改名会重试」那一步。**
+   *
+   * Windows 上 `renameSync` 会偶发 EPERM（目标文件刚写完、句柄还没释放），
+   * 而 `device.json` 是**整份设置**——抖一下就是「保存设置回 500、那次修改没落盘」。
+   * 实体文件那条路（`entityStore.writeOne`）的守卫在 entityStore.test.ts 里，
+   * 这一条盯的是**设置**这条路有没有接上同一个重试。
+   *
+   * 判据是「调用了带重试的那个函数」，不是「碰巧没抖」——后者在测试里永远是绿的。
+   */
+  it('写设置的最后一步是那个会重试的改名（Windows 上 rename 会偶发 EPERM）', () => {
+    const spy = vi.spyOn(entityStore, 'renameIntoPlace');
+    writeSettings({ ...DEFAULT_SETTINGS, focusMinutes: 30 });
+    expect(spy).toHaveBeenCalled();
+    expect(readSettings().focusMinutes).toBe(30);
+    spy.mockRestore();
   });
 });
 

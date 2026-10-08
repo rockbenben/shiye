@@ -46,6 +46,8 @@ export const SHORTCUTS: ShortcutRow[] = [
   // （en dash + 空格），于是**同一行里两种范围写法并排**——两个都对，但
   // 摆在一起会让人疑心它们说的是两件事。全站范围一律用「～」。
   { scope: 'page', kind: 'view', keys: '1～9', what: '切到导航上第 1～9 个去处' },
+  { scope: 'page', kind: 'move', keys: '↑ / ↓', what: '在列表里挪光标（按着 Shift 是连着选）' },
+  { scope: 'page', kind: 'selectAll', keys: 'Ctrl + A', what: '选中光标所在那一组（Mac 是 ⌘ + A）' },
   { scope: 'page', kind: 'edit', keys: 'E', what: '编辑选中的那一条（只选中一条时）' },
   { scope: 'page', kind: 'done', keys: 'D', what: '把选中的几条标成已完成' },
   { scope: 'page', kind: 'due', keys: 'T / M / W', what: '把选中的几条改到今天 / 明天 / 下周' },
@@ -55,7 +57,7 @@ export const SHORTCUTS: ShortcutRow[] = [
   // 焦点在卡片上时的那一个。**它是整层键盘操作的入口**：`E`/`D`/`T`/`M`/`W`
   // 全都作用在选中集合上，而在这之前进入选中态的唯一办法是 Ctrl/Shift 点卡片
   // ——一个鼠标动作。
-  { scope: 'card', kind: 'select', keys: 'X', what: '选中 / 取消选中焦点所在的那一条（Shift + X 连选）' },
+  { scope: 'card', kind: 'select', keys: 'X 或 空格', what: '选中 / 取消选中焦点所在的那一条（Shift + X 连选）' },
   // 表单里的三个。**加了新快捷键就得写进这张表**——这个文件顶上那句「它会飘」
   // 说的就是这件事，而这三个键落地那一轮确实忘了写（`keymap.test.ts` 当时只
   // 盯着 `KeyAction`，`FormKey` 不在它的扫描范围里，什么都没红）。现在两族

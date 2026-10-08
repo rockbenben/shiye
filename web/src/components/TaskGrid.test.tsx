@@ -124,6 +124,39 @@ describe('TaskGrid', () => {
     expect(within(head).getByText('全部改到今天')).toBeTruthy();
   });
 
+  it('组头上挂得了一句次要的话（hint）——「最久的 20 天」跟计数并排，不另起一屏', () => {
+    show(() => [{ key: 'a', title: '已过期', hint: '最久的 20 天', tasks: [task()] }]);
+    const head = document.querySelector('.ink-grid-heading') as HTMLElement;
+    expect(head.querySelector('.ink-grid-hint')?.textContent).toBe('最久的 20 天');
+    // 顺序：先「多少条」，再「最久的一条有多久」。开头那个 ▾ 是折叠三角
+    // （`.ink-grid-caret`，aria-hidden），组头能点所以它在。
+    expect(head.textContent).toBe('▾已过期1最久的 20 天');
+  });
+
+  /**
+   * `briefTime` 从 section 流到卡上（省字规则本身测在 TaskCard.test.tsx）。
+   * 这一条盯的是**接线**：TaskGrid 里改成按 `section.key` 猜、或者两条渲染支
+   * 里漏了一条——能拖的视图走 `GridCell`，不能拖的走 `sectionNodes` 那一支，
+   * 两支各长各的，「只接到一支」正是这个仓库反复记过账的那个形状。
+   */
+  it('briefTime 两支都算：能拖的格子（GridCell）和不能拖的分组', () => {
+    const owed = task({ id: 'x', title: '欠着的', due: '2026-08-11T12:00:00.000Z' });
+    const secs = () => [{ key: 'a', title: '已过期', briefTime: true, tasks: [owed] }];
+    const draggable = show(() => secs(), '没有', { layout: 'cells', keepEmpty: true, onDropTo: vi.fn() });
+    const plain = show(() => secs());
+    for (const [where, container] of [['格子（能拖）', draggable.container], ['分组（不能拖）', plain.container]] as const) {
+      const sr = container.querySelector('.ink-overdue-mark .ink-sr-only');
+      expect(sr, `${where} 这一支没把 briefTime 传到卡上——卡上会照旧各说一遍「过期」`).toBeTruthy();
+      expect(sr!.textContent).toBe('过期 ');
+    }
+  });
+
+  it('不给 briefTime 就一个字都不省（别的分组没有那句上文）', () => {
+    const { container } = show(() => [{ key: 'a', title: '今天', tasks: [task({ id: 'x', due: '2026-08-11T12:00:00.000Z' })] }]);
+    expect(container.querySelector('.ink-overdue-mark .ink-sr-only')).toBeNull();
+    expect(container.querySelector('.ink-overdue-mark')?.textContent).toBe('过期 3 天');
+  });
+
   it('startFolded 的组一开始是折起来的：组头和条数在，卡片不渲染', () => {
     show(() => [{ key: 'done', title: '已完成', tasks: [task({ id: 'x', title: '做完了的' })], startFolded: true }]);
     expect(screen.getByText('已完成')).toBeTruthy();

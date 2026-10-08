@@ -56,9 +56,9 @@ export function resolvePaths(host: HostInfo, env: NodeJS.ProcessEnv = process.en
     // 被拒的配置传下去（Task 2 才会在服务启动后间接发现），不如现在就拒绝。
     if (basename(explicit) !== 'data') {
       throw new Error(
-        `DATA_DIR 的最后一段必须字面叫 "data"（大小写敏感），现在是 "${basename(explicit)}"：` +
+        `DATA_DIR 的最后一段必须字面叫「data」（大小写敏感），现在是「${basename(explicit)}」：` +
           `服务端 agentDataDir()（server/src/store.ts）把 AI 的工作目录算成 join(AGENT_CWD, 'data')，` +
-          `叫别的名字 aiSeesSameData() 永远不成立，AI 拆解会被拒绝。把同步文件夹改名成 "data" 再试。`,
+          `叫别的名字 aiSeesSameData() 永远不成立，AI 拆解会被拒绝。把同步文件夹改名成「data」再试。`,
       );
     }
     // 数据目录被指到别处时，AI 的工作目录也要跟着挪到它的父目录，否则

@@ -1,12 +1,13 @@
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { exec } from 'node:child_process';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Context } from 'hono';
 import { createApp } from './app.js';
 import { Bus, watchData } from './events.js';
+import { renameIntoPlace } from './entityStore.js';
 import { toIcs } from './ics.js';
 import { logLanWarningIfNeeded, resolveBindHost } from './lanBind.js';
 import { mergeOutbox } from './outbox.js';
@@ -50,7 +51,11 @@ function writeIcsFile(): void {
     if (existsSync(file) && readFileSync(file, 'utf8') === next) return;
     const tmp = `${file}.tmp`;
     writeFileSync(tmp, next, 'utf8');
-    renameSync(tmp, file);
+    // **改名带重试**（`entityStore.ts` 的 `renameIntoPlace`）：Windows 上
+    // `renameSync` 会偶发 EPERM（目标文件刚写完、句柄还没完全释放）。这一份
+    // 每 30 秒重写一次，是**订阅端拿到的日历**——抖一下就是手机上的日历停在
+    // 上一版，而上面那个 catch 只打一行警告，不会有第二个人知道。
+    renameIntoPlace(tmp, file);
   } catch (e) {
     console.warn('[ics] 导出 .ics 失败：', (e as Error).message);
   }
@@ -91,6 +96,57 @@ readProposals();
 
 const bus = new Bus();
 const app = createApp(bus);
+
+/**
+ * **打磨稿只在夹具服务里端出去。** `tools/design-preview/` 是那三张表
+ * （`batch1.html` / `batch2.html` / `floors.html`）加共用的 `drive.js` 和探针
+ * `probe.js`——仓库里的内部审计稿，不是产品的一部分，所以它住在 `tools/` 而不是
+ * `web/public/`：后者会被 Vite 原样拷进 `web/dist`，而 `web/dist` 整个进安装包
+ * （electron-builder 的 extraResources），等于每个装好的应用都带着这套稿子、
+ * `/design-preview/batch1.html` 对最终用户敞开。搬进 `tools/` 之后下面这块是唯一
+ * 还认它的地方，而要它生效得显式带 `DESIGN_PREVIEW=1`（跑法见 CONTRIBUTING
+ * 「加了界面就拍一眼」）。
+ *
+ * 顺序是承重的：这两条必须注册在下面 `/*` 那条 webDist 静态**之前**。反过来
+ * 的话 `web/dist` 里只要还留着上一版构建的旧稿子，旧的那一份就会赢——而它坏的
+ * 样子是「屏幕上跑的是旧机器、报错却长得像读数不对」，这个仓库在这上面白跑过
+ * 一轮（见下面那条 no-store 的来历）。
+ *
+ * **这一层不许被缓存。** 这些文件不带哈希（不像 `/assets/*`），一轮取证里能改
+ * 十几遍；浏览器按 `Last-Modified` 猜着缓存，于是「页面在跑旧的机器」——上一轮
+ * 就是被这一条骗了一次：`drive.js` 里点开详情的重试逻辑已经改好，屏上报的还是
+ * 老那句「首帧没等到」，白花一轮排查。只有这一层放弃缓存，资源那半边照旧
+ * （带哈希，缓存越久越好）。
+ */
+const designPreviewRoot = join(repoRoot, 'tools', 'design-preview');
+if (process.env.DESIGN_PREVIEW && existsSync(designPreviewRoot)) {
+  app.use('/design-preview/*', async (c, next) => {
+    await next();
+    c.res.headers.set('Cache-Control', 'no-store');
+  });
+  app.use(
+    '/design-preview/*',
+    serveStatic({
+      root: designPreviewRoot,
+      // 挂载点前缀和目录名都叫 design-preview，但 URL 不能直接当目录用：不剥掉
+      // 前缀就会去找 tools/design-preview/design-preview/。
+      rewriteRequestPath: (path) => path.replace(/^\/design-preview\//, ''),
+    }),
+  );
+}
+
+/**
+ * **这一条 404 不看开关、永远注册**，为的是让「忘了带 `DESIGN_PREVIEW=1`」响得
+ * 起来。没有它，这个请求会落到下面的 SPA fallback，拿到 200 + 一份 `index.html`，
+ * 而 `drive.js` 把那个地址当 `<script>` 加载——满屏只报 `Unexpected token '<'`，
+ * 跟「稿子没挂上」完全对不上号（那条绝对路径旁边写的就是这个教训）。
+ * 注册在上面那块之后：稿子真在时轮不到它，只有「没挂上」或「这个文件真的不
+ * 存在」才走到这儿。
+ */
+app.get(
+  '/design-preview/*',
+  (c) => c.text('打磨稿没有端出来：这一层只由带 DESIGN_PREVIEW=1 的夹具服务挂（跑法见 CONTRIBUTING「加了界面就拍一眼」）。', 404),
+);
 
 if (existsSync(webDist)) {
   // SPA 外壳绝不能被缓存：它里面写死了带哈希的资源文件名，浏览器缓存了旧的一份之后，

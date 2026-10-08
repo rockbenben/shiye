@@ -9,8 +9,11 @@ export interface AgentFilesResult {
 /**
  * AI 子进程实际会读的只有这两样：固定提示词（server/src/expand.ts 的 `PROMPT`，
  * 「读 AGENTS.md 和 workflows/expand.md……」）加上 AGENTS.md 内部对
- * workflows/ 别的文件的交叉引用。没有第三样，CLAUDE.md 是排期/改代码的
- * 规矩，跟拆解无关，不拷。
+ * workflows/ 别的文件的交叉引用。没有第三样。
+ *
+ * **AGENTS.md 末尾那一节是给「在仓库里写代码的人」看的排期规矩，跟拆解无关**——
+ * 它就在这份文件里，AI 读得到也无妨：那一节全是「怎么排定期回顾」，而拆解的 AI
+ * 压根不排任何东西，读到也不会照做。
  */
 const ITEMS = ['AGENTS.md', 'workflows'] as const;
 

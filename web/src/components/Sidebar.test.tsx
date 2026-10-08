@@ -35,7 +35,7 @@ const setup = (over: Partial<Parameters<typeof Sidebar>[0]> = {}) => {
     <AntApp>
       <Sidebar
         viewDefs={defs} current="today" onSelect={onSelect}
-        tasks={[]} insights={[]} inbox={[]} now={NOW} lists={[]}
+        tasks={[]} insights={[]} trash={[]} inbox={[]} now={NOW} lists={[]}
         onAddList={vi.fn()}
         composer={<div data-testid="随手记" />}
         {...over}
@@ -799,7 +799,7 @@ describe('Sidebar：让 AI 回顾这份清单', () => {
   it('普通清单有这一项', async () => {
     setup({ lists: [plain], onReviewList: vi.fn(), tasks: [task({ id: 'a', listId: 'l1' })] });
     const labels = (await menuOf('工作')).map((e) => e.textContent);
-    expect(labels).toContain('让 AI 回顾这份清单');
+    expect(labels).toContain('让 AI 回顾这份清单（1 条）');
   });
 
   /**
@@ -840,7 +840,8 @@ describe('Sidebar：让 AI 回顾这份清单', () => {
     const onReviewList = vi.fn();
     setup({ lists: [plain], onReviewList, tasks: [task({ id: 'a', listId: 'l1', status: 'todo' })] });
     const item = (await menuOf('工作')).find((e) => /让 AI 回顾这份清单/.test(e.textContent ?? ''))!;
-    expect(item.textContent).toBe('让 AI 回顾这份清单');
+    // **名字里带条数**（差距清单第 14 条）：点下去之前就知道这一轮大概要花多久。
+    expect(item.textContent).toBe('让 AI 回顾这份清单（1 条）');
     expect(item.className).not.toContain('disabled');
     fireEvent.click(item);
     expect(onReviewList).toHaveBeenCalledWith(expect.objectContaining({ id: 'l1' }));

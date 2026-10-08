@@ -50,7 +50,7 @@ export function checkKeysAndIds(payload: unknown): CheckOk | CheckFail {
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
       if (!isSafeId(id)) {
-        return { ok: false, error: `${k}[${i}] 的 id 不安全——不能是空串，也不能包含路径分隔符（/ 或 \\）或 ..（可能是路径穿越），或不符合存储层的文件名安全规则（见 entityStore.ts 的 isSafeId：还挡 Windows 保留设备名、控制字符、非法字符、尾随点/空格、冲突副本后缀等）` };
+        return { ok: false, error: `${k}[${i}] 的 id 不安全——不能是空串，不能包含路径分隔符（/ 或 \\）或 ..，也不能是 Windows 不能当文件名的字（保留设备名、控制字符、尾随点/空格那类）。这份文件多半不是「导出数据」原样导出的，或者中间被手动改过——重新导出一份再导入` };
       }
       if (seen.has(id)) return { ok: false, error: `${k}[${i}] 的 id「${id}」在这张表里重复出现` };
       seen.add(id);
@@ -109,7 +109,7 @@ function checkShape(key: DataTableKey, raw: unknown): string | null {
       return isStr(raw.taskId) && isPlainObject(raw.patch) && Object.keys(raw.patch).length > 0
         && isStr(raw.reason) && isIsoOrNull(raw.createdAt) && raw.createdAt !== null
         && ('dismissed' in raw ? isBool(raw.dismissed) : true)
-        ? null : '要形如 { taskId, patch(非空对象), reason, createdAt[, dismissed] }';
+        ? null : '要形如 { taskId, patch（非空对象）, reason, createdAt[, dismissed] }';
     case 'lists':
       return isStr(raw.name) && isStr(raw.color) && (raw.folderId === null || isStr(raw.folderId))
         && typeof raw.order === 'number' && isBool(raw.archived)

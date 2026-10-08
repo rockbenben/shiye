@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { suggestGroups } from './suggest.js';
+import { POSTPONE_MIN, suggestGroups } from './suggest.js';
 import type { Task } from '../types.js';
 
 /** 本地墙钟：候选池的判据（`isInTodayView`）和几个边界都按本地日历日算。 */
@@ -53,11 +53,15 @@ describe('suggestGroups：四组', () => {
     expect(group([scheduled], 'recent')).toBeUndefined();
   });
 
-  it('一拖再拖：改过 2 次期以上，次数多的在前', () => {
+  it('一拖再拖：推迟过 2 次以上，次数多的在前', () => {
     const a = task({ id: 'a', postponeCount: 2, createdAt: iso(2026, 8, 20) });
     const b = task({ id: 'b', postponeCount: 5, createdAt: iso(2026, 8, 20) });
     const c = task({ id: 'c', postponeCount: 1, createdAt: iso(2026, 8, 20) });
     expect(group([a, b, c], 'postponed')!.tasks.map((x) => x.id)).toEqual(['b', 'a']);
+    // 那句解释逐字钉：它说的是门槛，数字必须来自常量；而措辞得跟卡片上那个
+    // 「推迟过 N 次」的记号一致——这一组原来写的是「改过 2 次以上期的」，
+    // 「以上」插在「2 次」和「期」中间，读一遍得停一下。
+    expect(group([a, b, c], 'postponed')!.hint).toBe(`推迟过 ${POSTPONE_MIN} 次以上的`);
   });
 
   it('躺很久了：建了 7 天以上还没做完，老的在前', () => {

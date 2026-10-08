@@ -47,6 +47,17 @@ name: Release
 permissions:
   contents: write
 
+# 同一个 tag 连着推两次，两趟会同时往**同一个 Release** 上挂资产——写的是同一
+# 批文件名，谁后传谁覆盖，中途还可能撞上「文件已存在」。这里让它们排队，
+# 一次只跑一趟。
+#
+# ⚠️ **发布这条不取消**：取消掉等于一个 Release 挂了一半（Windows 的包传上去了、
+# mac 的还没传），而 app.asar 那些资产名是固定的，重跑能不能覆盖干净还得看
+# 当时的时序。宁可多等几分钟。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   push:
     tags:
@@ -71,12 +82,38 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: '26'
           cache: npm
 
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      # ── tag 与产物名要能对上 ──
+      #
+      # **产物的名字来自 `desktop/package.json` 的 version，不是来自 tag。**
+      # electron-builder 的 `app: desktop` 指的就是那个目录，builder 打出来的
+      # 是 `shiye-<desktop/package.json 里那个版本>-win-setup.exe`；而 Release
+      # 是挂在 tag `v<版本>` 上的。两边对不上的时候**肉眼看不出来**（Release
+      # 页面上就是几个资产），但自动更新就废了：electron-updater 读的是
+      # latest.yml 里那个版本号，装的机器拿它跟本机版本比——对不上就永远
+      # 看不到更新，而且没有任何报错。
+      #
+      # 所以在这儿拦一道：不对上就别出包（失败的代价是几分钟，出错包的代价是
+      # 用户几个月收不到更新还查不出原因）。
+      #
+      # 手动跑（workflow_dispatch）没有 tag，这一步跳过——那是一次打包演练。
+      - name: tag 与 desktop/package.json 的版本对账
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./desktop/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 desktop/package.json 的 $PKG_VERSION 对不上——产物会按 $PKG_VERSION 命名却挂在 $GITHUB_REF_NAME 上，electron-updater 读的是前者，用户会一直收不到更新。先把版本号改一致再打这个 tag。"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME 与 desktop/package.json 的 $PKG_VERSION 一致 ✓"
 
       # 里面已经含 npm run build（web + server）和 desktop 的 tsc。
       - run: npm run dist:desktop
@@ -96,7 +133,13 @@ jobs:
       # 这两个文件之所以落在盘上：electron-builder.yml 的 publish: 块加上
       # dist:desktop 的 --publish never，builder 只写不传（这两样是否真的产出，
       # 由计划 Task 6 的一次真打包核验坐实），上传归下面那步。
-      - uses: actions/upload-artifact@v4
+      # **v7 不是追新，是 v4 已经停在 2025-03 了**（v4.6.2 之后没有再发）。
+      # 中间三版的变更对这条用法都没有影响：v5 切 Node 24 runtime、v6 正式
+      # 跑在 node24 上（要求 runner ≥ 2.327.1，GitHub 托管的 runner 早就够）、
+      # v7 改成 ESM 并多了一个「直传单个文件不打包」的可选参数。**这三样都没
+      # 动 `name` / `path` / `if-no-files-found`**：下面传的是多个文件的
+      # glob，走的还是压缩上传那条路。
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.os }}
           if-no-files-found: error

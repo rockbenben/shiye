@@ -1,10 +1,31 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from 'antd';
+
+/**
+ * 面板里的命令分四档，每档一个小标题。
+ *
+ * 分档不是装饰：面板原来是一条 25 行的无结构列表，「去处 / 清单 / 标签 / 动作」
+ * 四类全靠读字自己分——「收件箱」「今天」和「清单「生活杂事」」「标签「界面」」
+ * 和「随手记」混在一起，找一条动作要在里面扫一遍。
+ *
+ * **必填**：加一条命令时必须选一档，漏了编译不过。可选的话它会掉进没有小标题
+ * 的那一段，而没人会去查为什么少一行。
+ */
+export type CommandGroup = 'nav' | 'list' | 'tag' | 'action';
+
+/** 小标题的文字，和分档的先后。顺序写在这一个地方：渲染按它排，测试按它读。 */
+export const COMMAND_GROUPS: Array<{ key: CommandGroup; label: string }> = [
+  { key: 'nav', label: '去处' },
+  { key: 'list', label: '清单' },
+  { key: 'tag', label: '标签' },
+  { key: 'action', label: '动作' },
+];
 
 export interface Command {
   key: string;
   label: string;
   hint?: string;
+  group: CommandGroup;
   run: () => void;
 }
 
@@ -37,8 +58,15 @@ export function CommandPalette({ open, commands, onClose }: Props) {
     }
   }, [open]);
 
+  // 过滤后按档排一遍。`Array.prototype.sort` 是稳定的，所以同一档里还是调用方
+  // 传进来的顺序（去处那一段的数字键徽章就靠这个不动）；而档的先后由
+  // `COMMAND_GROUPS` 说了算，不跟着构造顺序走——构造顺序一变，屏幕上就会冒出
+  // 两个「动作」小标题，中间还隔着别档的东西。
   const filtered = useMemo(
-    () => commands.filter((c) => c.label.toLowerCase().includes(query.toLowerCase())),
+    () => commands
+      .filter((c) => c.label.toLowerCase().includes(query.toLowerCase()))
+      .sort((a, b) => COMMAND_GROUPS.findIndex((g) => g.key === a.group)
+        - COMMAND_GROUPS.findIndex((g) => g.key === b.group)),
     [commands, query],
   );
 
@@ -109,17 +137,29 @@ export function CommandPalette({ open, commands, onClose }: Props) {
       ) : (
         <ul id="ink-cmd-listbox" className="ink-cmd-list" role="listbox" aria-label="命令列表">
           {filtered.map((c, i) => (
-            <li
-              key={c.key}
-              id={`ink-cmd-opt-${i}`}
-              role="option"
-              aria-selected={i === activeIndex}
-              className={i === activeIndex ? 'ink-cmd-item ink-cmd-item-active' : 'ink-cmd-item'}
-              onClick={() => runAt(i)}
-            >
-              <span>{c.label}</span>
-              {c.hint && <span className="ink-cmd-key">{c.hint}</span>}
-            </li>
+            <Fragment key={c.key}>
+              {/* 小标题不是选项：`role=presentation` 让它不占 option，也不进
+                  方向键的序号（`aria-activedescendant` 只指得到 option）。
+                  `aria-hidden` 是有意的省略，不是漏标——每一条 label 自己就说了
+                  它是什么（「清单「生活杂事」」「标签「界面」」「把 9 条过期的改到
+                  今天」），念一遍「清单」再念「清单「生活杂事」」是同一句话说两遍。
+                  这行字是给眼睛的：一眼看清这一屏分几块、各块从哪儿开始。 */}
+              {(i === 0 || filtered[i - 1].group !== c.group) && (
+                <li role="presentation" aria-hidden="true" className="ink-cmd-group">
+                  {COMMAND_GROUPS.find((g) => g.key === c.group)?.label}
+                </li>
+              )}
+              <li
+                id={`ink-cmd-opt-${i}`}
+                role="option"
+                aria-selected={i === activeIndex}
+                className={i === activeIndex ? 'ink-cmd-item ink-cmd-item-active' : 'ink-cmd-item'}
+                onClick={() => runAt(i)}
+              >
+                <span>{c.label}</span>
+                {c.hint && <span className="ink-cmd-key">{c.hint}</span>}
+              </li>
+            </Fragment>
           ))}
         </ul>
       )}

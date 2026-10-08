@@ -11,8 +11,8 @@ import type { GridSection } from '../components/TaskGrid.js';
  * 是一件不成立的事。改叫「7 天内」还顺带对上了筛选栏里那一档——**同一个 7 天
  * 窗口原来在两处叫两个名字**（筛选栏一直写「7 天内」）。
  *
- * 判据一律看 `due`（不是 `remindAt`）——这两个字段在 AGENTS.md 里各管各的：
- * due 决定「过期了没有」，remindAt 决定「响不响」。议程回答的是前者。
+ * 判据一律看 `due`（不是 `reminders`）——这两个字段在 AGENTS.md 里各管各的：
+ * due 决定「过期了没有」，reminders 里的时刻决定「响不响」。议程回答的是前者。
  *
  * **第七组「还没开始」是从「没有时间」里分出来的。** 那一组原来同时装着两种
  * 意思完全相反的任务：「没截止日期，随时可以做」和「定了开始时间，现在还不能做」。
@@ -22,7 +22,7 @@ import type { GridSection } from '../components/TaskGrid.js';
  *
  * **只分「没有 due」那一支，有 due 的不动。** 一条「9 月 1 日开始、9 月 5 日截止」
  * 的任务，「你什么时候得处理它」的答案依然是那个截止日，它归 due 的桶是对的；
- * 卡片上那个「9 月 1 日 开始」的记号负责把剩下半句说完。
+ * 卡片上那个「9月1日 开始」的记号负责把剩下半句说完。
  */
 /**
  * 「快到期」/「紧急」= `due` 落在这么多天内（含已过期）。**3 不是 7**：一周
@@ -64,7 +64,8 @@ export function endOfDay(now: Date, plusDays: number): number {
  * 已了结的、要排序、要给「还没开始」默认折起来；分组那边什么都不做。
  *
  * 解不出来的 `due` 当成「没有时间」，不是崩掉也不是当成过期——AI 写过
- * 「下周三」这种，`AGENTS.md` 明写 `dueTasks` 会静默跳过，这里同样口径。
+ * 「下周三」这种，`AGENTS.md` 明写解析不了的 `reminders` 时刻会被静默跳过，
+ * 这里同样口径。
  */
 export type DueBucketKey = 'overdue' | 'today' | 'tomorrow' | 'week' | 'later' | 'none' | 'notStarted';
 
@@ -97,6 +98,24 @@ export function dueBucketOf(t: Task, now: Date): DueBucketKey {
   return 'later';
 }
 
+/**
+ * 「已过期」那一组要多带的那个字段。**两处按时间分组的构造都调它**
+ * （下面 `agendaSections`，和 `grouping.ts` 的时间轴那一支）——各写一遍的话，
+ * 多一个视图就有一处不说这句话，而那处恰恰是没人回头看的那一个。
+ *
+ * `briefTime`：卡上那颗红色记号只报时长（「3 天」），「过期」两个字由组头说。
+ * 原来一组 19 张卡各写一遍「过期 N 天」，眼睛先扫到 19 个「过期」才轮到任务。
+ *
+ * **这里只说「这一组组头担得起那句话」，不算组头那句「最久的 N 天」**——
+ * 那句要按屏幕上真正剩几条来算，而筛选栏是叠在分档**之后**的
+ * （`App.tsx` 的 `filterSections`）。在这儿算的话，筛掉三条，组头还写着
+ * 「最久的 20 天」而那一组只剩四条——跟「全部推到今天」那条「计数是多少
+ * 就改多少条」是同一条规矩，不能一个守一个不守。
+ */
+export function dueSectionExtras(key: DueBucketKey): Partial<GridSection> {
+  return key === 'overdue' ? { briefTime: true } : {};
+}
+
 /** 排序用的开始时刻。没有/解不出来的沉到最后。 */
 const startTime = (t: Task): number => {
   const at = Date.parse(t.startAt ?? '');
@@ -118,7 +137,7 @@ export function agendaSections(tasks: Task[], now: Date, keep: Set<string>): Gri
 
   return DUE_BUCKETS.map(({ key, title }) => {
     const rows = buckets.get(key)!;
-    if (key !== 'notStarted') return { key, title, tasks: sortByUrgency(rows, now) };
+    if (key !== 'notStarted') return { key, title, tasks: sortByUrgency(rows, now), ...dueSectionExtras(key) };
     // 「还没开始」这一组两处跟别的不一样，都写在这儿：
     //
     // ① **排序按 `startAt` 升序**（快轮到的在前），不用 `sortByUrgency`——那个排的是

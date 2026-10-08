@@ -28,6 +28,13 @@ describe('focusTotals', () => {
       week: { count: 2, minutes: 50 },
       month: { count: 3, minutes: 100 },
       all: { count: 4, minutes: 110 },
+      // 整个断言是 `toEqual`，所以窗口必须写进来：它和上面四个数出自同一批
+      // 边界变量，改边界时这里跟着红，不许悄悄漂移（界面上那行日期小字读的就是它）。
+      windows: {
+        today: { from: local(2026, 8, 19, 0), to: local(2026, 8, 19, 0) },
+        week: { from: local(2026, 8, 17, 0), to: local(2026, 8, 19, 0) },
+        month: { from: local(2026, 8, 1, 0), to: local(2026, 8, 19, 0) },
+      },
     });
   });
 
@@ -382,5 +389,62 @@ describe('focusTotals：本周的边界跟着 weekStart 走', () => {
       expect(focusTotals(t, WED, ws).today.minutes).toBe(0);
       expect(focusTotals(t, WED, ws).month.minutes).toBe(25);
     }
+  });
+});
+
+/**
+ * **每一档盖的是哪几天**（界面四块并排旁边那行日期小字读的就是它）。
+ *
+ * 实测的起因：10 月 3 日那一屏上「本周 3 小时 45 分」摆在「本月 2 小时 6 分」
+ * 上面，第一反应是「本月包含本周，怎么反而少」。数是对的——本周从 9 月 28 日起，
+ * 跨了月；而屏幕上只有名字没有范围，这句话没处说。窗口自己就把这件事答完了，
+ * 不用解释文字，也不用改算法。
+ *
+ * 这些窗口必须和上面那些数出自同一批边界变量，所以按日期本身钉：周首设置一动，
+ * `week.from` 跟着动，而算「本周」用的那个下限也同时动——两处若各算各的，
+ * 屏幕上就会出现一个和数字对不上的范围，那一屏全部的意义正是让两者对得上。
+ */
+describe('focusTotals：每档盖的那几天', () => {
+  const day = (y: number, mo: number, d: number) => new Date(y, mo - 1, d);
+
+  it('今天那一档首尾同一天', () => {
+    const w = focusTotals([], local(2026, 10, 3, 12)).windows.today;
+    expect(w).toEqual({ from: day(2026, 10, 3), to: day(2026, 10, 3) });
+  });
+
+  it('本周从周首起到今天，上限截到今天——那周日（10/4）还没到，一条记录也落不进去', () => {
+    const { week } = focusTotals([], local(2026, 10, 3, 12), 1).windows;
+    expect(week).toEqual({ from: day(2026, 9, 28), to: day(2026, 10, 3) });
+  });
+
+  /** 这一条就是那句「本月为什么比本周少」的实物答案：两档的起点分属两个月份。 */
+  it('跨月的那一周：本周起点在上个月，本月起点在这个月 1 号', () => {
+    const w = focusTotals([], local(2026, 10, 3, 12), 1).windows;
+    expect(w.month).toEqual({ from: day(2026, 10, 1), to: day(2026, 10, 3) });
+    expect(w.week.from.getMonth()).not.toBe(w.month.from.getMonth());
+  });
+
+  /** 和上面那个「本周的边界跟着 weekStart 走」的 describe 成对：那边钉数字，
+   *  这边钉范围，同一个设置喂进去，两者必须一起挪。 */
+  it('周首设置一改，窗口起点跟着那个数字一起挪', () => {
+    const WED = local(2026, 8, 26, 12);   // 周三
+    const froms = {
+      1: day(2026, 8, 24).getTime(),
+      0: day(2026, 8, 23).getTime(),
+      6: day(2026, 8, 22).getTime(),
+    } as const;
+    for (const ws of [1, 0, 6] as const) {
+      expect(focusTotals([], WED, ws).windows.week.from.getTime()).toBe(froms[ws]);
+    }
+    // 上限不受它影响：不管周首是哪天，「本周」最多数到今天。
+    for (const ws of [1, 0, 6] as const) {
+      expect(focusTotals([], WED, ws).windows.week.to).toEqual(day(2026, 8, 26));
+    }
+  });
+
+  it('月初那一天：本周窗口比本月宽（本周把上个月那几天也算进来）——两档谁包谁不靠读名字猜', () => {
+    const w = focusTotals([], local(2026, 10, 1, 9), 1).windows;
+    expect(w.week).toEqual({ from: day(2026, 9, 28), to: day(2026, 10, 1) });
+    expect(w.month).toEqual({ from: day(2026, 10, 1), to: day(2026, 10, 1) });
   });
 });

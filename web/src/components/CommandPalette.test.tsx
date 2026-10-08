@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { CommandPalette, type Command } from './CommandPalette.js';
+import { CommandPalette, type Command, type CommandGroup } from './CommandPalette.js';
 import { NoMotion } from '../test-utils.js';
 
-/** 每条命令自带一个独立的 vi.fn()——断言「哪条 run 被调用了」不会互相踩。 */
-const mk = (label: string, hint?: string): Command => ({
-  key: label, label, hint, run: vi.fn(),
+/** 每条命令自带一个独立的 vi.fn()——断言「哪条 run 被调用了」不会互相踩。
+ *  `group` 默认给「动作」：那几条箭头键/过滤的老测试只关心一条档内的顺序，
+ *  分节本身由下面那一组测试专门守。 */
+const mk = (label: string, hint?: string, group: CommandGroup = 'action'): Command => ({
+  key: label, label, hint, group, run: vi.fn(),
 });
 
 function renderPalette(open: boolean, commands: Command[], onClose = vi.fn()) {
@@ -171,5 +173,70 @@ describe('CommandPalette', () => {
 
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     expect(input.getAttribute('aria-activedescendant')).toBe(items[1].id);
+  });
+});
+
+/**
+ * 面板原来是一条 25 行的无结构列表，「去处 / 清单 / 标签 / 动作」四类全靠读字
+ * 自己分。分节之后要守的是这几件：档的先后、档内顺序不乱（数字键徽章靠它）、
+ * 标题不占选项序号（方向键跨过它时 Enter 还得跑对那条）、整档被过滤掉时不留
+ * 空标题、以及它不进读屏的朗读（每条 label 自己就说了它是什么）。
+ */
+/** 列表里实际渲染出来的那一串行，按顺序读成一句话：`§` 是分节标题，`o:` 是选项。 */
+const rows = () => [...document.querySelectorAll('#ink-cmd-listbox > li')].map((li) =>
+  li.classList.contains('ink-cmd-group') ? `§${li.textContent}` : `o:${li.querySelector('span')?.textContent}`);
+
+describe('命令面板的分节标题', () => {
+  it('四档按 去处 → 清单 → 标签 → 动作 排，不管调用方按什么顺序传进来', async () => {
+    renderPalette(true, [
+      mk('随手记', undefined, 'action'),
+      mk('标签「界面」', undefined, 'tag'),
+      mk('今天', '2', 'nav'),
+      mk('清单「生活杂事」', undefined, 'list'),
+    ]);
+    await screen.findByPlaceholderText('输入命令…');
+    expect(rows()).toEqual([
+      '§去处', 'o:今天', '§清单', 'o:清单「生活杂事」', '§标签', 'o:标签「界面」', '§动作', 'o:随手记',
+    ]);
+  });
+
+  it('同一档里保持传进来的顺序——稳定排序，数字键徽章不会因此打乱', async () => {
+    renderPalette(true, [
+      mk('清单「A」', undefined, 'list'),
+      mk('收件箱', '1', 'nav'),
+      mk('今天', '2', 'nav'),
+      mk('日历', '9', 'nav'),
+    ]);
+    await screen.findByPlaceholderText('输入命令…');
+    expect(rows()).toEqual(['§去处', 'o:收件箱', 'o:今天', 'o:日历', '§清单', 'o:清单「A」']);
+  });
+
+  it('标题不是选项：不占方向键序号，跨过它按 Enter 跑的还是高亮那条', async () => {
+    const nav = mk('今天', '2', 'nav');
+    const act = mk('随手记', 'N', 'action');
+    renderPalette(true, [nav, act]);
+    const input = await screen.findByPlaceholderText('输入命令…');
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input.getAttribute('aria-activedescendant')).toBe('ink-cmd-opt-1');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(act.run).toHaveBeenCalledTimes(1);
+    expect(nav.run).not.toHaveBeenCalled();
+  });
+
+  it('一档整个被过滤掉时，它的标题跟着走——留一行空标题比不分行更像坏了', async () => {
+    renderPalette(true, [mk('今天', '2', 'nav'), mk('清单「生活杂事」', undefined, 'list')]);
+    const input = await screen.findByPlaceholderText('输入命令…');
+    fireEvent.change(input, { target: { value: '今天' } });
+    expect(rows()).toEqual(['§去处', 'o:今天']);
+  });
+
+  it('标题那一行 aria-hidden + role=presentation，选项那一行不带 aria-hidden', async () => {
+    renderPalette(true, [mk('今天', '2', 'nav')]);
+    await screen.findByPlaceholderText('输入命令…');
+    const h = document.querySelector('.ink-cmd-group') as HTMLElement;
+    expect(h.getAttribute('aria-hidden')).toBe('true');
+    expect(h.getAttribute('role')).toBe('presentation');
+    expect(screen.getByRole('option').hasAttribute('aria-hidden')).toBe(false);
   });
 });

@@ -668,11 +668,17 @@ describe('TaskRow：排序抓手——只有传了 drag 才出现，只有它自
     // 真实 DOM 节点，且只调用这一次。
     expect(setActivatorNodeRef).toHaveBeenCalledTimes(1);
     expect(setActivatorNodeRef).toHaveBeenCalledWith(handle);
-    // 整行不该被摊上 role="button"/tabIndex 这类拖拽激活属性——
-    // TodayView.tsx 顶部注释解释过为什么整行不能是拖拽区（会让标题里选不了
-    // 文字），这条是这个 Task 的第二条硬约束，必须钉住。
+    // 整行不该被摊上**拖拽激活属性**——dnd-kit 那份 `attributes` 是
+    // `role="button"` + `tabIndex=0`，摊到行上等于整行能按下去开始拖，标题里
+    // 就选不了文字（为什么整行不能是拖拽区，见 TodayView.tsx 顶部注释）。
+    // 这条是这个 Task 的第二条硬约束，必须钉住。
+    //
+    // 但判据不是「tabindex 这个属性压根不许出现」：行根节点上现在有一个
+    // `tabIndex={-1}`，那是键盘走位用来把焦点落到这一行的（`-1` = 可编程聚焦、
+    // 不进 Tab 序，见 TaskRow.tsx 里那两段钩子注释），跟「整行是拖拽激活节点」
+    // 不是同一件事。所以钉的是那两样具体的属性值，不是一刀切地查属性存不存在。
     expect(row.getAttribute('role')).not.toBe('button');
-    expect(row.getAttribute('tabindex')).toBeNull();
+    expect(row.getAttribute('tabindex')).not.toBe('0');
   });
 
   it('attributes/listeners 原样摊在抓手节点上——role/tabIndex 能读到，指针事件真的转发给 dnd-kit 的监听器', () => {
@@ -1033,6 +1039,16 @@ describe('TaskRow：待决建议记号——群青唯一合法出现的地方（
     expect(container.querySelector('.ink-trow-proposal')).not.toBeNull();
   });
 
+  /** 那颗记号是个字，读屏全靠 `aria-label`，所以这句话就是它的界面。
+   *  「待决」是代码里的词（`data/proposals/`、`dismissed`），别处一律说
+   *  「待确认」/「等你确认」；钉住这句，防的是下次又有人把内部词直接搬上来。 */
+  it('记号的可及名说「有 AI 建议等你确认」，不是内部词「待决」', () => {
+    const { container } = render(<TaskRow t={task({ id: 'row-9c2' })} now={NOW} onPatch={vi.fn()} onOpen={vi.fn()} hasProposal />);
+    const mark = container.querySelector('.ink-trow-proposal');
+    expect(mark?.getAttribute('aria-label')).toBe('有 AI 建议等你确认');
+    expect(mark?.getAttribute('aria-label')).not.toMatch(/待决/);
+  });
+
   it('hasProposal 不给（undefined）：不出现——上限，今天的行为不变', () => {
     const { container } = setup();
     expect(container.querySelector('.ink-trow-proposal')).toBeNull();
@@ -1325,5 +1341,39 @@ describe('TaskRow：父任务还没开始时说出是谁挡着', () => {
   it('没给 `allTasks` 就不画——跟旁边两个层级记号同一条约定', () => {
     const c = render(<AntApp><TaskRow t={kid()} now={NOW} onPatch={vi.fn()} onOpen={vi.fn()} /></AntApp>).container;
     expect(starts(c)).toEqual([]);
+  });
+});
+
+/**
+ * **行档上的「第 4 天」。** 卡片上写整句，这一列只留短句，共几天靠
+ * `title`/`aria-label` 补全——取舍和理由跟习惯打卡那枚记号一字不差（这一列的
+ * 宽度全归标题，整句会把该看的截止时间挤进右缘那道 mask 里静默消失）。
+ * 判据在 `lib/taskView.ts` 的 `dayInSpan`。NOW 是 8/18 中午。
+ */
+describe('TaskRow：跨天的那一条说走到第几天', () => {
+  const show = (over: Parameters<typeof task>[0] = {}, extra: Partial<Parameters<typeof TaskRow>[0]> = {}) =>
+    render(<TaskRow t={task({ id: 'row-9c2', ...over })} now={NOW} onPatch={vi.fn()} onOpen={vi.fn()} {...extra} />);
+  const span = { startAt: at(2026, 8, 15), due: at(2026, 8, 25, 18) };
+
+  it('可见的是短句，整句挂在无障碍名上', () => {
+    show(span);
+    const el = screen.getByRole('img', { name: '第 4 天 · 共 10 天' });
+    expect(el.textContent).toBe('第 4 天');
+    expect(el.getAttribute('title')).toBe('第 4 天 · 共 10 天');
+  });
+
+  it('截止那天不画——那天它是「今天要清掉的一条」', () => {
+    show({ startAt: at(2026, 8, 15), due: at(2026, 8, 18, 18) });
+    expect(screen.queryByRole('img', { name: /第 \d+ 天/ })).toBeNull();
+  });
+
+  it('做完了不画——已完成那一列里写着「第 4 天」是句假话', () => {
+    show({ ...span, status: 'done' });
+    expect(screen.queryByRole('img', { name: /共 10 天/ })).toBeNull();
+  });
+
+  it('compact（看板一列 217px）下不画——成串的东西在这种宽度里最先该让路，跟标签/子项数同一档', () => {
+    const { container } = show(span, { compact: true });
+    expect(container.querySelector('.ink-trow-start[role="img"]')).toBeNull();
   });
 });

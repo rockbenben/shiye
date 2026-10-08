@@ -53,6 +53,19 @@ describe('SchedulePanel：列的是「所有没日期的任务」', () => {
     show();
     expect(items()).toHaveLength(2);
   });
+
+  /**
+   * 这一栏窄，长标题必然被省略号收掉，而列里认出「是哪一条」全靠标题。
+   * 挂在哪一层也要钉：挂到按钮**里面**再套一层的话，等于在那颗可点的行上挖一块
+   * 悬停读不到标题的死区（任务行那边同一条理由）。
+   */
+  it('全名挂在那一行上，长标题悬停读得到', () => {
+    const 长 = '把这条特别特别长的中文任务标题用来验证窄栏上会怎么收';
+    show({ tasks: [task({ id: 'x', title: 长 })], onOpen: vi.fn() });
+    const el = screen.getByTitle(长);
+    expect(el.classList.contains('ink-sched-name')).toBe(true);
+    expect(el.tagName).toBe('BUTTON');
+  });
 });
 
 describe('SchedulePanel：清单 / 标签 / 优先级三个页签', () => {

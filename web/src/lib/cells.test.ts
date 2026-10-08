@@ -65,13 +65,47 @@ describe('quadrantCells', () => {
    * 用例跟着退役。
    */
   it.each([
-    ['高 → 重要且紧急',    3, 'imp-urg'],
-    ['中 → 重要不紧急',    2, 'imp-later'],
-    ['低 → 不重要但紧急',  1, 'min-urg'],
-    ['无 → 不重要也不紧急', 0, 'min-later'],
+    ['高 → 高优先级',    3, 'imp-urg'],
+    ['中 → 中优先级',    2, 'imp-later'],
+    ['低 → 低优先级',    1, 'min-urg'],
+    ['无 → 没定优先级',  0, 'min-later'],
   ] as const)('%s', (_n, priority, key) => {
     const cells = quadrantCells([t({ id: 'x', priority })], NOW, new Set());
     expect(cells.find((c) => c.key === key)!.tasks.map((y) => y.id)).toEqual(['x']);
+  });
+
+  /**
+   * 格名**跟着规则走**，而且第四格不许说成「不重要」。
+   *
+   * 默认那套下四格从头到尾只分了一件事：`priority` 是哪一档。原来那四个词
+   * （重要且紧急 / …）里有两个「紧急」，而这一套压根没算过时间；第四个词
+   * 「不重要也不紧急」把**全部没定过优先级的任务**判成了不重要——`priority`
+   * 一律 0 是这个应用的规矩（AI 不许替他定），于是这一格常常是四格里最大的
+   * 那一格，里面坐着的都是他还没表过态的。名字说谎就得配一句说明，这一条
+   * 跟那句说明（`.ink-quadrant-note` 的默认档那半句）是同一次修改。
+   */
+  it('默认那套：四格叫 高 / 中 / 低 / 没定优先级，一个「重要」「紧急」都不许有', () => {
+    const titles = quadrantCells([], NOW, new Set()).map((c) => c.title);
+    expect(titles).toEqual(['高优先级', '中优先级', '低优先级', '没定优先级']);
+    for (const x of titles) {
+      expect(x, `${x} 里还带着「重要」`).not.toContain('重要');
+      expect(x, `${x} 里还带着「紧急」`).not.toContain('紧急');
+    }
+  });
+
+  it('`time-priority` 那套：格名还是艾森豪威尔那四个——两个词都是真算出来的', () => {
+    expect(quadrantCells([], NOW, new Set(), 'time-priority').map((c) => c.title)).toEqual([
+      '重要且紧急', '重要不紧急', '不重要但紧急', '不重要也不紧急',
+    ]);
+  });
+
+  it('换规则只换格名，不换分格判据（同一批任务落在同一格）', () => {
+    const one = [t({ id: 'x', priority: 3 }), t({ id: 'y', priority: 0 })];
+    const a = quadrantCells(one, NOW, new Set(), 'priority');
+    const b = quadrantCells(one, NOW, new Set(), 'time-priority');
+    // 两套规则的分格判据本来就不同（第二套按 due 分列），所以这里钉的是
+    // 「名字换了、key 没换」：key 是拖拽落点和 PATCH 的语义，不能跟着文案漂。
+    expect(a.map((c) => c.key)).toEqual(b.map((c) => c.key));
   });
 
   it('**due 不再参与分格**——一条马上到期的低优先级任务照样待在「低」那一格', () => {
@@ -193,15 +227,15 @@ describe('quadrantCells：time-priority 规则', () => {
    * 这四条**照样全绿**（实测只有另外两条变红）。夹具挑得能跑通，不等于
    * 夹具能证明被测的那件事。
    *
-   * 现在这四行里，每一条的 `priority` 单独看会指向另一格：priority 2 在
-   * `priority` 规则下是「重要不紧急」，而它今天到期，在这套规则下必须落进
+   * 现在这四行里，每一条的 `priority` 单独看会指向另一格：priority 2 在默认
+   * 那套规则下坐的是「中优先级」那一格，而它今天到期，在这套规则下必须落进
    * 「重要且紧急」。四条都这样，派发一坏就四条一起红。
    */
   it.each([
-    ['重要 + 紧急（priority 2 单独看是「重要不紧急」）', 2, 0, 'imp-urg'],
-    ['重要 + 不急（priority 3 单独看是「重要且紧急」）', 3, 30, 'imp-later'],
-    ['不重要 + 紧急（priority 0 单独看是「不重要也不紧急」）', 0, 0, 'min-urg'],
-    ['不重要 + 不急（priority 1 单独看是「不重要但紧急」）', 1, 30, 'min-later'],
+    ['重要 + 紧急（默认那套里 priority 2 是「中优先级」那格）', 2, 0, 'imp-urg'],
+    ['重要 + 不急（默认那套里 priority 3 是「高优先级」那格）', 3, 30, 'imp-later'],
+    ['不重要 + 紧急（默认那套里 priority 0 是「没定优先级」那格）', 0, 0, 'min-urg'],
+    ['不重要 + 不急（默认那套里 priority 1 是「低优先级」那格）', 1, 30, 'min-later'],
   ] as const)('%s → %s', (_n, priority, plusDays, key) => {
     expect(cellOf({ priority, due: localDueAt(plusDays, 12, 0) })).toBe(key);
   });
@@ -251,8 +285,9 @@ describe('quadrantCells：time-priority 规则', () => {
  * **两套规则必须真的不一样，而且默认档必须是原来那套。**
  *
  * 没有这一族的话，上面两族可以在「`rule` 参数根本没被读」的情况下同时全绿：
- * 一条 priority 0、今天到期的任务，在 `priority` 规则下进「不重要也不紧急」
- * （priority 0 那一格），在 `time-priority` 下进「不重要但紧急」（今天到期）
+ * 一条 priority 0、今天到期的任务，在 `priority` 规则下进 `min-later`（默认
+ * 那套里叫「没定优先级」），在 `time-priority` 下进 `min-urg`（那一套里叫
+ * 「不重要但紧急」，因为今天到期）
  * ——同一条任务、同一个 `now`，两套规则给出不同的格子，这才证明参数真的在起作用。
  */
 describe('两套规则的分界', () => {
@@ -293,7 +328,7 @@ describe('两套规则的分界', () => {
  * **还没到开始时间的不进四象限。**
  *
  * 跟 `isSettled` 那两支同一条口径，理由写在 `quadrantCells` 上面。这一族两个
- * 方向都要有：漏了它们（少滤）会让「重要且紧急」那格的数字虚高，而滤过头
+ * 方向都要有：漏了它们（少滤）会让第一格那个数字虚高，而滤过头
  * （把已经开始的、或者时间解不出来的也滤掉）会让任务凭空消失——四象限是
  * 唯一一屏「就这么多事，挑一件」，两种错法都直接坏掉它存在的理由。
  */

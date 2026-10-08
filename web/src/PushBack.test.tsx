@@ -303,8 +303,9 @@ describe('离线改的东西回到局域网真的推得回去（不 mock 中间�
     vi.setSystemTime(new Date(2026, 7, 21, 9, 0, 0));
     const t = newTask({
       title: '交房租',
-      // `doing` 而不是 `todo`：卡片上那颗按钮的文案跟着状态走（`TaskCard`
-      // 的 `NEXT`——待办给的是「开始」/「搁置」，只有进行中才给「完成」）。
+      // `doing` 而不是 `todo`：完成一条在途的重复任务才是这件事的形状（卡片上
+      // 那一步的文案跟着状态走，见 `lib/taskView.ts` 的 `STATUS_MOVES`——
+      // 待办给的是「开始」/「搁置」，只有进行中才给「完成」）。
       status: 'doing',
       due: new Date(2026, 7, 21, 20, 0, 0).toISOString(),
       repeat: { every: 'day', interval: 1, weekdays: [], until: null, from: 'due', count: null, step: 0, monthDay: null },
@@ -317,7 +318,10 @@ describe('离线改的东西回到局域网真的推得回去（不 mock 中间�
     await waitFor(() => expect(within(sourcePanel()).getByText('交房租')).toBeTruthy());
     // 离线点「完成」：`localApi.patchTask` 用跟服务端同一份 `mutate.ts` 生成
     // 下一条实例，两条都进脏集（改的那条带基准、生出来的那条没有基准）。
-    fireEvent.click(btnIn(sourcePanel(), '完成'));
+    // **点的是标题行那个勾选圈**：进行中卡面上没有裸露的「完成」那颗按钮了
+    // （卡面只留一颗，见 `TaskCard.tsx` 的 `showAdvance`），而这一步正是圈
+    // 在做的事——发出去的 patch 一模一样，这一条测的是离线队列，不是按钮长在哪。
+    fireEvent.click(within(sourcePanel()).getByRole('button', { name: '把「交房租」标记完成' }));
     await waitFor(async () => expect(await localTasks.read()).toHaveLength(2));
 
     backOnline();

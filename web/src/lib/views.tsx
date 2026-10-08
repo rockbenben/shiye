@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { InboxItem, Insight, Task } from '../types.js';
+import type { InboxItem, Insight, Task, TrashItem } from '../types.js';
 import { isInTodayView } from './taskView.js';
 import { inAllView } from './simpleViews.js';
 import { openInsights } from '../components/ReviewView.js';
@@ -8,8 +8,8 @@ import { openInsights } from '../components/ReviewView.js';
  * 一个「去处」的定义。
  *
  * 存在的理由：`App.tsx` 里原来是 `view === 'today' ? <A/> : <B/>`。两个分支还看得过去，
- * 而这个应用要长到十种视图 + 数量不定的清单和标签——十几个分支塞进一个 400 行的
- * 文件，下次加第十一种就没人敢碰了。把「一个视图是什么」抽出来，导航和渲染都从
+ * 而这个应用要长到十几种视图 + 数量不定的清单和标签——十几个分支塞进一个 400 行的
+ * 文件，下次再加一种就没人敢碰了。把「一个视图是什么」抽出来，导航和渲染都从
  * 这张表来，加视图只是往表里加一项。
  */
 export interface ViewCountSource {
@@ -24,6 +24,15 @@ export interface ViewCountSource {
    * 一个字都不用碰。那条顾虑当时高估了成本。
    */
   insights: Insight[];
+  /**
+   * 垃圾箱里的那些。**只为判「空不空」加进来的**——`App.tsx` 早就有一份(喂给
+   * `TrashView` 渲染的那份)，只是从来没进过导航这条线。
+   *
+   * 为什么不从 `tasks` 现算：删掉的任务**不在 `tasks` 里**(软删除，服务端把
+   * 它挪进 `data/trash/`)。所以「垃圾箱有几条」在这份 source 里只有 `trash`
+   * 答得上来，`tasks` 答不了。
+   */
+  trash: TrashItem[];
 }
 
 export interface ViewDef {
@@ -46,6 +55,24 @@ export interface ViewDef {
   keepMounted?: boolean;
   /** 导航上那个数字。不给就不显示数字（不是显示 0）。 */
   count?: (s: ViewCountSource) => number;
+  /**
+   * 这个去处**有没有东西**。给 `navVisibility` 的「有内容时显示」用。
+   *
+   * ## 为什么不能只靠 `count`
+   *
+   * 因为**「要不要显示一个数字」和「空不空」是两个决定，而它们在这几个去处上
+   * 恰好相反**：
+   *
+   * 「已完成」和「垃圾箱」都**故意不给 count**（各自那段注释的理由是同一个：
+   * 完成数只会一直涨、垃圾箱里的条数不是待办，挂个数字既不需要盯着也不是一件
+   * 要处理的事）。那个判断是对的——**但它只否掉了「显示数字」，没否掉「空不
+   * 空」**。而一个空的「已完成」和一个空的「垃圾箱」恰恰是最该藏起来的两个：
+   * 一屏十几项里杵着两个永远空的入口，是新人「一脸茫然」的一部分成因。
+   *
+   * 所以把这两件事拆成两个字段：`count` 只管画不画数字，`hasContent` 只管空不空。
+   * 一个去处两个都给也行（`inbox` 就是），**给了 `hasContent` 就以它为准**。
+   */
+  hasContent?: (s: ViewCountSource) => boolean;
   /**
    * 侧栏上归到哪一段。**必填**——加一个新去处时必须做这个决定，不然它会
    * 悄悄落进某一段的末尾（或者干脆不显示），而那正是这次改动要治的病。
@@ -181,7 +208,7 @@ export const VIEW_SPECS: ViewSpec[] = [
     // 不 keepMounted：它没有自己的本地状态要保（编辑草稿在 TaskGrid 里，
     // 而 TaskGrid 是这个视图自己的孩子，一起卸载一起重建，没有跨视图的
     // 东西会丢）。keepMounted 是给「切走再回来必须原样」的视图开的，
-    // 不是默认开——十个视图全常驻是另一个方向的错。
+    // 不是默认开——这些视图全常驻是另一个方向的错。
   },
   {
     key: 'all',
@@ -224,12 +251,18 @@ export const VIEW_SPECS: ViewSpec[] = [
     label: '已完成',
     // 不给 count：完成的数量只会越来越大，导航上挂一个一直在涨的数字
     // 既不是待办也不需要盯着。
+    // **但「空不空」要给**——见 `hasContent` 那段。这两条注释讲的是同一件事的
+    // 两半，别把下面这行读成「于是这个去处跟别的不一样」。
+    hasContent: ({ tasks }) => tasks.some((t) => t.status === 'done'),
   },
   {
     key: 'trash',
     group: 'tasks',
     label: '垃圾箱',
-    // 不给 count：垃圾箱里有几条不是待办，导航上挂个数字只会一直在那儿。
+    // 不给 count，同上。
+    // **判据用 `trash` 而不是 `tasks`**：删掉的任务不在 `tasks` 里（软删除），
+    // 从 `tasks` 现算永远是 0，而「永远是 0」在这条路上意味着「永远显示」。
+    hasContent: ({ trash }) => trash.length > 0,
   },
   {
     key: 'calendar',

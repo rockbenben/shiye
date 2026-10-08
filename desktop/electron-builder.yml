@@ -31,7 +31,32 @@ copyright: 个人使用
 # 验的时候注意：**改完必须先删掉 `desktop/release/win-unpacked` 再打。** 保留它的话
 # electron-builder 会复用已解压的 Electron，连带跳过写版本号那一步，exe 时间戳纹丝
 # 不动——照着旧二进制量，会得出「改了没用」的错结论（这里真的这样错过一次）。
-
+#
+# ⚠️ **2026-10-21 实测：那个目录有时候删不掉。** 旧产物里
+# `resources/app.asar` 被某个进程独占着（不是 Defender——它的实时保护是关的；也不是
+# 从这个仓库里跑起来的进程；也不是装好的那个 app，它用的是自己那份 asar）。删不掉、
+# 改不了名，于是 electron-builder 写不到那个路径上，直接死在
+# `EBUSY: resource busy or locked, unlink '…\resources\app.asar'`。
+#
+# **后来查实了持有者是谁：就是工作区里那个 agent 宿主（MiniMax Code）。** 用
+# Windows Restart Manager API 问出来的（`RmGetList`），答的是「MiniMax Code」，
+# 不是本仓跑起来的进程——是它扫工作区时把那个 asar 挂上了，而它挂文件时**没有**
+# 带上「可删除」这一位，所以连改名都不行。上面那句「不是从这个仓库里跑起来的
+# 进程」没错，只是**持有者住在工作区里**，只是不在这儿跑而已。
+#
+# 那就**换个输出目录打**——放在 `desktop/release/` 底下（那整个目录已经在
+# .gitignore 里），别放在仓库别处：
+#   npx electron-builder --config desktop/electron-builder.yml \
+#     --config.directories.output=desktop/release/next --publish never
+# **旧目录里那一个锁死的文件不动它**——它是构建产物，不影响任何运行；那个手柄释放
+# 之后（多半要重启那个 agent 宿主）再删掉就行。
+#
+# ⚠️ **换目录要换成一个「从没被打过包」的新名字，不是上次那个。** 同一个输出
+# 目录第二次打会撞上同一把锁（2026-10-21 实测：`desktop/release/next` 上午
+# 12:09 打过一次，下午再打同一个目录就死在同一个 EBUSY 上）。而 builder 是
+# **先清空输出目录再写**的——所以那次失败把 `next/win-unpacked` 清到只剩那个
+# 锁死的 asar，`办事师爷.exe`、`resources.pak` 全没了，**那个目录从此是个
+# 半残的壳，别拿它装**。换个新名字打（`desktop/release/pkg` 之类）才走得通。
 directories:
   # desktop/ 是这份配置真正打包的「应用目录」（package.json + 编译出来的 dist/main.js
   # 都在这儿）；根目录的 package.json 是 npm workspaces 的壳，不是要打包的东西。

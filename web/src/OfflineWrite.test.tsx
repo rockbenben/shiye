@@ -186,7 +186,10 @@ describe('离线写入之后界面立刻更新（不 mock api.js，真穿 route 
     await waitFor(() => expect(within(panel()).getByText('写周报')).toBeTruthy());
     expect(within(panel()).getByText('进行中')).toBeTruthy();
 
-    fireEvent.click(btnIn(panel(), '完成'));
+    // 「完成」这一步现在由标题行那个勾选圈提供（卡面只留一颗状态按钮，而进行中
+    // 那一颗正是圈在做的事，见 `TaskCard.tsx` 的 `showAdvance`）——发的 patch、
+    // 走的离线队列、状态角标那套渲染一个字没变，这一条测的还是那件事。
+    fireEvent.click(within(panel()).getByRole('button', { name: '把「写周报」标记完成' }));
 
     expect(await within(panel()).findByText('已完成')).toBeTruthy();
     expect(within(panel()).queryByText('进行中')).toBeNull();
@@ -214,7 +217,7 @@ describe('离线写入之后界面立刻更新（不 mock api.js，真穿 route 
       [expect.objectContaining({ title: '写周报', status: 'doing' })], expect.any(Date),
     ));
 
-    fireEvent.click(btnIn(panel(), '完成'));
+    fireEvent.click(within(panel()).getByRole('button', { name: '把「写周报」标记完成' }));
 
     // 断的是**内容**：重排拿到的那份里这条已经是 done（做完的任务不该再提醒，
     // 靠的就是这一次重排把它取消掉）。只数调用次数的话，「又拿着写入之前那份

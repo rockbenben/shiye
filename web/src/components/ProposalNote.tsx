@@ -36,7 +36,7 @@ export function hasPendingProposal(proposals: ProposalWiring | undefined, taskId
 }
 
 /** patch 里的字段名 → 界面上叫什么。跟卡片上、编辑表单里用的是同一批词——
- * `PROPOSABLE`（server/src/task.ts）十个字段这里全都要有一条，漏一个就会有
+ * `PROPOSABLE`（server/src/task.ts）的每一个字段这里全都要有一条，漏一个就会有
  * 一条提议卡片上冒出裸英文字段名。 */
 // **这份表必须盖住服务端 `PROPOSABLE` 的每一个字段**：漏一个，AI 提了那个
 // 字段的建议时，卡片上就冒出一个裸英文键名。两边在不同的包里、只能手工对齐，
@@ -57,6 +57,14 @@ const FIELD_LABEL: Record<string, string> = {
  * 16 个汉字的备注（也是 32，实际占 64）判成一样长，时间戳会被莫名其妙地
  * 摞成三行。这个判据只用来决定排版形态，不追求跟真实像素严丝合缝。
  */
+/**
+ * 建议的对照行里，「原来那个字段没有值」怎么写。
+ *
+ * 原来写的是「空」——那是数据库的说法，不是人说话的说法。这一屏上表示「没有」
+ * 的地方本来就用「没有」：「没有待拆解的」「没有可以推迟的」「一条都没选」。
+ * 三处共用这一个常量，免得哪天只改了一处，同一张卡上并排两种说法。
+ */
+const NO_VALUE = '没有';
 const width = (s: string): number =>
   [...s].reduce((n, ch) => n + (/[⺀-鿿豈-﫿＀-｠　-〿]/.test(ch) ? 2 : 1), 0);
 
@@ -69,7 +77,7 @@ const width = (s: string): number =>
  * 实测第一个真实例子就撞上了）。
  */
 function show(field: string, v: unknown, lists: List[], clip = false): string {
-  if (v === null || v === undefined || v === '') return '空';
+  if (v === null || v === undefined || v === '') return NO_VALUE;
   if (field === 'due') return formatWhen(String(v));
   // **全部列出来，不是只显示第一条。** 这段原来只取 `v[0]`——那时候表单只
   // 编辑得了一个提醒，「第一条」等于「全部」。现在一条任务可以有好几个提醒了
@@ -80,7 +88,7 @@ function show(field: string, v: unknown, lists: List[], clip = false): string {
       .map((r) => (r as { at?: unknown })?.at)
       .filter((at): at is string => typeof at === 'string')
       .map((at) => formatWhen(at));
-    return times.length > 0 ? times.join('、') : '空';
+    return times.length > 0 ? times.join('、') : NO_VALUE;
   }
   // 下面三个是这一批（可编辑字段）新加的——用的是跟卡片/编辑表单同一套
   // helper（PRI_LABEL、describeRepeat），不是重新发明一套渲染规则。
@@ -103,7 +111,7 @@ function show(field: string, v: unknown, lists: List[], clip = false): string {
  */
 function subtaskLines(v: unknown): string[] {
   if (!Array.isArray(v)) return [String(v)];
-  if (v.length === 0) return ['空'];
+  if (v.length === 0) return [NO_VALUE];
   return v.map((s) => {
     const o = (typeof s === 'object' && s !== null ? s : {}) as { text?: unknown; done?: unknown };
     return `${o.done ? '✓ ' : '☐ '}${String(o.text ?? '')}`;

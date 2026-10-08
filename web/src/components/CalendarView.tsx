@@ -34,8 +34,9 @@ interface Props extends GridWiring {
   prefs: CalendarPrefs;
   onPrefs: (next: CalendarPrefs) => void;
   /** 在选中的那一天新建任务——只把日期交出去，表单还是顶上那一个。
-   *  不给就不显示那颗按钮。 */
-  onComposeOn?: (dayKey: string) => void;
+   *  不给就不显示那颗按钮。`hour` 是**你刚点的那一格**（周/日视图才有），
+   *  没点格子、只选了哪天时不给，调用方按「那天晚上」兜。 */
+  onComposeOn?: (dayKey: string, hour?: number) => void;
   /** 「安排任务」那一栏里的 ↑/↓ 手动排序。契约同 `TodayView.onReorder`。
    *  不给就不画那两颗按钮，那一栏本身照常。 */
   onReorder?: (pairs: Array<{ id: string; order: number }>) => Promise<unknown>;
@@ -61,6 +62,18 @@ function anchorDayKey(t: Task): string | null {
   const at = calendarAnchor(t);
   return at ? dayKey(at) : null;
 }
+
+/**
+ * 刚点中的那一格还算不算数——**只认「它属于此刻选中的那天」**。
+ *
+ * 抽出来是因为这一步是唯一会算错的：`slotAt` 是上一次点击留下的，用户接着
+ * 点了另一天（或者点了月格里的一天），小时还攥在 state 里。不比对 key 就用，
+ * 「在 14:00 新建」会挂到另一天上去，点出来表单里那个日期是凭空来的。
+ */
+export const composeHour = (
+  slotAt: { key: string; hour: number } | null,
+  selectedKey: string | null,
+): number | undefined => (slotAt && selectedKey && slotAt.key === selectedKey ? slotAt.hour : undefined);
 
 /** 选中日期的展示文案，不带年份——跟格子里 `.ink-cal-daynum` 只显示日号
  *  同一个「反正就在当前翻到的这页里」的假设。 */
@@ -91,6 +104,12 @@ export function CalendarView({ tasks, countdowns, prefs, onPrefs, onComposeOn, o
   const [anchor, setAnchor] = useState(now);
   const [mode, setMode] = useState<CalMode>('month');
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  /** 周/日视图里刚点中的那一格（哪天 + 几点）。
+   *
+   * 存 key 而不是只存小时：点了另一天之后这个小时就该作废，否则「在 14:00
+   * 新建」会挂在一个不是 14 点的那天上。不额外做 useEffect 去清它——
+   * 用的时候比一下 key 就行。 */
+  const [slotAt, setSlotAt] = useState<{ key: string; hour: number } | null>(null);
 
   // 整分支审查 D：实测过的坑——月视图选中 8/25（当天列表出现）→ 点「日」→
   // 标题变成「8月19日 周三」（锚点那天，不是选中那天），刚出现的当天列表
@@ -367,6 +386,7 @@ export function CalendarView({ tasks, countdowns, prefs, onPrefs, onComposeOn, o
         // 东西。
         onOpenTask={wiring.onOpenDetail}
         onDropOnSlot={onDropOnSlot}
+        onSlotCompose={(key, hour) => setSlotAt({ key, hour })}
         onScheduleTo={onScheduleTo}
         onEventDrag={onEventDrag}
         allHours={prefs.showAllHours}
@@ -404,6 +424,72 @@ export function CalendarView({ tasks, countdowns, prefs, onPrefs, onComposeOn, o
     calendarBody = assertExhaustiveMode(mode);
   }
 
+  /** 那排显示勾选。**画在导航行下面**，理由写在 CalendarGrid 的 `afterNav` 上。 */
+  const prefsRow = (
+    <>
+      {/* 显示设置（仿滴答清单日历右上角「···」-「显示设置」里那几档）。
+          直接摆出来、不收进一个菜单：收起来要多点两下才知道「原来重复任务能
+          在日历上铺开」「原来那条安排任务栏在这儿」——这一排里每一个功能最大
+          的问题本来就是没人知道它存在。原生 <label>+<input>，不套 antd
+          Checkbox：那个的选中态直接读全局 colorPrimary（群青），而群青在这个
+          界面里是配给制，只标 AI 产出，见 theme.ts 顶部 boardLocalTheme 的注释。 */}
+        <div className="ink-cal-prefs" role="group" aria-label="日历显示设置">
+          <label className="ink-cal-pref">
+            <input
+              type="checkbox"
+              checked={prefs.showDone}
+              onChange={(e) => onPrefs({ ...prefs, showDone: e.target.checked })}
+            />
+            显示已完成
+          </label>
+          <label className="ink-cal-pref">
+            <input
+              type="checkbox"
+              checked={prefs.showFutureRepeats}
+              onChange={(e) => onPrefs({ ...prefs, showFutureRepeats: e.target.checked })}
+            />
+            显示未来重复周期
+          </label>
+          <label className="ink-cal-pref">
+            <input
+              type="checkbox"
+              checked={prefs.showCountdowns}
+              onChange={(e) => onPrefs({ ...prefs, showCountdowns: e.target.checked })}
+            />
+            显示纪念日
+          </label>
+          <label className="ink-cal-pref">
+            <input
+              type="checkbox"
+              checked={prefs.showFocus}
+              onChange={(e) => onPrefs({ ...prefs, showFocus: e.target.checked })}
+            />
+            显示专注记录
+          </label>
+          <label className="ink-cal-pref">
+            <input
+              type="checkbox"
+              checked={prefs.showCheckins}
+              onChange={(e) => onPrefs({ ...prefs, showCheckins: e.target.checked })}
+            />
+            显示打卡
+          </label>
+          {/* 只在周/日视图给这一档：月/年/日程压根没有小时这个维度，摆在那儿
+              是一个点了不知道会发生什么的开关。 */}
+          {(mode === 'week' || mode === 'day') && (
+            <label className="ink-cal-pref">
+              <input
+                type="checkbox"
+                checked={prefs.showAllHours}
+                onChange={(e) => onPrefs({ ...prefs, showAllHours: e.target.checked })}
+              />
+              显示全天 24 小时
+            </label>
+          )}
+        </div>
+    </>
+  );
+
   return (
     // 日历本体和右边那条「安排任务」并排。**栏收起来时这一层还在**——一个
     // 只有一个孩子的 flex 容器不改变任何布局，而让它跟着开合出现/消失，等于
@@ -411,68 +497,8 @@ export function CalendarView({ tasks, countdowns, prefs, onPrefs, onComposeOn, o
     // 那侧的滚动位置、当前翻到的页、正在编辑的当天列表全跟着重来一遍。
     <div className="ink-cal-shell">
       <div className="ink-cal-main">
-      {/* 显示设置（仿滴答清单日历右上角「···」-「显示设置」里那几档）。
-          两个勾选框直接摆出来，不收进一个菜单：一共就两个，收起来要多点两下
-          才知道「原来重复任务能在日历上铺开」——这个功能最大的问题本来就是
-          没人知道它存在。原生 <label>+<input>，不套 antd Checkbox：那个的
-          选中态直接读全局 colorPrimary（群青），而群青在这个界面里是配给制，
-          只标 AI 产出，见 theme.ts 顶部 boardLocalTheme 的注释。 */}
-      <div className="ink-cal-prefs" role="group" aria-label="日历显示设置">
-        <label className="ink-cal-pref">
-          <input
-            type="checkbox"
-            checked={prefs.showDone}
-            onChange={(e) => onPrefs({ ...prefs, showDone: e.target.checked })}
-          />
-          显示已完成
-        </label>
-        <label className="ink-cal-pref">
-          <input
-            type="checkbox"
-            checked={prefs.showFutureRepeats}
-            onChange={(e) => onPrefs({ ...prefs, showFutureRepeats: e.target.checked })}
-          />
-          显示未来重复周期
-        </label>
-        <label className="ink-cal-pref">
-          <input
-            type="checkbox"
-            checked={prefs.showCountdowns}
-            onChange={(e) => onPrefs({ ...prefs, showCountdowns: e.target.checked })}
-          />
-          显示纪念日
-        </label>
-        <label className="ink-cal-pref">
-          <input
-            type="checkbox"
-            checked={prefs.showFocus}
-            onChange={(e) => onPrefs({ ...prefs, showFocus: e.target.checked })}
-          />
-          显示专注记录
-        </label>
-        <label className="ink-cal-pref">
-          <input
-            type="checkbox"
-            checked={prefs.showCheckins}
-            onChange={(e) => onPrefs({ ...prefs, showCheckins: e.target.checked })}
-          />
-          显示打卡
-        </label>
-        {/* 只在周/日视图给这一档：月/年/日程压根没有小时这个维度，摆在那儿
-            是一个点了不知道会发生什么的开关。 */}
-        {(mode === 'week' || mode === 'day') && (
-          <label className="ink-cal-pref">
-            <input
-              type="checkbox"
-              checked={prefs.showAllHours}
-              onChange={(e) => onPrefs({ ...prefs, showAllHours: e.target.checked })}
-            />
-            显示全天 24 小时
-          </label>
-        )}
-      </div>
-
       <CalendarGrid
+        afterNav={prefsRow}
         days={days}
         mode={mode}
         anchor={anchor}
@@ -545,13 +571,19 @@ export function CalendarView({ tasks, countdowns, prefs, onPrefs, onComposeOn, o
           **只是把日期带过去，不另开一个表单**：建任务这件事全应用只有一个
           入口（顶上那个「新任务」），在这儿再摆一份输入框等于第二份表单，
           两份迟早在字段上长歪。 */}
-      {selectedKey && onComposeOn && (
-        <button
-          type="button"
-          className="ink-cal-compose"
-          onClick={() => onComposeOn(selectedKey)}
-        >在这天新建</button>
-      )}
+      {selectedKey && onComposeOn && (() => {
+        // 刚点过某个小时格就报那个整点；只点了某天（月格、或者周视图的表头）
+        // 还是走调用方那句「那天晚上」。按钮跟着改口，不然写着「在这天新建」、
+        // 表单里冒出来一个 14:00，或者反过来。
+        const hour = composeHour(slotAt, selectedKey);
+        return (
+          <button
+            type="button"
+            className="ink-cal-compose"
+            onClick={() => onComposeOn(selectedKey, hour)}
+          >{hour === undefined ? '在这天新建' : `在 ${hour}:00 新建`}</button>
+        );
+      })()}
       </div>
 
       {/* 「安排任务」——所有没日期的任务，拖到左边的格子上就排上时间。

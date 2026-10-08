@@ -124,14 +124,37 @@ const state = vi.hoisted(() => {
     windowOpenHandler: null as null | ((d: { url: string }) => unknown),
     /** `shell.openExternal` 被交出去的地址。 */
     opened: [] as string[],
+    /** `setAsDefaultProtocolClient` 注册过的协议名。**记事实，不记 mock 的调用
+     *  记录**——后者在 Vitest 5 那里默认每个用例前就被清空（`clearMocks` 默认开），
+     *  而注册发生在 `beforeAll` 里那次 import 上，早就没了。跟 `state.opened`、
+     *  `state.handlers` 同一个道理：事实记在 state 上，跨用例也活着。 */
+    protocols: [] as string[],
     notifications: [] as Array<{ options: Record<string, unknown>; handlers: Record<string, (...a: unknown[]) => unknown> }>,
     sseCallback: null as null | ((event: string, data: unknown) => void),
+    /** 假的服务端子进程：`startServer` 返回它，`onExit` 的回调存在这儿——
+     *  用例想模拟「服务起不来 / 崩了」就调它。（这条路本来一条测试都没有。） */
+    childExit: null as null | ((code: number | null, killedByUs: boolean, launchError: { code?: string; syscall?: string; message: string } | null) => void),
+    /** `startServer` 要不要返回一个子进程句柄：false = 端口上已经有健康的自己
+     *  （main.ts 走 null 那一支，不注册 onExit），true = 返回一个假句柄。 */
+    startServerReturnsChild: false,
     /** 假 `app.isPackaged` 由它供值：main.ts 的接线路由是 async 的，取值时刻
      *  晚于用例里翻标志的那一刻，所以必须是 getter（见下面 electron mock）。 */
     isPackaged: false,
     /** `Menu.buildFromTemplate` 每次收到的模板都攒在这儿，托盘菜单长什么样
      *  就靠它断言（假 Tray 的 setContextMenu 只负责「被调过」）。 */
     menuTemplates: [] as Array<Array<Record<string, unknown>>>,
+    /** 最近一次 `new BrowserWindow(...)` 收到的构造参数——「开机那一次不把窗口
+     *  摊开」在 mock 层唯一的形状就是 `show: false`，全靠它断言。 */
+    lastWindowOptions: null as Record<string, unknown> | null,
+    /** 任务栏进度条每次收到的值（`{progress, mode}`）。 */
+    progressBars: [] as Array<{ progress: number; mode?: string }>,
+    /** 假登录项，系统那一份状态的替身：`getLoginItemSettings` 读它、
+     *  `setLoginItemSettings` 写它，所以「点一下勾 → 下次读就是新值」这一串
+     *  在 mock 里也是连着的，不是各断各的。 */
+    loginItem: { openAtLogin: false, wasOpenedAtLogin: false },
+    /** 两次调用各自收到的参数（读的时候那份 args 必须和写的一致，见 loginItem.ts）。 */
+    loginItemReads: [] as Array<Record<string, unknown> | undefined>,
+    loginItemWrites: [] as Array<Record<string, unknown>>,
     au,
     auWrites,
     auOn,
@@ -143,7 +166,10 @@ vi.mock('electron', () => {
   const app = {
     setAppUserModelId: vi.fn(),
     requestSingleInstanceLock: vi.fn(() => true),
-    setAsDefaultProtocolClient: vi.fn(() => true),
+    setAsDefaultProtocolClient: vi.fn((protocol: string) => {
+      state.protocols.push(protocol);
+      return true;
+    }),
     on: vi.fn((event: string, cb: (...a: unknown[]) => unknown) => {
       state.handlers[event] = cb;
     }),
@@ -168,6 +194,20 @@ vi.mock('electron', () => {
     // main.ts 顶层会 setPath('userData', …) 把 %APPDATA% 下的目录名钉成 shiye
     // （见那句上面的注释）。假 app 上没有这个方法的话，import main.ts 当场 throw。
     setPath: vi.fn(),
+    // 登录项。返回值是 `{...state.loginItem}` 现拼的——main.ts 每开一次菜单读一遍，
+    // 用例翻 state.loginItem 就能改到下一次读的结果；读到的参数攒进
+    // loginItemReads，「读的时候有没有带上写进去的那份 args」在那里断。
+    getLoginItemSettings: vi.fn((options?: { args?: string[] }) => {
+      state.loginItemReads.push(options);
+      return { ...state.loginItem };
+    }),
+    // 写：把 state.loginItem 一起改掉，模拟真系统「写完再读就是新值」。
+    // 不这么连的话，「点了勾、菜单重开还是那颗勾」这条只能断 write 的形状，
+    // 断不到读和写是同一份状态。
+    setLoginItemSettings: vi.fn((settings: { openAtLogin?: boolean }) => {
+      state.loginItemWrites.push(settings as Record<string, unknown>);
+      state.loginItem = { ...state.loginItem, openAtLogin: settings.openAtLogin === true };
+    }),
   };
 
   // 三个假构造函数只实现 main.ts 真的用到的那几个方法——够跑通接线，不是
@@ -179,12 +219,18 @@ vi.mock('electron', () => {
     isMinimized = vi.fn(() => false);
     on = vi.fn();
     loadURL = vi.fn();
+    /** 任务栏那条进度条：记下每次收到的比例和模式（见 main.ts 的
+     *  refreshTaskbarProgress）。-1 = 撤掉那条条。 */
+    setProgressBar = vi.fn((progress: number, options?: { mode?: string }) => {
+      state.progressBars.push({ progress, mode: options?.mode });
+    });
     webContents = {
       executeJavaScript: vi.fn(() => Promise.resolve()),
       setWindowOpenHandler: vi.fn((cb: (d: { url: string }) => unknown) => { state.windowOpenHandler = cb; }),
       on: vi.fn((event: string, cb: (...a: unknown[]) => unknown) => { state.wcHandlers[event] = cb; }),
     };
-    constructor() {
+    constructor(options?: Record<string, unknown>) {
+      state.lastWindowOptions = options ?? null;
       state.lastWindow = this as never;
     }
   }
@@ -239,8 +285,16 @@ vi.mock('electron-updater', () => ({
 // 真的发起网络连接。resolvePaths（./paths.js）不 mock：它是纯函数（不做
 // I/O，见 paths.test.ts），isPackaged=false 时只是拼字符串，让它跑真的更
 // 简单，也顺带验证了 bootstrap() 传给它的参数不会在 mock 环境下报错。
-vi.mock('./serverChild.js', () => ({
-  startServer: vi.fn(async () => null), // null = 端口上已经有健康的自己，不用起子进程
+vi.mock('./serverChild.js', async (importOriginal) => ({
+  // **只换会真的 I/O 的两个**：`describeLaunchFailure` 是纯函数，透传真的那份
+  // ——自己抄一份的话，主进程弹的那句话和 serverChild 的判据就各说各的
+  // （跟 events.test.ts 包 fs.watch、reminder.test.ts 包 execFile 同款）。
+  ...(await importOriginal<typeof import('./serverChild.js')>()),
+  startServer: vi.fn(async () =>
+    state.startServerReturnsChild
+      ? { stop: () => {}, onExit: (cb: typeof state.childExit) => { state.childExit = cb; } }
+      : null, // null = 端口上已经有健康的自己，不用起子进程
+  ),
   waitUntilHealthy: vi.fn(async () => true),
 }));
 vi.mock('./sse.js', () => ({
@@ -297,7 +351,10 @@ describe('main.ts 真行为：应用已经在跑时收到的 second-instance', (
   });
 
   it('注册了协议处理器 app.setAsDefaultProtocolClient(PROTOCOL)——按钮点击要靠它才能激活', () => {
-    expect(app.setAsDefaultProtocolClient).toHaveBeenCalledWith('todo-desktop');
+    // 断的是「注册过」这个事实（记在 `state.protocols` 上），不是 mock 的调用
+    // 记录——注册发生在 `beforeAll` 那次 import 里，Vitest 5 默认每个用例前
+    // 清一次 mock 历史，断调用记录的话这里永远是 0 次。
+    expect(state.protocols).toContain('todo-desktop');
   });
 
   it('second-instance 收到协议 URI（完成按钮）→ PATCH 任务，不开窗口——A 那种「多弹一次窗口」的坏法现在能测出来', async () => {
@@ -370,6 +427,98 @@ describe('main.ts 真行为：应用已经在跑时收到的 second-instance', (
     // 契约、各自供给同一个字面量、谁都没断言那个字面量本身。改一头就断，
     // 而两头的测试都还绿着。
     expect(script).toContain("'desktop-open-task'");
+  });
+
+  // Electron 45 新增的窗口状态记忆。**必须有唯一的 `name` 才生效**（官方原话：
+  // 「Has no effect if window `name` is not provided」）——只写
+  // windowStatePersistence 而没有 name，那一项是白写的。
+  //
+  // `displayMode: false` 是有意的：不记「最大化/全屏/kiosk」。一个日常小工具
+  // 忽然以全屏的样子冒出来，比位置跑偏更让人以为出了故障。
+  it('窗口带唯一的 name 和 windowStatePersistence——没 name 那一项不生效', () => {
+    expect(state.lastWindowOptions!.name).toBe('main-window');
+    expect(state.lastWindowOptions!.windowStatePersistence).toEqual({ bounds: true, displayMode: false });
+  });
+
+  // mac/Linux 的两颗按钮（Windows 走 toast XML 里的协议 URI）。
+  //
+  // **两边共用一个处理链**：点一下都拼出 `todo-desktop://complete?id=…`，
+  // 交给 applyProtocolAction ——解析、算 patch、PATCH 服务端，跟 Windows 那条
+  // 一模一样。区别只在送达：这边靠 Electron 的 `action` 事件，**只在应用活着
+  // 的时候送到**。
+  it('点「完成」→ 拼出协议 URI、PATCH 那条任务（跟 Windows 那条同一个处理链）', async () => {
+    state.notifications.length = 0;
+    state.sseCallback!('reminder', { id: 't1', title: '交房租' });
+    expect(state.notifications).toHaveLength(1);
+    const n = state.notifications[0];
+    expect(n.handlers['action']).toBeTypeOf('function');
+
+    vi.mocked(fetch).mockClear();
+    // 序号在 `details.actionIndex` 里——Electron 把那两个位置参数标成了
+    // deprecated（electron.d.ts 里写着），新写法是 details 上那两个字段。
+    n.handlers['action']({ actionIndex: 0 });
+
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    const [url, init] = vi.mocked(fetch).mock.calls.at(-1)!;
+    expect(String(url)).toContain('/api/tasks/t1');
+    expect((init as RequestInit).method).toBe('PATCH');
+  });
+
+  it('点「推迟」→ 同一个处理链，但走的是 snooze（**先取回那条任务**再改提醒）', async () => {
+    state.notifications.length = 0;
+    state.sseCallback!('reminder', { id: 't1', title: '交房租' });
+    const n = state.notifications[0];
+    vi.mocked(fetch).mockClear();
+    n.handlers['action']({ actionIndex: 1 });
+    // 推迟那条先拉一次**整份**任务列表（服务端没有 `GET /api/tasks/:id` 这条
+    // 路由，见 main.ts 的 fetchReminders），再 PATCH 那一条。
+    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([u, i]) =>
+      String(u).includes('/api/tasks/t1') && (i as RequestInit)?.method === 'PATCH',
+    )).toBe(true));
+  });
+});
+
+// 「8. 子进程崩了要说清楚」那条。**服务「起不来」和「起来了又退了」是两回事**：
+// 前者压根没有退出码，只有 spawn 那个 errno 说得清原因（文件不在、系统不让建
+// 进程……）。原来那个错误被整个丢掉了，用户只看到「进程退出码 未知」——连该
+// 查哪儿都不知道。这条路本来一条测试都没有，这里补上。
+describe('main.ts 真行为：后台服务起不来（spawn 失败）', () => {
+  beforeAll(async () => {
+    state.startServerReturnsChild = true;   // 让 startServer 返回一个假句柄
+    state.childExit = null;
+    vi.resetModules();
+    state.handlers = {};
+    state.lastWindow = null;
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
+  });
+  afterAll(() => { state.startServerReturnsChild = false; });
+
+  it('说清「起不来」的原因，不是一句「退出码未知」', () => {
+    state.notifications.length = 0;
+    state.childExit!(null, false, { code: 'EPERM', syscall: 'spawn', message: 'spawn EPERM' });
+    expect(state.notifications).toHaveLength(1);
+    // 这条走的是**普通** Notification（`{title, body}`），不是 toastXml 那条路
+    // ——toastXml 是给「到点提醒」用的，这条是诊断消息。
+    const title = String(state.notifications[0].options.title);
+    const body = String(state.notifications[0].options.body);
+    expect(title).toContain('起不来');
+    expect(body).toContain('服务没起来');
+    expect(body).toContain('安全软件');
+    // 旧话术（「退出码 未知」）不许再出现——它正是「说不清原因」的那一句。
+    expect(body).not.toContain('未知');
+  });
+
+  it('起来了又退了：还是那套退出码的话术，不混成「起不来」', () => {
+    state.notifications.length = 0;
+    state.childExit!(7, false, null);
+    expect(state.notifications).toHaveLength(1);
+    const title = String(state.notifications[0].options.title);
+    const body = String(state.notifications[0].options.body);
+    expect(title).toContain('退出了');
+    expect(body).toContain('退出码 7');
+    expect(body).not.toContain('起不来');
   });
 });
 
@@ -459,6 +608,13 @@ function usePackagedWindows(): () => void {
 /** 最近一次 buildFromTemplate 收到的 label 序列——菜单形状全靠它断言。 */
 const lastMenuLabels = (): unknown[] => state.menuTemplates.at(-1)!.map((i) => i.label);
 
+/**
+ * 最近一次菜单里按 label 找一项。**有了「开机自启」之后按 `type === 'checkbox'`
+ * 找会拿到错的那一颗**（现在有两颗勾：自动检查更新、开机自启），所以按名字取。
+ */
+const menuItem = (label: string): Record<string, unknown> | undefined =>
+  state.menuTemplates.at(-1)!.find((i) => i.label === label);
+
 describe('main.ts 真行为：打包的 Windows 上接线', () => {
   let restorePlatform: () => void;
 
@@ -473,6 +629,12 @@ describe('main.ts 真行为：打包的 Windows 上接线', () => {
     state.auOn.length = 0;
     state.au.checkForUpdates.mockClear();
     state.au.quitAndInstall.mockClear();
+    // 登录项回到「这台机器没注册过」：菜单那颗勾的初始状态、读它的次数、
+    // 写它的参数，全从这个起点算。
+    state.loginItem = { openAtLogin: false, wasOpenedAtLogin: false };
+    state.loginItemReads.length = 0;
+    state.loginItemWrites.length = 0;
+    state.lastWindowOptions = null;
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
     await import('./main.js');
     await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
@@ -492,11 +654,34 @@ describe('main.ts 真行为：打包的 Windows 上接线', () => {
     // checkbox 的默认关读的是 Preferences 里那份 update-prefs.json——假
     // app.getPath('appData') 指着临时目录，那儿没有这个文件，loadAutoCheck
     // 落默认值 false（这正是 D1 拍板的「文件不存在=关」在接线层的投影）。
-    expect(lastMenuLabels()).toEqual(['打开', '检查更新', '自动检查更新', '退出']);
-    const checkbox = state.menuTemplates.at(-1)!.find((i) => i.type === 'checkbox');
-    expect(checkbox, '「自动检查更新」不是 checkbox').toBeDefined();
+    expect(lastMenuLabels()).toEqual(['打开', '检查更新', '自动检查更新', '开机自启', '退出']);
+    const checkbox = menuItem('自动检查更新');
+    expect(checkbox, '菜单里没有「自动检查更新」').toBeDefined();
+    expect(checkbox!.type, '「自动检查更新」不是 checkbox').toBe('checkbox');
     expect(checkbox!.checked).toBe(false);
     expect(lastMenuLabels().some((l) => String(l).startsWith('重启'))).toBe(false);
+  });
+
+  it('「开机自启」也是 checkbox、默认没勾，而且每次读都带上写进去的那份 args', () => {
+    const item = menuItem('开机自启');
+    expect(item, '打包的 Windows 上没有「开机自启」').toBeDefined();
+    expect(item!.type).toBe('checkbox');
+    expect(item!.checked).toBe(false);
+    // 这份 args 漏了不报错：Windows 的 `openAtLogin` 是拿注册表值和「execPath +
+    // 传的 args」逐字比出来的，不带 args 就永远比不中，于是那颗勾点上去、菜单
+    // 重开自己弹回来，而注册表里那条还在、下次开机照样拉起应用。
+    // 写的那份参数对不对，见下面那条点勾的断言；成对关系本身由
+    // loginItem.test.ts 的「读写两边 args 一模一样」钉。
+    expect(state.loginItemReads.at(-1)).toEqual({ args: ['--hidden'] });
+  });
+
+  it('点「开机自启」→ 写 {openAtLogin:true,args:[--hidden]}，之后读回来就是勾着的', () => {
+    // 假 setLoginItemSettings 会顺手把 state.loginItem 改掉（模拟真系统「写完
+    // 再读就是新值」），所以这一条同时钉住两件事：写出去的形状，和「状态只有
+    // 系统那一份」——main.ts 没有自己记一笔。
+    (menuItem('开机自启')!.click as (item: { checked: boolean }) => void)({ checked: true });
+    expect(state.loginItemWrites).toEqual([{ openAtLogin: true, args: ['--hidden'] }]);
+    expect(state.loginItem.openAtLogin).toBe(true);
   });
 
   it('fire update-downloaded → 菜单 rebuild 出「重启以完成更新 v0.2.0」；点它才 quitAndInstall', () => {
@@ -528,6 +713,9 @@ describe('main.ts 真行为：未打包形态（dev / 别的平台同理）', ()
     state.menuTemplates.length = 0;
     state.auWrites.length = 0;
     state.auOn.length = 0;
+    state.loginItem = { openAtLogin: false, wasOpenedAtLogin: false };
+    state.loginItemReads.length = 0;
+    state.loginItemWrites.length = 0;
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
     await import('./main.js');
     await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
@@ -545,15 +733,29 @@ describe('main.ts 真行为：未打包形态（dev / 别的平台同理）', ()
   it('托盘还是原来的「打开/退出」两项', () => {
     expect(lastMenuLabels()).toEqual(['打开', '退出']);
   });
+
+  // 未打包那一半的门不只挡住菜单：连一次系统读取都不该发生。真 Electron 的
+  // `process.execPath` 在 dev 形态是 node_modules/electron/dist/electron.exe，
+  // 「读」不出事，出事的是有人照着这颗勾写一次——于是开机拉起一个没有主程序的
+  // Electron。把读也关在门外，这颗勾在 dev 里连形状都不存在。
+  it('登录项一次都没被读过（不是「读了但没显示」）', () => {
+    expect(state.loginItemReads).toEqual([]);
+    expect(state.loginItemWrites).toEqual([]);
+  });
 });
 
 // 上面「未打包」那条把平台钉成 win32，只测 isPackaged 那半扇门；这一条反向
-// 补上平台那半：isPackaged 为真但平台不是 win32，门照样要挡住。没有这条的
-// 话，删掉 `process.platform === 'win32'` 判断，全量测试照样绿——复审点名的
-// 正是这个没钉住的半边。resourcesPath 照样要打桩：bootstrap 顶上的
+// 补上平台那半：isPackaged 为真但平台不是 win32，更新那道门照样要挡住。没有
+// 这条的话，删掉 `process.platform === 'win32'` 判断，全量测试照样绿——复审
+// 点名的正是这个没钉住的半边。resourcesPath 照样要打桩：bootstrap 顶上的
 // resolvePaths 在 isPackaged 为真时无条件读它（paths.ts），跟接不接线无关，
 // 纯 Node 环境里缺了它 bootstrap 会 TypeError、窗口永远不出现。
-describe('main.ts 真行为：打包的非 Windows（平台门那半边单独钉住）', () => {
+//
+// 同一个形态顺带钉住登录项那两道门的另外两件事，因为它们只能在这里测：
+// mac 的 `Settings.args` 传不进去（写出去不能带 args），而 mac 认「开机那一次」
+// 只能问系统（`wasOpenedAtLogin`）——上面 win32 那两条走的是 argv，两边是两条
+// 独立的通路，缺哪一条那边就漏。
+describe('main.ts 真行为：打包的 macOS（更新门挡住、登录项门放行）', () => {
   let restore: () => void;
 
   beforeAll(async () => {
@@ -574,9 +776,81 @@ describe('main.ts 真行为：打包的非 Windows（平台门那半边单独钉
     vi.resetModules();
     state.handlers = {};
     state.lastWindow = null;
+    state.lastWindowOptions = null;
     state.menuTemplates.length = 0;
     state.auWrites.length = 0;
     state.auOn.length = 0;
+    // 「这台 mac 早就勾过开机自启，而这一次正是登录拉起来的」——必须在 import
+    // 之前摆好：窗口是 bootstrap 里建的，翻了旗再读已经晚了。
+    state.loginItem = { openAtLogin: true, wasOpenedAtLogin: true };
+    state.loginItemReads.length = 0;
+    state.loginItemWrites.length = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
+  });
+
+  afterAll(() => {
+    restore();
+    state.isPackaged = false;
+    state.loginItem = { openAtLogin: false, wasOpenedAtLogin: false };
+  });
+
+  it('darwin + 已打包：electron-updater 一行不接，菜单是「打开 / 开机自启 / 退出」', () => {
+    expect(state.auWrites).toEqual([]);
+    expect(state.auOn).toEqual([]);
+    expect(lastMenuLabels()).toEqual(['打开', '开机自启', '退出']);
+  });
+
+  it('mac 读登录项不带 args，那颗勾的状态读自系统（不是本地记的一笔）', () => {
+    expect(state.loginItemReads.at(-1)).toEqual({});
+    expect(menuItem('开机自启')!.checked).toBe(true);
+  });
+
+  it('mac 写登录项不带 args：那份参数在这边传不进去，写了就是写了一份假的承诺', () => {
+    (menuItem('开机自启')!.click as (item: { checked: boolean }) => void)({ checked: false });
+    expect(state.loginItemWrites).toEqual([{ openAtLogin: false }]);
+  });
+
+  // 唯一的信号来源：mac 的登录项注册的是 App 本身，argv 里没有 --hidden，
+  // 所以那边全靠 getLoginItemSettings().wasOpenedAtLogin。这条红 = mac 上
+  // 每次登录摊开一个窗口。
+  it('wasOpenedAtLogin 为真 → 窗口以 show:false 建，登录时不摊开', () => {
+    expect(state.lastWindowOptions!.show).toBe(false);
+  });
+});
+
+// Linux 那一份 AppImage 没有登录项这条 API（Electron 官方两处都只标
+// `@platform darwin,win32`），所以菜单上不能出现这颗勾，连读都不该读一次。
+// 和 mac/win 两个形态同一个 harness：钉住「门挡着」，而不是「碰巧没跑到」。
+describe('main.ts 真行为：打包的 Linux（登录项门挡住）', () => {
+  let restore: () => void;
+
+  beforeAll(async () => {
+    const prevPlatform = process.platform;
+    const prevResources = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    Object.defineProperty(process, 'resourcesPath', {
+      value: join(tmpdir(), 'shiye-main-test-resources'),
+      configurable: true,
+      writable: true,
+    });
+    restore = () => {
+      Object.defineProperty(process, 'platform', { value: prevPlatform, configurable: true });
+      if (prevResources) Object.defineProperty(process, 'resourcesPath', prevResources);
+      else delete (process as { resourcesPath?: unknown }).resourcesPath;
+    };
+    state.isPackaged = true;
+    vi.resetModules();
+    state.handlers = {};
+    state.lastWindow = null;
+    state.lastWindowOptions = null;
+    state.menuTemplates.length = 0;
+    state.auWrites.length = 0;
+    state.auOn.length = 0;
+    state.loginItem = { openAtLogin: false, wasOpenedAtLogin: false };
+    state.loginItemReads.length = 0;
+    state.loginItemWrites.length = 0;
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
     await import('./main.js');
     await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
@@ -587,9 +861,130 @@ describe('main.ts 真行为：打包的非 Windows（平台门那半边单独钉
     state.isPackaged = false;
   });
 
-  it('darwin + 已打包：门照样挡住，electron-updater 一行不接，菜单还是两项', () => {
-    expect(state.auWrites).toEqual([]);
-    expect(state.auOn).toEqual([]);
+  it('菜单只有「打开 / 退出」，登录项一次都没被读过、也没被写过', () => {
     expect(lastMenuLabels()).toEqual(['打开', '退出']);
+    expect(state.loginItemReads).toEqual([]);
+    expect(state.loginItemWrites).toEqual([]);
+  });
+
+  // 反向的一半：Linux 上窗口开局必须露面。少了这条，把 `show` 写成常量 false
+  // 全量测试照样绿——而真实后果是 AppImage 双击只出托盘图标，看着像没打开。
+  it('不是登录拉起的那一次 → 窗口照旧建出来就露着', () => {
+    expect(state.lastWindowOptions!.show).toBe(true);
+  });
+});
+
+// ============================================================================
+// 开机自启 · Windows：「这次是开机那一次」的信号在 argv 里
+// ============================================================================
+//
+// Windows 的登录项就是注册表 `HKCU\...\Run` 里一条「路径 + 参数」，系统启动时
+// 照原样执行，进程里没有任何「我是被登录项拉起来的」可读——`wasOpenedAtLogin`
+// 官方标的是 macOS。所以这边全靠 argv 里那个 `--hidden`（写进去的形状见上面
+// win32 那条，成对关系由 loginItem.test.ts 钉）。
+describe('main.ts 真行为：Windows 开机那一次（argv 带 --hidden）', () => {
+  const originalArgv = process.argv;
+  let restore: () => void = () => {};
+
+  afterEach(() => {
+    restore();
+    process.argv = originalArgv;
+    state.isPackaged = false;
+  });
+
+  /** 重新执行一遍 main.ts 顶层（含 bootstrap），argv 和平台都由调用处摆好。 */
+  async function bootAgain(): Promise<void> {
+    vi.resetModules();
+    state.handlers = {};
+    state.lastWindow = null;
+    state.lastWindowOptions = null;
+    state.menuTemplates.length = 0;
+    state.loginItem = { openAtLogin: true, wasOpenedAtLogin: false };
+    state.loginItemReads.length = 0;
+    state.loginItemWrites.length = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
+  }
+
+  it('--hidden 在 argv 里 → 窗口以 show:false 建（服务、托盘、SSE 照旧接好）', async () => {
+    restore = usePackagedWindows();
+    state.isPackaged = true;
+    process.argv = ['C:\\app.exe', '--hidden'];
+    await bootAgain();
+    expect(state.lastWindowOptions!.show).toBe(false);
+    // 藏起来的不该是整条启动流程：托盘和提醒订阅还在，到点照样响。
+    expect(lastMenuLabels()).toContain('开机自启');
+  });
+
+  // 这条是上面那条的反向证人：只测「带 --hidden 就藏」的话，把 `show` 写成
+  // 常量 false 也全绿，而真实后果是双击 exe、点开始菜单快捷方式都只出托盘图标
+  // ——窗口再也叫不出来，除非用户知道去点托盘。
+  it('同一台机器、同一个登录项，手动双击（argv 里没有 --hidden）→ 窗口照旧露面', async () => {
+    restore = usePackagedWindows();
+    state.isPackaged = true;
+    process.argv = ['C:\\app.exe'];
+    await bootAgain();
+    expect(state.lastWindowOptions!.show).toBe(true);
+  });
+
+  // 「开机自启」开着 ≠ 这台机器上双击 exe 也要藏起来。两个信号各管各的：
+  // 登录项在不在（openAtLogin）只决定菜单那颗勾，不碰窗口露不露。
+  it('登录项注册着但不是开机那一次 → 窗口露面，那颗勾照样是勾着的', async () => {
+    restore = usePackagedWindows();
+    state.isPackaged = true;
+    process.argv = ['C:\\app.exe'];
+    await bootAgain();
+    expect(state.lastWindowOptions!.show).toBe(true);
+    expect(menuItem('开机自启')!.checked).toBe(true);
+  });
+});
+
+// ============================================================================
+// 任务栏进度条：今天做完几件
+// ============================================================================
+
+describe('main.ts：任务栏进度条', () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    state.handlers = {};
+    state.lastWindow = null;
+    state.progressBars.length = 0;
+    // 这个 fetch 桩只正经答 /api/summary 那一条（别的那条答什么都行——
+    // 桌面端这条路上只有它会被问）。
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).includes('/api/summary')) {
+        return { ok: true, json: async () => ({ total: 4, done: 1, remaining: 3 }) } as unknown as Response;
+      }
+      return { ok: true, json: async () => ({}) } as unknown as Response;
+    }));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.lastWindow).not.toBeNull());
+  });
+
+  afterAll(() => { vi.unstubAllGlobals(); });
+
+  it('数据一变就刷：做完 1 件 / 今天一共 4 件 → 0.25', async () => {
+    state.progressBars.length = 0;
+    state.sseCallback!('data-changed', { file: 'tasks' });
+    await vi.waitFor(() => expect(state.progressBars.length).toBeGreaterThan(0));
+    expect(state.progressBars.at(-1)).toEqual({ progress: 0.25, mode: 'normal' });
+  });
+
+  it('**只有任务变了才刷**——收件箱、设置那些改了，「今天还剩几件」一个数都不动', async () => {
+    state.progressBars.length = 0;
+    state.sseCallback!('data-changed', { file: 'inbox' });
+    // 给它一点时间：真刷了的话，这里会多出一条记录。
+    await new Promise((r) => setTimeout(r, 30));
+    expect(state.progressBars).toEqual([]);
+  });
+
+  it('**分母是「今天一共几件」**——那 4 件是服务端算的，桌面端不自己数', async () => {
+    state.progressBars.length = 0;
+    state.sseCallback!('data-changed', { file: 'tasks' });
+    await vi.waitFor(() => expect(state.progressBars.length).toBeGreaterThan(0));
+    // 比例 0.25 = 1/4。桌面端要是拿「还剩 3 件」当分母，就会画成 1/3——
+    // 条会随着做完越做越短，跟常理反着。
+    expect(state.progressBars.at(-1)?.progress).toBe(0.25);
   });
 });

@@ -8,7 +8,7 @@ import {
   getQuadrantRule, setQuadrantRule, DEFAULT_QUADRANT_RULE, QUADRANT_RULES, QUADRANT_RULE_LABEL,
 } from './quadrantRule.js';
 
-// localStorage 在 jsdom 里跨用例会串——CLAUDE.md 明写的那条规矩。
+// localStorage 在 jsdom 里跨用例会串——前后各清一次。
 beforeEach(() => localStorage.clear());
 afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 

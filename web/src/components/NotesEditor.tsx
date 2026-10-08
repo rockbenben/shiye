@@ -39,9 +39,19 @@ interface Props {
   placeholder?: string;
   /** 最多长到几行就自己滚。面板比卡片高得多，给得起更多行。 */
   maxRows?: number;
+  /**
+   * 最少占几行。**就地编辑要 4**（详情面板里读的那一块有 96px 的地板，编辑框
+   * 从 1 行开始的话，点「写点什么…」那一下整块先塌成一条线，看着像点坏了）。
+   *
+   * **只能是这个 prop，不能靠 CSS**：`autoSize` 会把算出来的 `min-height` 连
+   * `height` 一起写成**行内样式**（实测 `style="height: 30.6667px; min-height:
+   * 30.6667px"`），行内压过任何选择器，样式表里那条 `min-height` 是空写。
+   * 默认 1 = 老行为，编辑表单那一档不变。
+   */
+  minRows?: number;
 }
 
-export function NotesEditor({ value, onChange, onSubmit, onCancel, hidePreview, autoFocus, onBlur, placeholder = '备注（打 / 插入格式）', maxRows = 6 }: Props) {
+export function NotesEditor({ value, onChange, onSubmit, onCancel, hidePreview, autoFocus, onBlur, placeholder = '备注（支持 Markdown，输入 / 插入格式）', minRows = 1, maxRows = 6 }: Props) {
   // antd 的 TextArea ref 不是 DOM 节点，真正的 <textarea> 挂在
   // `resizableTextArea.textArea` 上——要拿 selectionStart / setSelectionRange
   // 只能穿到那一层。
@@ -151,6 +161,11 @@ export function NotesEditor({ value, onChange, onSubmit, onCancel, hidePreview, 
       // `position: relative` 的外壳是菜单的定位参照。
       <div className="ink-slash-wrap">
         <Input.TextArea
+          className="ink-field-bare"
+          // 名字固定在这儿，不跟着 `placeholder` 走：两个调用方的占位符说的不一样
+          // （新建表单那句带「支持 Markdown」，详情面板那句不带），但这个框永远是
+          // 「备注」那一格。读屏念的该是它是什么，不是这一屏顺口多说了什么。
+          aria-label="备注"
           ref={notesRef}
           autoFocus={autoFocus}
           value={value}
@@ -170,7 +185,7 @@ export function NotesEditor({ value, onChange, onSubmit, onCancel, hidePreview, 
           // 点菜单不会误触 onBlur。
           onBlur={() => { setSlash(null); onBlur?.(); }}
           placeholder={placeholder}
-          autoSize={{ minRows: 1, maxRows }}
+          autoSize={{ minRows, maxRows }}
         />
         {slash && slash.items.length > 0 && (
           // role=listbox + aria-activedescendant：这是一个「在别处打字、

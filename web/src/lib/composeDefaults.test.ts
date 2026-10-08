@@ -290,3 +290,40 @@ describe('splitCapture', () => {
     expect(r.body).not.toContain(CR);
   });
 });
+
+// ============================================================================
+// smartDraft 的 `picked`：「添加任务」那一行上两颗 chip 挑过的东西
+// ============================================================================
+
+describe('smartDraft：挑过的（picked）', () => {
+  const OPTS = { presetToRemindAt: () => null };
+  // NOW 在这份文件里是 2026-08-20 10:00，所以「明天」= 21 号、「后天」= 22 号。
+  const D = {
+    listId: null, priority: 0 as const, due: null, tags: [], context: null, remindMinutes: null, smart: SMART_ON,
+  };
+
+  it('挑过的日期排在他打的字前面（控件 > 标题 > 预填）', () => {
+    const picked = new Date(2026, 7, 28, 0, 0).toISOString(); // 本周五之后随便挑一天
+    const r = smartDraft('明天写周报', D, NOW, { ...OPTS, picked: { due: picked } });
+    expect(r.due).toBe(picked);
+  });
+
+  it('挑的正好是预填那一个时不算挑——标题里写的赢（`mergePicked` 的 ①）', () => {
+    const pre = new Date(2026, 7, 21, 0, 0).toISOString();
+    const r = smartDraft('后天写周报', { ...D, due: pre }, NOW, { ...OPTS, picked: { due: pre } });
+    // 「后天」= 22 号 23:59（认出来的是那天结束，不是零点）。
+    expect(r.due).toBe(new Date(2026, 7, 22, 23, 59).toISOString());
+  });
+
+  it('一个都没挑时预填照旧落进去——这条是原来那句「第一个参数传 defaults.due 不是笔误」的证人', () => {
+    const pre = new Date(2026, 7, 25, 15, 59).toISOString();
+    const r = smartDraft('写周报', { ...D, due: pre }, NOW, OPTS);
+    expect(r.due).toBe(pre);
+  });
+
+  it('挑过的清单排在预填前面；没挑时预填照旧', () => {
+    const r = smartDraft('买灯丝', { ...D, listId: 'L9' }, NOW, { ...OPTS, picked: { listId: 'L1' } });
+    expect(r.listId).toBe('L1');
+    expect(smartDraft('买灯丝', { ...D, listId: 'L9' }, NOW, OPTS).listId).toBe('L9');
+  });
+});

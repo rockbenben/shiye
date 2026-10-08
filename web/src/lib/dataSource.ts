@@ -14,7 +14,7 @@ import {
  * 没断言它**。那两次都是「改一头，另一头的测试照样全绿」。
  *
  * 这里的解法是让「连不连得上」这件事只有一处实现：`isOnline()` 是唯一
- * 判断它的函数，`route()` 是唯一读它做分支的地方——`api.ts` 那 28 个走
+ * 判断它的函数，`route()` 是唯一读它做分支的地方——`api.ts` 那 50 个走
  * 网络的方法（不含同步的 `attachmentUrl`）**全部**经这一个 `route()`，
  * 没有任何方法另外写一份「是不是在线」的判断。不存在「第二份」，也就不
  * 存在「一头改了另一头没跟着改」的可能——这不是靠两边各自测过一遍来
@@ -409,7 +409,7 @@ const unlocked = {
     const next = applyTaskPatch(all[i], patch, iso);
     // 三条连带跟服务端走同一份 `cascadeAll`。**离线漏掉它们不只是「少做一点」**：
     // 「连带做完了 N 条子任务」那句提示是界面自己按服务端的规矩算出来的
-    // （`lib/undoDone.ts`），离线时照样弹——提示说做了、屏幕上没做，一屏之内
+    // （`lib/undoStatus.ts`），离线时照样弹——提示说做了、屏幕上没做，一屏之内
     // 自相矛盾。
     const rows = cascadeAll(all[i], next, all.map((x, k) => (k === i ? next : x)), iso);
     const born = maybeSpawnNextInstance(all[i].status, next, rows, now);

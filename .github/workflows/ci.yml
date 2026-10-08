@@ -1,6 +1,17 @@
-# 干净克隆 + npm ci + 全量测试。**这个 workflow 从来没有真的跑过**——仓库还没有
-# 远程，是本地项目。等公开之后第一次 push 才会验证它，那次红了是预期内的。
-# （同 AGENTS.md 的老道理：一条没跑过的断言不算断言。）
+# 干净克隆 + npm ci + 全量测试。
+#
+# **这个 workflow 在真 runner 上跑过 17 次。** 2026-09-03 那天连红 8 次——那批改动
+# 还没跑通，「第一次 push 那次红了是预期内的」说的就是它；之后一路绿，最近一次是
+# 2026-09-26。所以「全量测试在干净环境里是绿的」这件事**已经有真 runner 上的
+# 证据**，不再只有本机这一份。
+#
+# （上一版这里写的是「**这个 workflow 至今没在真 runner 上跑过一次**」——那是仓库
+# 还没有远程、workflow 刚接上的那阵子写的，那时候确实一次都还没跑过。别再照着
+# 那句话推「这套测试没被验证过」。）
+#
+# ⚠ **但「只在 windows-latest 上跑过」这条仍然成立**——下面「为什么只有
+# windows-latest」「为什么只钉 node 24」两条决定的前提（这套测试从没在别的环境
+# 跑过）原样成立；变的是上面那句「没被验证过」。
 #
 # ── 为什么只有 windows-latest ──
 #
@@ -10,14 +21,27 @@
 # 都是平台相关的。加一条 ubuntu 只会得到一个没法在本地复现的红。
 # 要加就等这里绿了之后单独做一次，那时候 ubuntu 报出来的才是真的平台假设。
 #
-# ── 为什么只钉 node 24 ──
+# ── 为什么只钉 node 26 ──
 #
-# 桌面端捆的是 Electron 44，它自带 Node 24.19.0（`ELECTRON_RUN_AS_NODE=1` 跑
-# `process.versions.node` 核过）——**这就是这个应用实际运行的版本**，
-# CI 该跑的是它。`engines.node` 已同步改成 `>=24.0.0`（原来是 `>=20.19.0`，
-# 而下限那一档没有任何测试盯着，是一句没人验证的声明）。
+# Node 26 是当前这一条发布线（2026-10 从 24 手上接过来），`engines.node` 同步
+# 改成 `>=26.0.0`（原来是 `>=24.0.0`）。
 #
-# 顺带记一笔：改之前在 node 20.20.2 上实跑过 1852 条，全绿——所以这次收窄
+# **CI 跑的比应用自己跑的更新，这条要说清楚**：桌面端捆的 Electron 45 自带
+# Node 24.22.0（`ELECTRON_RUN_AS_NODE=1` 跑 `process.versions.node` 核过），
+# 而 CI 和开发机都跑 26——**测的是更新的那条线，不是应用内嵌的那条**。
+# 这么选的理由是：Node 26 就是当前发布线，开发机装的是它；而应用内嵌的
+# Node 由 Electron 说了算，**钉不了**（Electron 45 是当前最新版，没有更靠
+# 后的版本能带上 Node 26）。等 Electron 46 出来、它捆的是 Node 26，两边
+# 就自动齐了。
+#
+# **升 Electron 45 时核过它的破坏性变更**：这一版动的是 iframe 的
+# nodeIntegration、chrome-extension 的 preload、`chromeMediaSource: 'desktop'`
+# 约束，还有 asar 里 `fs.open` 返回的描述符不再指向临时副本——**这四条本仓
+# 一条都没用到**（desktop/src 里 grep desktopCapturer / chromeMediaSource /
+# nodeIntegration / fs.open 全是零命中），唯一影响到本仓的是它内置的 Node
+# 从 24.19.0 升到 24.22.0。
+#
+# 顺带记一笔：改之前在 node 20.20.2 上实跑过 1852 条，全绿——所以那次收窄
 # 不是因为 20 跑不过，是因为「声明支持而 CI 不跑」和「不声明」之间，
 # 后者诚实。要重新支持 20，先把它加回矩阵再改 engines，别只改一头。
 #
@@ -34,9 +58,14 @@
 # 不会被执行——包能被解析到就够了，不需要 dist 里那个二进制。
 #
 # 这条不是推的，是实测的：把 `node_modules/electron/path.txt` 和 `install.js`
-# 一起挪走（让它连偷偷下载都做不到）再跑 `desktop/src/`，**145 条全绿**。
-# 这个 workflow 从没跑过，所以上面那句假话一直没人撞上；哪天有人靠它做判断，
-# 先重跑这个实验。
+# 一起挪走（让它连偷偷下载都做不到）再跑 `desktop/src/`，**全绿**。
+# 上面那句假话是本机对着这一批核出来的——真 runner 上有没有人靠它做过判断，
+# 日志里看不出来；哪天有人靠它做判断，先重跑这个实验。
+#
+# **2026-10-21 升 Electron 45 时重核过一遍**：这台机器上 electron 的
+# `dist/` 和 `path.txt` 本来就不在（postinstall 跳过了下载），所以
+# `desktop/src/` 直接就是在「没有二进制」的条件下跑的——**197 条全绿**，
+# 跟 CI 上 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` 的形态一模一样。
 #
 # ── 不跑 `dist:desktop` ──
 #
@@ -44,6 +73,20 @@
 # 测试还全绿」。要出包等有 release 流程时按 tag 单开一个 workflow。
 
 name: CI
+
+# 这个 workflow 只读代码：不发包、不写 release、不碰 issue。
+# 令牌按最小权限收窄——`contents: read` 只够 clone，别的（issues、packages、
+# actions）一律不给。仓库设置里的默认权限可能是「读写一切」，写在这里就
+# 不依赖那个默认值了。
+permissions:
+  contents: read
+
+# 同一个分支连着推几次，前一次还没跑完就取消掉，省 runner 也省时间。
+# ⚠️ **main 上不取消**：那几次跑的是**已经合进去**的提交，取消掉等于那个提交
+# 从来没被验过——和这个文件开头「一个从没跑过的 workflow 不算数」是同一条。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 on:
   push:
@@ -53,14 +96,14 @@ on:
 jobs:
   test:
     runs-on: windows-latest
-    name: windows · node 24
+    name: windows · node 26
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: '26'
           cache: npm
 
       - run: npm ci

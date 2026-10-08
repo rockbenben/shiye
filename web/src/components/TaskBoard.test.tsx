@@ -247,8 +247,15 @@ describe('TaskBoard：筛选不能摘掉正在编辑的卡片', () => {
     expect(screen.getByPlaceholderText('标题')).toBeDefined();
 
     fireEvent.click(byText('取消')!);
-    expect(screen.queryByPlaceholderText('标题')).toBeNull();
-    expect(screen.queryByText('原标题')).toBeNull();
+    // **两句都写成显式等待，不是同步断言。** 草稿卸载和这张卡被筛掉是同一次
+    // React 渲染的两半，同步断言等于假定那一次渲染必然在 `fireEvent` 里跑完——
+    // 全量并发下这一条红过一发（本机 11 次复跑 + 3 次在全量套件抢 CPU 时跑都
+    // 不复现）。改的是断言的**时机**，不是判据：等不到照样红，而且两句都在同
+    // 一个等待里，不会一句放宽一句没放宽。
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('标题')).toBeNull();
+      expect(screen.queryByText('原标题')).toBeNull();
+    });
   });
 });
 
@@ -393,11 +400,19 @@ describe('TaskBoard：卡片本身的行为', () => {
     expect(() => render(<Board tasks={[bad]} inbox={[]} now={NOW} onPatch={noop} onEditTask={noopAsync} onDelete={noop} />)).not.toThrow();
   });
 
-  it('未知 status 的任务在状态角标上标出原始值，不炸页面', () => {
+  /** 状态不合法（手改文件写出 `pending`）时，卡面那句要说**该改成什么**，
+   *  不是把机器值换个说法再甩一次。五个合法值从 `STATUS_LABEL` 现拼，句子里
+   *  必须五个都在——少一个就是在骗人说那是个选项。原始值进 `title`。 */
+  it('未知 status 的卡面说清该改成哪五个值之一，原始值挪进 title', () => {
     const bad = { ...task({ title: '坏状态' }), status: 'pending' } as unknown as Task;
     render(<Board tasks={[bad]} inbox={[]} now={NOW} onPatch={noop} onEditTask={noopAsync} onDelete={noop} />);
     expect(screen.getByText('坏状态')).toBeDefined();
-    expect(screen.getByText(/状态异常/)).toBeDefined();
+    const pill = screen.getByText(/状态认不得/);
+    for (const label of ['待办', '进行中', '已完成', '搁置', '已放弃']) {
+      expect(pill.textContent, `句子里少了「${label}」`).toContain(label);
+    }
+    expect(pill.textContent).not.toContain('pending');
+    expect(pill.getAttribute('title')).toContain('pending');
   });
 
   it('点「开始」把状态改成 doing', () => {
@@ -435,6 +450,20 @@ describe('TaskBoard：编辑卡片', () => {
     await waitFor(() => expect(screen.queryByPlaceholderText('标题')).toBeNull());
   });
 
+  /**
+   * **单独给它 45 秒，不吃顶层那个 15 秒。**
+   *
+   * 这条在 dom 档里算重的：整块 Board 渲染、打开编辑表单、一次 reject 的保存、
+   * 再等错误提示弹出来。**全量并发时实测压过 15 秒的顶层 `testTimeout` 而报超时，
+   * 单跑只要几秒**——`vitest.config.ts` 那段注释早就把 `TaskBoard` 列进「常压
+   * 15s 线」那几个文件，所以这不是新冒出来的毛病，是那条线本来就贴着脸。
+   *
+   * 为什么现在就该松：CI 的 windows runner 只有 4 核，`MAX_WORKERS = min(6,
+   * 核-1)` 落到 3，比本机更紧；而上面那个头注释说了，这条 workflow 的第一次
+   * 实跑还没发生过。不给它留余量，第一次实跑大概率红在一个跟改动无关的地方，
+   * **而那正是「一条没跑过的断言不算断言」最贵的一种兑现**——红完之后没人会
+   * 再信这条 workflow。
+   */
   it('保存失败：编辑框留着、刚打的字原样在，弹出错误提示——不能把用户的输入连带没存成的这次一起清空', async () => {
     const onEditTask = vi.fn().mockRejectedValue(new Error('网络断了'));
     const t = task({ title: '原标题' });
@@ -456,7 +485,7 @@ describe('TaskBoard：编辑卡片', () => {
     expect(screen.getByDisplayValue('写了一半服务就挂了')).toBeDefined();
     // 错误提示弹出来了。
     await waitFor(() => expect(screen.getByText('网络断了')).toBeDefined());
-  });
+  }, 45_000);
 });
 
 

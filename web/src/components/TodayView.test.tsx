@@ -146,14 +146,16 @@ describe('TodayView：头上那一行', () => {
    * 动作原来只在命令面板和「接下来」的组头上有，而「今天」才是最常看见这个
    * 数字的地方。
    */
-  it('有过期的时候挂一颗「全部改到今天」，推的是上面那个数字数的那几条', () => {
+  it('有过期的时候挂一颗「N 条改到今天」，推的是上面那个数字数的那几条', () => {
     const onDefer = vi.fn();
     const late = task({ id: 'a', title: '欠着的', due: localIso(2026, 8, 1, 9) });
     const soon = task({ id: 'b', title: '今天的', due: localIso(2026, 8, 10, 20) });
     render(<TodayView lists={[]} tasks={[late, soon]} now={LOCAL_NOW} onPatch={noop}
       onEditTask={noopAsync} onDelete={noop} onReorder={noopReorder} onDeferOverdue={onDefer} />);
 
-    fireEvent.click(screen.getByRole('button', { name: '全部改到今天' }));
+    // 名字带着条数：这颗挂在「4 条（1 条已过期）」那一行旁边，写「全部」会被读成
+    // 「这 4 条都挪」，而它只推那 1 条。
+    fireEvent.click(screen.getByRole('button', { name: '1 条改到今天' }));
 
     expect(onDefer).toHaveBeenCalledTimes(1);
     expect((onDefer.mock.calls[0][0] as Task[]).map((t) => t.id)).toEqual(['a']);
@@ -831,7 +833,7 @@ describe('TodayView：行档（density="row"，task-5-brief）', () => {
     expect(rowFor('乙').querySelector('.ink-trow-proposal')).toBeNull();
   });
 
-  it('习惯任务：打卡条在行档下仍然渲染，且带上收窄的 class——brief「行档保留它，但排版要跟着收窄」', () => {
+  it('习惯任务：行档画那颗紧凑记号，整句话走 aria-label——不再有一行飘在两条行之间', () => {
     // 照抄上面「TodayView：打卡条」那组已验证过的夹具（昨天打过卡的历史
     // 实例 + 今天待打卡的这条，streak 才不是 0）——不是随手拍一条新的，
     // 见那组第一条测试上面的注释。
@@ -846,13 +848,20 @@ describe('TodayView：行档（density="row"，task-5-brief）', () => {
     const { container } = render(
       <TodayView lists={[]} tasks={[yesterdayDone, todayPending]} now={LOCAL_NOW} onPatch={noop} onEditTask={noopAsync} onDelete={noop} onReorder={noopReorder} density="row" />,
     );
-    const streak = container.querySelector('.ink-habit-streak');
-    expect(streak).not.toBeNull();
-    expect(streak!.className).toContain('ink-habit-streak-compact');
-    expect(container.querySelector('.ink-trow')).not.toBeNull();
+    const row = container.querySelector('.ink-trow');
+    expect(row).not.toBeNull();
+    // 记号必须在**这一行里面**，并且说得出整句话（悬停/读屏听到的跟卡档
+    // 屏幕上写着的是同一份）。
+    const mark = row!.querySelector('.ink-trow-habit');
+    expect(mark, '行档的打卡记号不见了').not.toBeNull();
+    expect(mark!.getAttribute('aria-label')).toContain('连续打卡 1 天');
+    expect(mark!.getAttribute('aria-label')).toContain('今天还没打卡');
+    // 反向：那条完整的句子在行档下不该再作为独立一行存在——它原来是行的
+    // 兄弟节点，飘在两条行中间，看着像属于上面那条。
+    expect(container.querySelector('.ink-habit-streak'), '行档还在画卡档那条打卡条').toBeNull();
   });
 
-  it('对照组：卡档下同一份夹具，打卡条不带收窄 class', () => {
+  it('对照组：卡档下同一份夹具，打卡条画在**卡片里面**', () => {
     const yesterdayDone = task({
       id: 'h0', title: '喝水', habit: true, repeat: DAILY, status: 'done',
       completedAt: localIso(2026, 8, 9, 9),
@@ -866,7 +875,9 @@ describe('TodayView：行档（density="row"，task-5-brief）', () => {
     );
     const streak = container.querySelector('.ink-habit-streak');
     expect(streak).not.toBeNull();
-    expect(streak!.className).not.toContain('ink-habit-streak-compact');
+    // **归属**是这条断言的全部意义：它以前是卡片的兄弟节点，于是「🔥 连续 5
+    // 天」落在两张卡的缝隙里，读起来像上一张卡的。
+    expect(streak!.closest('.ink-task-card'), '打卡条飘在卡片外面').not.toBeNull();
   });
 });
 

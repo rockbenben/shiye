@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyMove, bubbleOverdue, countByStatus, countStale, filterTasks, formatWhen, groupBySource, isInTodayView, moveTo,
-  isOverdue, isReminderOverdue, isStatus, overdueLabel, sortByUrgency, sortTodayOrder, isSettled, normalizeTaskArrays, STATUSES, STATUS_LABEL, STATUS_FILTERS, STATUS_FILTER_LABEL, displayReminderAt, waitingQuietLabel, waitingText, parkedQuietLabel, notStarted, isTaskOverdue } from './taskView.js';
+  isOverdue, isReminderOverdue, isStatus, overdueLabel, overdueMark, longestOverdueHint, sortByUrgency, sortTodayOrder, isSettled, normalizeTaskArrays, STATUSES, STATUS_LABEL, STATUS_HINT, STATUS_FILTERS, STATUS_FILTER_LABEL, displayReminderAt, waitingQuietLabel, waitingText, parkedQuietLabel, notStarted, isTaskOverdue, dayInSpan, isMultiDayToday, multiDayLabel } from './taskView.js';
 import type { InboxItem, Task, Status } from '../types.js';
 
 const NOW = new Date('2026-08-10T12:00:00.000Z');
@@ -335,6 +335,100 @@ describe('isInTodayView：「今天」的成员资格', () => {
   });
 });
 
+/**
+ * 跨天的那一条族：`startAt` 和 `due` 各是一头，中间**每一天**都在「今天」。
+ * 加这一族之前它们哪儿都不在——8 号开始、20 号截止的活只在 8 号露一次脸。
+ * 完整理由（含「为什么截止那天不算在内」）在 `taskView.ts` 的 `spanOf` 上面。
+ *
+ * `LOCAL_NOW` 是 8-10 12:00，夹具那条区间是 8-08 → 8-20，也就是今天走到第 3 天。
+ */
+describe('跨天任务：区间内每一天都算今天', () => {
+  const span = { startAt: localIso(2026, 8, 8, 9, 0), due: localIso(2026, 8, 20, 18, 0) };
+
+  it('区间内一天不落，而且「第 N 天」跟着日历格子走', () => {
+    for (let d = 8; d <= 19; d++) {
+      const now = new Date(2026, 7, d, 12, 0, 0);
+      expect(isInTodayView(task(span), now), `8-${d} 号该收进「今天」`).toBe(true);
+      expect(dayInSpan(task(span), now), `8-${d} 号是第几天`).toEqual({ day: d - 7, total: 12 });
+    }
+  });
+
+  /**
+   * **这一条是那一族的门闩。** 记号不挂、人还在——如果两边都写成「区间是闭的」，
+   * 截止那天会同时挂上「第 12 天 · 共 12 天」和「今天到期」，那句话是在告诉人
+   * 「还早」。分开断言才看得出「不挂记号」不是「不收了」。
+   */
+  it('截止那天不挂记号，但照样在「今天」——理由是 due，不是区间', () => {
+    const dueDay = new Date(2026, 7, 20, 12, 0, 0);
+    expect(multiDayLabel(task(span), dueDay)).toBeNull();
+    expect(isInTodayView(task(span), dueDay)).toBe(true);
+  });
+
+  it('过了截止那天也不挂记号——那时候该说的是「过期几天了」', () => {
+    const after = new Date(2026, 7, 23, 12, 0, 0);
+    expect(dayInSpan(task(span), after)).toBeNull();
+    expect(isInTodayView(task(span), after)).toBe(true);
+  });
+
+  it('还没到开始那天不算——那正是 startAt 这个字段要挡掉的噪声', () => {
+    const t = task({ startAt: localIso(2026, 8, 12, 9, 0), due: localIso(2026, 8, 20, 18, 0) });
+    expect(dayInSpan(t, LOCAL_NOW)).toBeNull();
+    expect(isInTodayView(t, LOCAL_NOW)).toBe(false);
+  });
+
+  it('只有一端不是跨天：只有 startAt 仍是「就那一天」，只有 due 仍是「截止那天」', () => {
+    expect(isMultiDayToday(task({ startAt: localIso(2026, 8, 8, 9, 0) }), LOCAL_NOW)).toBe(false);
+    expect(isMultiDayToday(task({ due: localIso(2026, 8, 20, 18, 0) }), LOCAL_NOW)).toBe(false);
+  });
+
+  it('今天开始、明天截止的不是跨天——只有一天可做，「明天截止」那半句已经说尽了', () => {
+    const t = task({ startAt: localIso(2026, 8, 10, 9, 0), due: localIso(2026, 8, 11, 18, 0) });
+    expect(dayInSpan(t, LOCAL_NOW)).toBeNull();
+    // 收回来的，只是走的是第五条（startAt 落在今天），不是这一族。
+    expect(isInTodayView(t, LOCAL_NOW)).toBe(true);
+  });
+
+  it('startAt 晚于 due 是一句自相矛盾的话：不认区间，也不因此把人挡在任务外面', () => {
+    const t = task({ startAt: localIso(2026, 8, 20, 9, 0), due: localIso(2026, 8, 10, 18, 0) });
+    expect(dayInSpan(t, LOCAL_NOW)).toBeNull();
+    expect(isInTodayView(t, LOCAL_NOW)).toBe(true); // due 就在今天
+  });
+
+  it('跨月照数：格子数，不问是不是同一个月', () => {
+    const t = task({ startAt: localIso(2026, 8, 29, 9, 0), due: localIso(2026, 9, 5, 18, 0) });
+    expect(dayInSpan(t, new Date(2026, 8, 2, 12, 0, 0))).toEqual({ day: 5, total: 7 });
+  });
+
+  it('按天不按时刻：23:59 开始、次日 00:01 截止，中间那一天照样是第 2 天', () => {
+    const t = task({ startAt: localIso(2026, 8, 9, 23, 59), due: localIso(2026, 8, 11, 0, 1) });
+    expect(dayInSpan(t, LOCAL_NOW)).toEqual({ day: 2, total: 2 });
+  });
+
+  it('解不出来的时间不是跨天（写成「下周三」的那种）', () => {
+    expect(dayInSpan(task({ startAt: '下周三', due: localIso(2026, 8, 20, 18, 0) }), LOCAL_NOW)).toBeNull();
+  });
+
+  it('了结的不挂记号——一条已完成/搁置的活写着「在做第 3 天」是句假话', () => {
+    expect(multiDayLabel(task({ ...span, status: 'done' }), LOCAL_NOW)).toBeNull();
+    expect(multiDayLabel(task({ ...span, status: 'later' }), LOCAL_NOW)).toBeNull();
+    // 对照：同一条区间、状态是待办就该挂上，证明上面两条不是「永远不挂」。
+    expect(multiDayLabel(task({ ...span, status: 'todo' }), LOCAL_NOW)).not.toBeNull();
+  });
+
+  it('那句话长这样（卡片和行共用这一份字串）', () => {
+    expect(multiDayLabel(task(span), LOCAL_NOW)).toBe('第 3 天 · 共 12 天');
+  });
+
+  it('行档那句只留「第 3 天」——整句会把右边该看的截止时间挤没', () => {
+    const full = multiDayLabel(task(span), LOCAL_NOW) as string;
+    const brief = multiDayLabel(task(span), LOCAL_NOW, true) as string;
+    expect(brief).toBe('第 3 天');
+    // 钉的是「短的是长的那句的开头」：哪天有人只改其中一份，这两句就会分叉，
+    // 而行档那句是靠 `title` 补成全句的。
+    expect(full.startsWith(brief), `两句分叉了：${full} / ${brief}`).toBe(true);
+  });
+});
+
 describe('isReminderOverdue：提醒在更早的一天已经触发过、任务还没做完', () => {
   it('提醒时间是昨天的算', () => {
     expect(isReminderOverdue(task({ reminders: remindsAt(localIso(2026, 8, 9, 9, 0)) }), LOCAL_NOW)).toBe(true);
@@ -504,6 +598,37 @@ describe('overdueLabel：过期了多久', () => {
   it('时间解析不出来（手改 JSON 写了「下周三」）的那条根本判不出过期，不会硬造一个数字出来', () => {
     expect(overdueLabel(task({ due: '下周三' }), NOW_L)).toBeNull();
     expect(overdueLabel(task({ due: null, startAt: null, endAt: null, reminders: [{ at: '下周三', firedAt: null }] }), NOW_L)).toBeNull();
+  });
+
+  /**
+   * `brief` 那一档给「已过期」那一组用：组头已经说了「已过期」，卡上再各写
+   * 一遍就是 19 个「过期」挡在任务前面。**只有带数字的两档能省**——
+   * 「刚过期」「已过期」把「过期」抠掉什么都不剩，那两条必须照旧。
+   */
+  it('brief：带数字的两档只报时长，「刚过期」照旧（抠掉就什么都不剩）', () => {
+    expect(overdueLabel(task({ due: ago(3 * 24 * H) }), NOW_L, true)).toBe('3 天');
+    expect(overdueLabel(task({ due: ago(3 * H) }), NOW_L, true)).toBe('3 小时');
+    expect(overdueLabel(task({ due: ago(5 * 60 * 1000) }), NOW_L, true)).toBe('刚过期');
+    expect(overdueLabel(task({ due: ago(3 * 24 * H) }), NOW_L)).toBe('过期 3 天');
+  });
+
+  it('overdueMark：show 是屏幕上那半句，say 是给读屏和悬停的完整一句，两个出自同一次计算', () => {
+    const t = task({ due: ago(3 * 24 * H) });
+    expect(overdueMark(t, NOW_L, true)).toEqual({ show: '3 天', say: '过期 3 天' });
+    // 不省字的那一档：两半是同一句，调用方据此不再往读屏里补「过期」两个字
+    expect(overdueMark(task({ due: ago(5 * 60 * 1000) }), NOW_L, true)).toEqual({ show: '刚过期', say: '刚过期' });
+    expect(overdueMark(t, NOW_L, false)).toEqual({ show: '过期 3 天', say: '过期 3 天' });
+    expect(overdueMark(task({ due: null }), NOW_L, true)).toBeNull();
+  });
+
+  it('longestOverdueHint：报的是这一组里欠得最久的那一条', () => {
+    expect(longestOverdueHint([task({ due: ago(2 * 24 * H) }), task({ due: ago(20 * 24 * H) })], NOW_L))
+      .toBe('最久的 20 天');
+    // 整组都不到一小时：「最久的 刚过期」不成话，那种时候组头那个计数说完了
+    expect(longestOverdueHint([task({ due: ago(10 * 60 * 1000) })], NOW_L)).toBeUndefined();
+    // 一条都算不出时刻（时间解析不出来的那批）：不硬造一句「最久的 NaN 天」
+    expect(longestOverdueHint([task({ due: '下周三' })], NOW_L)).toBeUndefined();
+    expect(longestOverdueHint([], NOW_L)).toBeUndefined();
   });
 });
 
@@ -1055,5 +1180,40 @@ describe('isTaskOverdue：一个已经响过的提醒，不能让还没到期的
   it('不动「今天」的成员资格', () => {
     expect(isInTodayView(realOne(), NOW)).toBe(true);
     expect(isInTodayView(task({ due: local(31, 21), reminders: [{ at: local(29, 10), firedAt: null }] }), NOW)).toBe(true);
+  });
+});
+
+/**
+ * 五个状态**各是什么意思**。
+ *
+ * 「搁置」和「放弃」光看字面分不出意思，而它们的区别在 `STATUSES` 上方那段注释里
+ * 写得很清楚——**那段注释只在源码里**。猜错的那一下还没有撤销（`lib/undoStatus.ts`
+ * 只给「完成」做撤销），所以这句人话必须到人眼前。
+ */
+describe('STATUS_HINT：状态角标那句解释', () => {
+  it('每一档都有——写成 Record<Status, string>，加一档而这里没跟上会编译红', () => {
+    for (const s of STATUSES) expect(typeof STATUS_HINT[s]).toBe('string');
+  });
+
+  it('**搁置那两句是这段文字存在的全部理由**：暂时不做 + 还会回来，以及它不进今天、不再提醒', () => {
+    expect(STATUS_HINT.later).toContain('暂时不做');
+    expect(STATUS_HINT.later).toContain('还会回来');
+    expect(STATUS_HINT.later).toContain('不再提醒');
+  });
+
+  it('放弃那条要说清「没删掉、还看得见、可以再来」——它跟搁置的分界全在这三件事上', () => {
+    expect(STATUS_HINT.abandoned).toContain('没删掉');
+    expect(STATUS_HINT.abandoned).toContain('看得见');
+    expect(STATUS_HINT.abandoned).toContain('重新开始');
+  });
+
+  it('**搁置和放弃说的是两件不同的事**，不是同一句话换个说法', () => {
+    expect(STATUS_HINT.later).not.toBe(STATUS_HINT.abandoned);
+  });
+
+  it('**自解释的三档不写长句**——tooltip 里弹「待办：还没开始」比不弹还啰嗦', () => {
+    expect(STATUS_HINT.todo).toBe('还没开始');
+    expect(STATUS_HINT.doing).toBe('正在做');
+    expect(STATUS_HINT.done).toBe('已经做完');
   });
 });

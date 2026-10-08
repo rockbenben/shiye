@@ -13,8 +13,8 @@ npx electron brand/render.mjs
 | `../desktop/build/icon.png` | 桌面版应用图标（electron-builder 从它生成 .ico） |
 | `../web/public/icon.svg` | 网页标签页图标（`mark.svg` 的副本） |
 | `social-card.html` | 社交卡。源头 |
-| `social-card.png` | 1200×630。README 顶上那张、GitHub 的 Social preview、`og:image` |
-| `mark-512/64/32.png`, `logo.png` | 各处要用位图时取现成的 |
+| `social-card.png` | 1200×630。**GitHub 的 Social preview、`og:image`**（README 首屏用 `shots/today.png` 那张真实界面——社交卡是给信息流看的缩略图，读者在仓库页里要看见的是界面本身） |
+| `mark-512.png`、`mark-64.png`、`mark-32.png`、`logo.png` | 各处要用位图时取现成的 |
 
 ## 这个印是什么
 

@@ -5,7 +5,7 @@ import { POSTPONE_MINUTES, postponePatch, reschedulePatch, RESCHEDULE_KEYS, RESC
 // `from: 'done'`、拖过好几个周期、提醒对齐 due 这几条上悄悄漂开。
 import { skipPatch } from '../../../server/src/repeat.js';
 import { PRI_MENU } from '../components/TaskFields.js';
-import { asArray, CONTEXT_LABEL, CONTEXTS, isSettled } from './taskView.js';
+import { asArray, CONTEXT_LABEL, CONTEXTS, isSettled, isStatus, STATUS_MOVES } from './taskView.js';
 
 /**
  * 一条任务的「更多操作」菜单——**卡片和紧凑行共用这一份**。
@@ -114,8 +114,18 @@ export function taskMenuItems(t: Task, opts: TaskMenuOpts): MenuItem[] {
     // 跳过本次：只有真跳得动的才摆出来——不重复的、没有 due 的、次数用完的，
     // 点了屏幕上什么都不会变。判据在 server/src/repeat.ts。
     ...(skip ? [{ key: 'skip', label: '跳过本次' }] : []),
+    // **状态机整排摆在这儿**（`STATUS_MOVES`，`lib/taskView.ts`）。卡片档的卡面
+    // 只摆「此刻最可能按的那一颗」，其余几步、以及紧凑行那一整排（行上一颗状态
+    // 按钮都不摆，以前只能靠划手）都从这一组走。三条通路读同一张表，
+    // 见 `TaskCard.tsx` 里 `SWIPE` 上面那段：手势不是第二套状态机。
+    //
     // `type: 'group'`（组标题 + 平铺几项）不是子菜单：子菜单要先悬停展开，
-    // 键盘和触摸屏上都多一道，为了省几行高度换一层交互不划算。
+    // 键盘和触摸屏上都多一道，为了省几行高度换一层交互不划算。下面几组同。
+    {
+      type: 'group' as const,
+      label: '改状态',
+      children: STATUS_MOVES[isStatus(t.status) ? t.status : 'todo'].map((m) => ({ key: `move:${m.to}`, label: m.label })),
+    },
     { type: 'group' as const, label: '改期', children: RESCHEDULE_KEYS.map((k) => ({ key: `due:${k}`, label: RESCHEDULE_LABEL[k] })) },
     // 当前那一档/那个清单**禁用着而不是藏起来**：一份少了一项的列表看不出
     // 「少的那项正是它现在的位置」，看起来像那一项不见了。
@@ -203,6 +213,12 @@ export function decodeTaskMenu(key: string, t: Task, now: Date): TaskMenuAction 
   if (key === 'delete') return { kind: 'delete' };
   if (key === 'ai-breakdown') return { kind: 'breakdown' };
   if (key === 'pin') return { kind: 'patch', patch: { pinned: !t.pinned } };
+  // 「改状态」那一组：`move:` 后面就是目标状态，本身就是 patch 的全部内容。
+  // 认不出来的字符串（文件是接口，手改能改出别的 key）不当成动作，别发半截 patch。
+  if (key.startsWith('move:')) {
+    const to = key.slice(5);
+    return isStatus(to) ? { kind: 'patch', patch: { status: to } } : null;
+  }
   if (key === 'skip') {
     const patch = t.repeat ? skipPatch(t, now) : null;
     return patch ? { kind: 'skip', nextDue: patch.due } : null;

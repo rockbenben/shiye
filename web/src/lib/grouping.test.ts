@@ -130,18 +130,37 @@ describe('regroupSections：分组', () => {
     expect(titles(out)).toEqual(['已过期', '今天', '明天', '7 天内', '以后', '没有时间']);
   });
 
+  /**
+   * 「已过期」那一组的省字标记在**这一层也要接上**。
+   *
+   * 判据本身在 `agenda.ts` 的 `dueSectionExtras`（两处共用一份，就是为了让
+   * 「接下来」和「按时间分组」说的是一句话），但共用不等于两边都接上了——
+   * 这里漏传一次，「全部」里按时间分组的那一组就还是 19 个「过期」，而议程
+   * 那一屏照样绿。组头那句「最久的 N 天」按筛完剩几条算，在 `App.tsx` 那层
+   * （`withOverdueHint`）。
+   */
+  it('按时间：「已过期」那一组带上 briefTime，别的组不带', () => {
+    const out = regroupSections(one([
+      task({ id: 'over', due: iso(2026, 8, 20) }),
+      task({ id: 'today', due: iso(2026, 8, 22, 18) }),
+    ]), gs({ groupBy: 'due' }), ctx);
+    const byKey = new Map(out.map((s) => [s.key, s]));
+    expect(byKey.get('g:overdue')!.briefTime).toBe(true);
+    expect(byKey.get('g:today')!.briefTime).toBeFalsy();
+  });
+
   it('按优先级：高中低无', () => {
     const out = regroupSections(one([
       task({ id: 'p0' }), task({ id: 'p3', priority: 3 }), task({ id: 'p1', priority: 1 }),
     ]), gs({ groupBy: 'priority' }), ctx);
-    expect(titles(out)).toEqual(['高优先级', '低优先级', '没有优先级']);
+    expect(titles(out)).toEqual(['高优先级', '低优先级', '没定优先级']);
     expect(ids(out)).toEqual([['p3'], ['p1'], ['p0']]);
   });
 
-  it('优先级越界（手改文件写了 7）归进「没有优先级」，不另开一档', () => {
+  it('优先级越界（手改文件写了 7）归进「没定优先级」，不另开一档', () => {
     const weird = task({ id: 'w', priority: 7 as unknown as Task['priority'] });
     const out = regroupSections(one([weird]), gs({ groupBy: 'priority' }), ctx);
-    expect(titles(out)).toEqual(['没有优先级']);
+    expect(titles(out)).toEqual(['没定优先级']);
   });
 
   it('按清单：跟侧栏一样按 List.order 排，「不属于任何清单」在最后', () => {
@@ -196,7 +215,7 @@ describe('regroupSections：分组', () => {
 });
 
 describe('getGroupSort / setGroupSort', () => {
-  // localStorage 在 jsdom 里跨用例会串——CLAUDE.md 明写的那条规矩，
+  // localStorage 在 jsdom 里跨用例会串——
   // 前后各清一次，不依赖用例执行顺序。
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
@@ -296,7 +315,7 @@ describe('keepEmpty：看板要能往空列里拖', () => {
 
   it('给了 keepEmpty 时四档全在——一列没卡就把整列藏起来等于把落点也藏了', () => {
     const out = regroupSections(one([task({ id: 'a', priority: 3 })]), gs({ groupBy: 'priority' }), { ...ctx, keepEmpty: true });
-    expect(titles(out)).toEqual(['高优先级', '中优先级', '低优先级', '没有优先级']);
+    expect(titles(out)).toEqual(['高优先级', '中优先级', '低优先级', '没定优先级']);
   });
 });
 

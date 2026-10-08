@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { isInTodayView, isSettled as webIsSettled, STATUSES } from './taskView.js';
-import { summaryTasks } from '../../../server/src/dailySummary.js';
+import { isInTodayView, isSettled as webIsSettled, isTaskOverdue as webIsTaskOverdue, STATUSES } from './taskView.js';
+import { todayMetaLabel } from './workload.js';
+import { isTaskOverdue as srvIsTaskOverdue, summaryTasks, summaryText } from '../../../server/src/dailySummary.js';
 import { isSettled as srvIsSettled } from '../../../server/src/task.js';
 import { task } from '../test-utils.js';
 import type { Task } from '../types.js';
@@ -51,8 +52,15 @@ const CASES: Array<{ name: string; t: Task }> = [
   { name: '今天晚些开始、还没到点', t: task({ id: 'k2', due: null, startAt: at(23) }) },
   { name: '明天开始', t: task({ id: 'l', due: null, startAt: at(9, 27) }) },
   { name: '昨天开始、没有 due——不该永远赖在今天', t: task({ id: 'm', due: null, startAt: at(9, 25) }) },
-  { name: '今天开始、下周截止', t: task({ id: 'n', due: at(9, 31), startAt: at(9) }) },
+  { name: '今天开始、下周截止（跨天区间的第一天）', t: task({ id: 'n', due: at(9, 31), startAt: at(9) }) },
   { name: '今天开始但已完成', t: task({ id: 'o', due: null, startAt: at(9), status: 'done' }) },
+  // 跨天区间那一族。加这几条之前 `startAt` 那几条对「区间中间的那一天」是空转的：
+  // 每条都落在开始或截止那一格上，两边同时只认「就那一天」，也「一致」。
+  { name: '区间正中间（24 号开始、31 号截止，今天 26 号）', t: task({ id: 'p', due: at(9, 31), startAt: at(9, 24) }) },
+  { name: '区间里但已完成', t: task({ id: 'p2', due: at(9, 31), startAt: at(9, 24), status: 'done' }) },
+  { name: '区间还没开始（28 号才开始）', t: task({ id: 'q', due: at(9, 31), startAt: at(9, 28) }) },
+  { name: '跨月区间、今天还没到（8-29 开始、9-02 截止）', t: task({ id: 'q2', due: new Date(2026, 8, 2, 9, 0).toISOString(), startAt: at(9, 29) }) },
+  { name: '今天开始、明天截止——只有一天可做，不算跨天，靠 startAt 进来', t: task({ id: 'q3', due: at(9, 27), startAt: at(9) }) },
 ];
 
 describe('「今天」的口径：网页 ≡ 每日概览', () => {
@@ -66,6 +74,97 @@ describe('「今天」的口径：网页 ≡ 每日概览', () => {
     const yes = CASES.filter((c) => isInTodayView(c.t, NOW)).length;
     expect(yes, '没有一条被收进「今天」，这一族测不出任何东西').toBeGreaterThan(3);
     expect(CASES.length - yes, '没有一条被排除，这一族同样测不出东西').toBeGreaterThan(3);
+  });
+});
+
+
+/**
+ * **两句 prose 报的必须是同四个数。**
+ *
+ * 屏幕头上那行（`workload.ts`）和推送那句（`dailySummary.ts`）各写各的字面量，
+ * 上面那一族只保证「收的是同一批任务」——收得一样、数说得不一样，照样是
+ * 「推送说 3 件、屏幕上 5 件」那个形状，只是从成员资格漂移换成了措辞漂移。
+ *
+ * 所以这里把两边各自的散文抠成 `{ 总数, 要清, 在做着, 已过期 }` 四元组再比。
+ * **两个解析都断言成功**：解析器静默返回 null 的话，这一族就变成「两个 null
+ * 相等」，将来任何一边改文案都会把守卫悄悄摘掉而不是报红——同 `CONTRIBUTING`
+ * 里那条「闸要自带解析器没吞掉形状的守卫」。
+ */
+describe('「今天几件」：屏幕那一行 ≡ 每日概览那句', () => {
+  /** 网页那句用「条」、推送那句用「件」，两种量词分开抠。总数取**第一个**
+   *  「数字 + 量词」：网页那句以它开头，推送那句开头多两个字（「今天 8 件
+   *  事」），所以不锚行首——两边的第一个都还是总数。 */
+  const parse = (s: string, q: string) => {
+    const total = new RegExp(`(\\d+) ${q}`).exec(s)?.[1];
+    if (total === undefined) return null;
+    const doing = new RegExp(`另 (\\d+) ${q}在做着`).exec(s)?.[1]
+      ?? (/都在做着/.test(s) ? total : undefined);
+    const clear = new RegExp(`今天要清 (\\d+) ${q}`).exec(s)?.[1]
+      ?? (doing === undefined ? total : String(Number(total) - Number(doing)));
+    // 「已过期」和「已经过期」两种写法都要认：网页那句用前者，推送那句不分档时
+    // 用的是后者。认不出来就退回 0——那会让「两边都是 0」假相等，所以这一族
+    // 的夹具必须有一面真的有过期数（下面那条断言盯着）。
+    const stale = /都\s*已经?过期/.test(s) ? Number(total)
+      : +(new RegExp(`(\\d+) ${q}已(?:经)?过期`).exec(s)?.[1] ?? 0);
+    return { total: +total, clear: +clear, doing: +(doing ?? 0), stale };
+  };
+
+  const PAIRS: Array<{ name: string; tasks: Task[] }> = [
+    { name: '没有跨天的', tasks: CASES.filter((c) => isInTodayView(c.t, NOW)).map((c) => c.t) },
+    { name: '两档都有', tasks: [task({ id: 'x', due: at(9, 31), startAt: at(9, 24) }), task({ id: 'y', due: at(9) })] },
+    { name: '全在做着', tasks: [task({ id: 'x', due: at(9, 31), startAt: at(9, 24) }), task({ id: 'z', due: at(9, 31), startAt: at(9, 20) })] },
+    { name: '要清的全过期', tasks: [task({ id: 'y', due: at(9, 25) }), task({ id: 'x', due: at(9, 31), startAt: at(9, 24) })] },
+  ];
+
+  it.each(PAIRS.map((p) => [p.name, p.tasks] as const))('%s：两边报的同四个数', (name, tasks) => {
+    const web = parse(todayMetaLabel(tasks, NOW), '条');
+    const push = parse(summaryText(summaryTasks(tasks, NOW), NOW).title, '件');
+    expect(web, `网页那句解析不出来，改动文案时这条守卫会先瞎：${todayMetaLabel(tasks, NOW)}`).not.toBeNull();
+    expect(push, `推送那句解析不出来，同上：${summaryText(summaryTasks(tasks, NOW), NOW).title}`).not.toBeNull();
+    expect(push, `「${name}」这一面两边数不一样`).toEqual(web);
+    expect(web!.clear + web!.doing, `「${name}」两档加起来不等于总数`).toBe(web!.total);
+  });
+
+  /**
+   * 四个数各自都得有一面**非零**——不然是「两边都是 0」在相等，这一族什么都
+   * 没盯住。上一段那个「已过期」的解析就是为这条补的：加它之前这一族比的是
+   * 三个数，而真数据上分叉的恰好是第四个。
+   */
+  it('夹具铺满了四个数：每一面都有非零的读数', () => {
+    const seen = PAIRS.flatMap(({ tasks }) => {
+      const w = parse(todayMetaLabel(tasks, NOW), '条');
+      const p = parse(summaryText(summaryTasks(tasks, NOW), NOW).title, '件');
+      expect(p, `某一面两边数不一样`).toEqual(w);
+      return [w!];
+    });
+    for (const key of ['total', 'clear', 'doing', 'stale'] as const) {
+      expect(seen.some((r) => r[key] > 0), `没有任何一面出现非零的 ${key}，那个键比不出东西`).toBe(true);
+    }
+  });
+});
+
+
+/**
+ * **「这条欠没欠着」：网页那个红标签 ≡ 每日概览那句里「其中 N 件已经过期」的数。**
+ *
+ * 上面那一族比的是「收的是同一批任务」，比不到「同一批任务里算出同一个过期数」。
+ * 这两份实现真的分叉过一次，是拿真数据跑出来才看见的：网页那边分两档（落在本地
+ * 零点的按天比、定了钟点的按时刻比），服务端只抄了按天那一半——于是同一时刻
+ * 屏幕上写「今天要清 6 条，5 条已过期」，推送写「…1 件已过期」。
+ *
+ * 夹具表里那三条正好把这一族照全：今天 09:00（时刻已过）、今天 23:00（还没到）、
+ * 今天零点（全天，那一天还没过完）——三份答案两两不同，少一档判据就红一条。
+ */
+describe('「已经欠着了」：网页的红标签 ≡ 每日概览那句', () => {
+  it.each(CASES.map((c) => [c.name, c.t] as const))('%s：两边给同一个答案', (_name, t) => {
+    const web = webIsTaskOverdue(t, NOW);
+    expect(srvIsTaskOverdue(t, NOW), web ? '网页标红，概览不认它欠着' : '概览算它欠着，网页没标红').toBe(web);
+  });
+
+  it('正反两面都有——否则上面那一族可能是「两边都恒假」在相等', () => {
+    const yes = CASES.filter((c) => webIsTaskOverdue(c.t, NOW)).length;
+    expect(yes, '没有一条算欠着，这一族测不出任何东西').toBeGreaterThan(0);
+    expect(CASES.length - yes, '没有一条不算欠着，同上').toBeGreaterThan(0);
   });
 });
 

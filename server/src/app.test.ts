@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process';
 import { ALLOWED_ORIGINS, API_VERSION, createApp } from './app.js';
 import { Bus } from './events.js';
 import * as store from './store.js';
-import { DEFAULT_SETTINGS, ensureDataFiles, newTask, nowIso, paths, readInbox, readInsights, readProposals, readTasks, readTrash, writeInbox, writeLists, writeTrash, writeInsights, writeProposals, writeSettings, writeTasks, type Repeat, type Settings, type Task, type InboxItem, type Proposal } from './store.js';
+import { DEFAULT_SETTINGS, deviceConfigPath, ensureDataFiles, newTask, nowIso, paths, readInbox, readInsights, readProposals, readTasks, readTrash, writeInbox, writeLists, writeTrash, writeInsights, writeProposals, writeSettings, writeTasks, type Repeat, type Settings, type Task, type InboxItem, type Proposal } from './store.js';
 import { listConflicts } from './entityStore.js';
 import type { PushResponse } from './push.js';
 import type { Spawner } from './expand.js';
@@ -57,11 +57,70 @@ const upload = (path: string, filename: string, bytes: Uint8Array<ArrayBuffer> |
   return app.request(path, { method: 'POST', body: form });
 };
 
+/**
+ * 备一条「还没拆」的收件箱记录。`POST /api/expand` 现在第一眼看的就是收件箱
+ * 里有没有东西——没有就直接 409、一个进程都不起（那是给按钮之外的调用方兜底：
+ * 手机、脚本、一份停在旧状态的页面）。所以凡是要「让拆解真的跑起来」的用例都
+ * 得先种这么一条，否则它测的压根不是自己想测的那件事。
+ */
+const pendingInbox = () => writeInbox(
+  [{ id: 'i-pending', text: '随手记的一条', createdAt: nowIso(), processed: false, taskIds: [] }]);
+
+/**
+ * 备一条任务。`POST /api/review` 和 `/api/board` 现在第一眼看的是**有没有内容可看**
+ * ——零条任务就直接 409、压根不起进程（回顾和总览是真花钱的，而对着空看板跑一趟
+ * 只会拿回一句他自己站在屏幕前就看得见的话）。所以凡是要让这两趟真跑起来的用例
+ * 都得先有一条任务。
+ */
+const oneTask = () => writeTasks([newTask({ title: '回顾得看到点东西' })]);
+
 describe('health', () => {
   it('回 ok:true —— 端口占用检查靠它认出「占着的是我自己」', async () => {
     const res = await app.request('/api/health');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, version: API_VERSION });
+  });
+});
+
+/**
+ * 桌面端画任务栏进度条要的那三个数（`desktop/src/progress.ts` 只负责把它们
+ * 变成一个比例）。
+ *
+ * **三个数必须一起给**：进度条要的是比例，只给「还剩几件」画不出来——分母
+ * 「今天一共几件」含已经做完的，只有服务端算得出来。
+ */
+describe('/api/summary：今天一共几件 / 做完几件 / 还剩几件', () => {
+  const today = new Date();
+  const at = (h: number) => {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, 0, 0);
+    return d.toISOString();
+  };
+  const tomorrow = () => {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1, 12, 0, 0);
+    return d.toISOString();
+  };
+
+  it('空看板就是三个 0', async () => {
+    const res = await app.request('/api/summary');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ total: 0, done: 0, remaining: 0 });
+  });
+
+  it('今天的三条：做完的、还在的、还有一条是明天的', async () => {
+    writeTasks([
+      newTask({ title: '做完了', due: at(12), status: 'done' }),
+      newTask({ title: '还在', due: at(18) }),
+      newTask({ title: '明天的', due: tomorrow() }),
+    ]);
+    const res = await app.request('/api/summary');
+    expect(await res.json()).toEqual({ total: 2, done: 1, remaining: 1 });
+  });
+
+  it('**过期的（昨天到期、今天还没做）也算今天的**——跟网页「今天」那一屏同一口径', async () => {
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1, 12, 0, 0).toISOString();
+    writeTasks([newTask({ title: '昨天就该做的', due: yesterday })]);
+    const res = await app.request('/api/summary');
+    expect(await res.json()).toEqual({ total: 1, done: 0, remaining: 1 });
   });
 });
 
@@ -770,11 +829,11 @@ describe('PATCH /api/tasks 与 DELETE /api/tasks：多选之后一起改/删，�
     }
   });
 
-  // I2（final-review.md）：批量 PATCH「走同一份 applyTaskPatch」这句路由顶部
+  // I2：批量 PATCH「走同一份 applyTaskPatch」这句路由顶部
   // 注释里的承诺，以前一条测试都没守——把 applyTaskPatch(t, patch) 换成裸展开
   // { ...t, ...patch, updatedAt: nowIso() } 照样 99 passed。这三条各自守一条
   // 只有 applyTaskPatch 才会做、裸展开做不到的规则，都各自照抄单条 PATCH
-  // 那几条同名测试（224 行前后）的写法。
+  // 那几条同名测试的写法。
   it('批量 PATCH 恢复待办（later -> todo）会清掉 order——跟单条 PATCH 同一条规矩（I2）', async () => {
     writeTasks([newTask({ title: '搁置的', status: 'later', order: 3 })]);
     const id = readTasks()[0].id;
@@ -851,11 +910,10 @@ describe('PATCH /api/tasks 与 DELETE /api/tasks：多选之后一起改/删，�
     writeTrashSpy.mockRestore();
   });
 
-  // I1（final-review.md）：批量删除的 inbox.taskIds 清理和 proposals 清理，
+  // I1：批量删除的 inbox.taskIds 清理和 proposals 清理，
   // 生产代码是对的（跟单条 DELETE /api/tasks/:id 同一条规矩，见那条路由的
   // 注释），但以前一条测试都没守——整段换成 `void inbox; void proposals;`
-  // 照样 99 passed。这两条各自照抄单条 DELETE 那两条同名测试（301/304 行
-  // 前后）的写法。
+  // 照样 99 passed。这两条各自照抄单条 DELETE 那两条同名测试的写法。
   it('批量删除清掉命中任务在收件箱 taskIds 里的痕迹，没被删的任务的引用不受影响（I1）', async () => {
     const t1 = await J(await post('/api/tasks', { title: 'a' })) as Task;
     const t2 = await J(await post('/api/tasks', { title: 'b' })) as Task;
@@ -954,8 +1012,9 @@ describe('设置', () => {
         // 农历和「休 / 班」同样默认开——这是个中文日历。
         showLunar: true, showHolidays: true,
         // AI 默认还是走本机 `claude`；地址/模型/密钥没有「多数人都对」的默认值，
-        // 一律留空。密钥这一格回的永远是打码后的形状，空串打码还是空串。
-        aiMode: 'cli', aiCli: 'claude', aiCliPath: '', aiCliCustomArgs: '', aiBaseUrl: '', aiKey: '', aiModel: '',
+        // 一律留空。请求体里没有表这个键、机器上本来也没配过 → 空表 + 「没选」。
+        // 这一行同时钉着 GET 的响应形状：多一格少一格都会红。
+        aiMode: 'cli', aiCli: 'claude', aiCliPath: '', aiCliCustomArgs: '', aiEndpointId: '', aiEndpoints: {},
       });
   });
 
@@ -1299,8 +1358,20 @@ describe('观察', () => {
 
 describe('POST /api/expand', () => {
   const fakeProc = (): ChildProcess => (new EventEmitter() as unknown as ChildProcess);
+  /** 按钮之外没人拦得住的调用方（手机、脚本、旧页面）也不该白烧一次额度。 */
+  it('收件箱里没有待拆解的条目：409 带这句话，一个进程都不起', async () => {
+    writeInbox([{ id: 'i1', text: '早就拆过的', createdAt: nowIso(), processed: true, taskIds: ['t1'] }]);
+    const spawnFn: Spawner = vi.fn(() => fakeProc());
+    const withRunner = createApp(undefined, spawnFn);
+
+    const res = await withRunner.request('/api/expand', { method: 'POST' });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toMatch(/没有待拆解的条目/);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
 
   it('单飞：跑着的时候第二次请求回 409 带中文说明；不跑了之后能再触发', async () => {
+    pendingInbox();
     const proc = Object.assign(fakeProc(), { kill: vi.fn() });
     const spawnFn: Spawner = vi.fn(() => proc);
     const withRunner = createApp(undefined, spawnFn);
@@ -1320,6 +1391,7 @@ describe('POST /api/expand', () => {
   });
 
   it('spawn 同步抛异常时回 409 并带上原因，不会把整个请求炸成 500', async () => {
+    pendingInbox();
     const spawnFn: Spawner = () => {
       throw new Error('坏掉了');
     };
@@ -1351,7 +1423,23 @@ describe('POST /api/review', () => {
     return args[args.indexOf('-p') + 1];
   };
 
+  /**
+   * 回顾是真花钱的：CLI 那条烧订阅额度，接口那条按 token 计。对着零条任务跑一趟
+   * 只会拿回一句「没什么可回顾的」——而屏幕上还会先冒一条绿色的「回顾完成」，
+   * 那是凭空报功。所以这一趟压根不该起。
+   */
+  it('一条任务都没有：409 说清没什么可回顾，一个进程都不起', async () => {
+    const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+    const withRunner = createApp(undefined, spawnFn);
+
+    const res = await withRunner.request('/api/review', { method: 'POST' });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toMatch(/还没有任何任务/);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it('跑的是回顾那份提示词，不是拆解那份', async () => {
+    oneTask();
     const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
     const withRunner = createApp(undefined, spawnFn);
 
@@ -1375,6 +1463,7 @@ describe('POST /api/review', () => {
 
     it('范围那句话进了提示词，带着 id 和名字', async () => {
       writeLists([{ id: 'l1', name: '035 办事师爷', color: '', folderId: null, order: 0, archived: false, filter: null }]);
+      writeTasks([newTask({ title: '这份清单里得有一条，不然范围回顾没什么可看' , listId: 'l1' })]);
       const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
       const withRunner = createApp(undefined, spawnFn);
 
@@ -1385,6 +1474,23 @@ describe('POST /api/review', () => {
       expect(prompt).toContain('workflows/review.md');
       expect(prompt).toContain('l1');
       expect(prompt).toContain('035 办事师爷');
+    });
+
+    /**
+     * 「这份清单里一条都没有」跟「全局没有任务」是两种空：只看全局有没有挡不住
+     * 它——空清单上点「让 AI 回顾这份清单」照样会起一趟。报错要**点名是哪份**，
+     * 不然他不知道自己在空的那份上按了按钮。
+     */
+    it('那份清单是空的：409 点名是哪份清单，一个进程都不起', async () => {
+      writeLists([{ id: 'l1', name: '035 办事师爷', color: '', folderId: null, order: 0, archived: false, filter: null }]);
+      writeTasks([newTask({ title: '在别的清单里', listId: 'l2' })]);
+      const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+      const withRunner = createApp(undefined, spawnFn);
+
+      const res = await withRunner.request('/api/review', post({ listId: 'l1' }));
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toContain('035 办事师爷');
+      expect(spawnFn).not.toHaveBeenCalled();
     });
 
     /**
@@ -1406,6 +1512,7 @@ describe('POST /api/review', () => {
     // 这个路由一直允许空 body 调用（回顾那一屏那颗按钮就是这么调的），加了参数
     // 之后别把它变成一个 JSON 解析错误。
     it('不带 body 还是老行为：200，提示词里不提范围', async () => {
+      oneTask();
       const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
       const withRunner = createApp(undefined, spawnFn);
 
@@ -1418,6 +1525,8 @@ describe('POST /api/review', () => {
     const proc = Object.assign(fakeProc(), { kill: vi.fn() });
     const spawnFn: Spawner = vi.fn(() => proc);
     const withRunner = createApp(undefined, spawnFn);
+    pendingInbox();
+    oneTask();
 
     expect((await withRunner.request('/api/expand', { method: 'POST' })).status).toBe(200);
     const res = await withRunner.request('/api/review', { method: 'POST' });
@@ -1431,6 +1540,8 @@ describe('POST /api/review', () => {
     const spawnFn: Spawner = vi.fn(() => proc);
     const withRunner = createApp(undefined, spawnFn);
 
+    pendingInbox();
+    oneTask();
     expect((await withRunner.request('/api/review', { method: 'POST' })).status).toBe(200);
     const res = await withRunner.request('/api/expand', { method: 'POST' });
     expect(res.status).toBe(409);
@@ -1457,6 +1568,23 @@ describe('POST /api/board', () => {
   };
   type SeenStatus = { state: string; message?: string; kind?: string };
 
+  // 这一族每条都要真的起一趟，而 `/api/board` 现在看见零条任务就直接 409、
+  // 压根不起进程（对着空看板跑一趟只会拿回一句他站在屏幕前自己看得见的话，
+  // 还要烧一次额度）。放在 `beforeEach` 里而不是每条各写一遍：这个 describe
+  // 里没有任何一条测的是「空看板怎么办」——那条在下面的守卫用例里。
+  beforeEach(oneTask);
+
+  it('一条任务都没有：409 说没什么可总览，一个进程都不起', async () => {
+    writeTasks([]);   // 上面 beforeEach 种的那条正是这一条要拿掉的东西
+    const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
+    const withRunner = createApp(undefined, spawnFn);
+
+    const res = await withRunner.request('/api/board', { method: 'POST' });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toMatch(/没有什么可总览|还没有任何任务/);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it('跑的是 board 那份提示词，不是拆解或回顾', async () => {
     const spawnFn: Spawner = vi.fn(() => Object.assign(fakeProc(), { kill: vi.fn() }));
     const withRunner = createApp(undefined, spawnFn);
@@ -1473,6 +1601,8 @@ describe('POST /api/board', () => {
     const spawnFn: Spawner = vi.fn(() => proc);
     const withRunner = createApp(undefined, spawnFn);
 
+    pendingInbox();
+    oneTask();
     expect((await withRunner.request('/api/board', { method: 'POST' })).status).toBe(200);
     const blocked = await withRunner.request('/api/expand', { method: 'POST' });
     expect(blocked.status).toBe(409);
@@ -1831,10 +1961,9 @@ describe('附件', () => {
   });
 
   it('GET 路径穿越：诱饵文件放在 attachments/ 上一级，编码过的 ../ 读不到它', async () => {
-    // 不能靠「/etc/passwd 这台机器上不存在」这种判据（Task 1 在这上面栽过一次，
-    // 见 task-1-report.md「疑虑」第 2 条）——放一个真实存在的诱饵文件，哪台
-    // 机器上守卫失效都能被抓住。诱饵放在 data/attachments/（taskId 目录的
-    // 上一级），`..%2F` 解码后正好指向它。
+    // 不能靠「/etc/passwd 这台机器上不存在」这种判据（Task 1 在这上面栽过一次）——
+    // 放一个真实存在的诱饵文件，哪台机器上守卫失效都能被抓住。诱饵放在
+    // data/attachments/（taskId 目录的上一级），`..%2F` 解码后正好指向它。
     const t = await mkTask();
     mkdirSync(join(dir, 'attachments'), { recursive: true });
     const decoy = join(dir, 'attachments', 'secret.txt');
@@ -3139,7 +3268,10 @@ describe('POST /api/inbox/:id/redo：拆得不对，带一句要求再来一轮'
   it('正有一次拆解在跑：前三件事照样做完，started 回 false，不回 409', async () => {
     seed();
     const app2 = withRunner();
-    await app2.request('/api/expand', { method: 'POST' });   // 先占住单飞锁
+    // 占单飞锁用的是「回顾」而不是「拆解」：`/api/expand` 现在看见收件箱里没有
+    // 待拆解的条目就直接 409、压根不起进程（那正是它该做的），而锁是同一把
+    // ——这一条要测的是「有一次 AI 正在跑」，不是「跑的是哪一件」。
+    await app2.request('/api/review', { method: 'POST' });
 
     const res = await app2.request('/api/inbox/i1/redo', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note: '再拆细点' }),
@@ -3188,10 +3320,44 @@ describe('设置里的 AI 密钥不原样回给浏览器', () => {
   const put = (body: unknown) =>
     app.request('/api/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-  it('GET 回的是打码后的形状，不是真值', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl' });
+  /** 两家各配一把，专门用来暴露「串了没有」。 */
+  const two = {
+    a: { baseUrl: 'https://a.test/v1', key: 'sk-abcdefghijkl', model: 'm-a' },
+    b: { baseUrl: 'https://b.test/v1', key: 'sk-bbbbbbbbcdef', model: 'm-b' },
+  };
+  const saved = (over?: Record<string, unknown>) =>
+    writeSettings({ ...DEFAULT_SETTINGS, aiEndpointId: 'a', aiEndpoints: two, ...over });
+  /** 打码串的算法是 `maskKey`：超过 8 位露后四位。短样例会绕开这条真实路径。 */
+  const maskedA = '••••ijkl';
+
+  it('GET 逐条打码，回的不是真值', async () => {
+    saved();
     const s = (await (await get('/api/settings')).json()) as Settings;
-    expect(s.aiKey).toBe('••••ijkl');
+    expect(s.aiEndpoints.a.key).toBe(maskedA);
+    expect(s.aiEndpoints.b.key).toBe('••••cdef');
+    expect(JSON.stringify(s)).not.toContain('sk-abcdefghijkl');
+  });
+
+  /**
+   * **老机器（升级了但还没保存过一次设置）那个窗口。**
+   *
+   * `device.json` 里还平铺着旧版那三格时，`readSettings()` 会派生成一条记录——
+   * 但那三格**不能跟着返回**：打码只打在 `aiEndpoints[*].key` 那一层，明文那把
+   * 还在响应里。而这个服务能绑到局域网（`lanBind.ts`），同一个 Wi-Fi 里的任何设备
+   * 都能 GET 它。
+   *
+   * 实测（2026-10-21）：老形状的 device.json 一放进去，响应里就是
+   * `"aiKey":"sk-LEGACY-SECRET-0001"` 明文。**派生成记录是好事，把原文留着不是。**
+   */
+  it('老形状的 device.json：明文那把密钥不跟着 GET 出去（派生成的那条还是打码的）', async () => {
+    writeFileSync(deviceConfigPath(), JSON.stringify({
+      aiMode: 'api', aiBaseUrl: 'https://legacy.test/v1', aiKey: 'sk-LEGACY-SECRET-0001', aiModel: 'm-legacy',
+    }), 'utf8');
+
+    const body = await (await get('/api/settings')).text();
+    expect(body).not.toContain('sk-LEGACY-SECRET-0001');
+    const s = JSON.parse(body) as Settings;
+    expect(Object.values(s.aiEndpoints)[0].key).toBe('••••0001');
   });
 
   /**
@@ -3200,12 +3366,12 @@ describe('设置里的 AI 密钥不原样回给浏览器', () => {
    * 照旧打码，只有这条导出专用的路掀开。它等于把密钥摆给局域网里所有人，
    * 所以 `LAN_WARNING` 必须点名它——下面那条断言钉着这件事。
    */
-  it('GET /api/settings/export 回明文密钥（导出带得动），普通 GET 照旧打码', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl' });
+  it('GET /api/settings/export 回明文（导出带得动），普通 GET 照旧逐条打码', async () => {
+    saved();
     const s = (await (await get('/api/settings/export')).json()) as Settings;
-    expect(s.aiKey).toBe('sk-abcdefghijkl');
+    expect(s.aiEndpoints.a.key).toBe('sk-abcdefghijkl');
     const masked = (await (await get('/api/settings')).json()) as Settings;
-    expect(masked.aiKey).toBe('••••ijkl');
+    expect(masked.aiEndpoints.a.key).toBe(maskedA);
   });
 
   /**
@@ -3213,72 +3379,121 @@ describe('设置里的 AI 密钥不原样回给浏览器', () => {
    * 也是那串打码——不认它的话密钥会被 `••••ijkl` 覆盖，而这次覆盖悄无声息，
    * 要等下一次拆解报 401 才现形。
    */
-  it('把打码串原样 PUT 回来：存着的真值不动', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl' });
-    await put({ ...DEFAULT_SETTINGS, aiKey: '••••ijkl', focusMinutes: 40 });
+  it('把打码串原样 PUT 回来：这条记录的真值不动', async () => {
+    saved();
+    await put({ ...DEFAULT_SETTINGS, aiEndpointId: 'a', aiEndpoints: { ...two, a: { ...two.a, key: maskedA } }, focusMinutes: 40 });
 
-    expect(store.readSettings().aiKey).toBe('sk-abcdefghijkl');
+    expect(store.readSettings().aiEndpoints.a.key).toBe('sk-abcdefghijkl');
     expect(store.readSettings().focusMinutes).toBe(40);
   });
 
   it('PUT 一把新的就换掉，空串就是真的清掉', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl' });
-    await put({ ...DEFAULT_SETTINGS, aiKey: 'sk-新的一把钥匙' });
-    expect(store.readSettings().aiKey).toBe('sk-新的一把钥匙');
+    saved();
+    await put({ ...DEFAULT_SETTINGS, aiEndpointId: 'a', aiEndpoints: { ...two, a: { ...two.a, key: 'sk-新的一把钥匙' } } });
+    expect(store.readSettings().aiEndpoints.a.key).toBe('sk-新的一把钥匙');
 
-    await put({ ...DEFAULT_SETTINGS, aiKey: '' });
-    expect(store.readSettings().aiKey).toBe('');
+    await put({ ...DEFAULT_SETTINGS, aiEndpointId: 'a', aiEndpoints: { ...two, a: { ...two.a, key: '' } } });
+    expect(store.readSettings().aiEndpoints.a.key).toBe('');
   });
 
   /**
-   * **不带 `aiKey`、却换了 `aiBaseUrl` 的 PUT，密钥不跟着搬过去。**
-   *
-   * 原来 `aiKeyFrom` 对「字段缺失」无条件沿用存着的密钥。于是一个第三方网页发一份
-   * `{ aiMode: 'api', aiBaseUrl: 'https://攻击者', aiModel: 'x' }`（`text/plain` 的
-   * 简单请求，没有预检；CORS 只拦读响应，而它不需要读），密钥原样留着、地址换成
-   * 了他的——**之后不需要受害者做任何事**：自动拆解自己会跑，带着真密钥去请求
-   * 他的地址。持久，无人触发。
-   *
-   * 真实客户端永远带 `aiKey`（没动过就是打码串），所以收紧对界面零影响。
+   * **这次改动的核心一条。** 旧版全应用只有一把 `aiKey`：点了另一家的芯片、没碰
+   * 密钥格，打码串会被换回**当前这把**真值，然后发到新地址上去——接口回
+   * `Invalid API key`，报错文案却让人去查模型名和地址。
    */
-  it('不带 aiKey、换了 aiBaseUrl：密钥不沿用，不能被搬去陌生地址', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl', aiBaseUrl: 'https://x.test/v1' });
-    await put({ aiMode: 'api', aiBaseUrl: 'https://攻击者.test/v1', aiModel: 'x' });
+  it('切到另一家：用的是那一家自己存过的密钥，不是当前这条的', async () => {
+    saved();
+    await put({ ...DEFAULT_SETTINGS, aiEndpointId: 'b', aiEndpoints: { ...two, b: { ...two.b, key: '••••cdef' } } });
+    const s = store.readSettings();
+    expect(s.aiEndpointId).toBe('b');
+    expect(s.aiEndpoints.b.key).toBe('sk-bbbbbbbbcdef');
+    expect(s.aiEndpoints.a.key).toBe('sk-abcdefghijkl');
+  });
+
+  /**
+   * 第三方网页发得出这种 PUT（`text/plain` 的简单请求没有预检；CORS 只拦读响应，
+   * 而它不需要读响应）：让它把某条记录的主机改成自己的、又拿不到那条的密钥。
+   * 搬过去之后不需要受害者做任何事——自动拆解自己会跑，带着真密钥去请求他的地址。
+   */
+  it('不带 key、却把某条记录的主机换了：那条的密钥清空，不跟着搬去陌生主机', async () => {
+    saved();
+    await put({ aiMode: 'api', aiEndpointId: 'a', aiEndpoints: { a: { baseUrl: 'https://攻击者.test/v1', model: 'x' } } });
 
     const s = store.readSettings();
-    expect(s.aiBaseUrl).toBe('https://攻击者.test/v1');
-    expect(s.aiKey).toBe('');
+    expect(s.aiEndpoints.a.baseUrl).toBe('https://攻击者.test/v1');
+    expect(s.aiEndpoints.a.key).toBe('');
   });
 
-  /** 上面那条的反面：只改别的、地址没动、字段也没给——「别的客户端只想改别的设置」那条走法还在。 */
-  it('不带 aiKey、地址没变：密钥原样留着', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl', aiBaseUrl: 'https://x.test/v1' });
-    await put({ ...DEFAULT_SETTINGS, aiBaseUrl: 'https://x.test/v1', aiKey: undefined, focusMinutes: 40 });
+  /** 上面那条的反面：地址没动、字段也没给——「别的客户端只想改别的设置」那条走法还在。 */
+  it('不带 key、地址没变：这条记录的密钥原样留着', async () => {
+    saved();
+    await put({ ...DEFAULT_SETTINGS, aiEndpointId: 'a', aiEndpoints: { a: { baseUrl: 'https://a.test/v1', model: 'm-a' } }, focusMinutes: 40 });
 
-    expect(store.readSettings().aiKey).toBe('sk-abcdefghijkl');
+    expect(store.readSettings().aiEndpoints.a.key).toBe('sk-abcdefghijkl');
   });
 
-  /** 「改了地址、没动密钥」——界面最常见的走法，打码那一支照样认，不受收紧影响。 */
-  it('打码串 + 换了地址：照样沿用，这是界面的正常走法', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl', aiBaseUrl: 'https://x.test/v1' });
-    await put({ ...DEFAULT_SETTINGS, aiBaseUrl: 'https://代理.test/v1', aiKey: '••••ijkl' });
+  /**
+   * 「改了地址、没动密钥」在旧版是界面最常见的走法，也是那个假 401 的来源。
+   * 现在同一条记录里换主机要重填一次——这是代价，也是判据，`settings.ts` 的
+   * `mergeEndpoint` 顶上写着为什么值这个价。
+   */
+  it('打码串 + 同一条记录里换了主机 → 不给旧密钥（换主机要重打一次）', async () => {
+    saved();
+    await put({ ...DEFAULT_SETTINGS, aiEndpointId: 'a', aiEndpoints: { a: { baseUrl: 'https://代理.test/v1', key: maskedA } } });
 
-    expect(store.readSettings().aiKey).toBe('sk-abcdefghijkl');
-    expect(store.readSettings().aiBaseUrl).toBe('https://代理.test/v1');
+    const s = store.readSettings();
+    expect(s.aiEndpoints.a.baseUrl).toBe('https://代理.test/v1');
+    expect(s.aiEndpoints.a.key).toBe('');
   });
 
-  it('PUT 的响应里也是打码的——它跟 GET 是同一份东西，不能从这儿漏出去', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl' });
-    const s = (await (await put({ ...DEFAULT_SETTINGS, aiKey: '••••ijkl' })).json()) as Settings;
-    expect(s.aiKey).toBe('••••ijkl');
+  it('PUT 的响应里也逐条打码——它跟 GET 是同一份东西，不能从这儿漏出去', async () => {
+    saved();
+    const s = (await (await put({ ...DEFAULT_SETTINGS, aiEndpointId: 'a', aiEndpoints: { ...two, a: { ...two.a, key: maskedA } } })).json()) as Settings;
+    expect(s.aiEndpoints.a.key).toBe(maskedA);
+    expect(JSON.stringify(s)).not.toContain('sk-abcdefghijkl');
+  });
+
+  /**
+   * 还停在旧版界面的客户端（手机上那页开着没刷新）发的是老形状 `{aiBaseUrl, aiKey,
+   * aiModel}`，里面没有表这个键。按「PUT 整份覆盖」的契约把它当「没给」清成空表，
+   * 他一保存就把各家密钥静默清空，而响应照样 200。这一条钉着那份例外。
+   */
+  it('请求体里压根没有 aiEndpoints：整张表原样留着', async () => {
+    saved();
+    // 模拟「还停在旧版界面的客户端」发的整份 PUT：它没有表这两个键（新键还不存在），
+    // 而旧的那三格从新服务端的 GET 里读回来是 undefined → 落回空。
+    const oldClient = { ...DEFAULT_SETTINGS, focusMinutes: 40 } as Record<string, unknown>;
+    delete oldClient.aiEndpoints;
+    delete oldClient.aiEndpointId;
+    Object.assign(oldClient, { aiBaseUrl: '', aiKey: '', aiModel: '' });
+    await put(oldClient);
+
+    const s = store.readSettings();
+    expect(s.aiEndpoints).toEqual(two);
+    expect(s.aiEndpointId).toBe('a');
+    expect(s.focusMinutes).toBe(40);
+  });
+
+  it('删掉最后一家是真的删：给一张空表就落回「没选」', async () => {
+    saved();
+    await put({ ...DEFAULT_SETTINGS, aiEndpointId: 'a', aiEndpoints: {} });
+
+    const s = store.readSettings();
+    expect(s.aiEndpoints).toEqual({});
+    expect(s.aiEndpointId).toBe('');
   });
 
   it('地址和模型去首尾空白，模式认不出就落回 cli', async () => {
-    await put({ ...DEFAULT_SETTINGS, aiMode: '瞎写的', aiBaseUrl: '  https://x.test/v1  ', aiModel: '  m  ' });
+    await put({
+      ...DEFAULT_SETTINGS,
+      aiMode: '瞎写的',
+      aiEndpointId: 'c',
+      aiEndpoints: { c: { baseUrl: '  https://x.test/v1  ', model: '  m  ' } },
+    });
     const s = store.readSettings();
     expect(s.aiMode).toBe('cli');
-    expect(s.aiBaseUrl).toBe('https://x.test/v1');
-    expect(s.aiModel).toBe('m');
+    expect(s.aiEndpoints.c.baseUrl).toBe('https://x.test/v1');
+    expect(s.aiEndpoints.c.model).toBe('m');
   });
 
   it('aiCli / aiCliPath / aiCliCustomArgs 正常保存，aiCli 不合法落回 claude', async () => {
@@ -3333,29 +3548,37 @@ describe('POST /api/ai/test：设置页那颗「测试连接」', () => {
   });
 
   /**
-   * **不带 `apiKey`、带着陌生 `baseUrl` 的请求，拿不到存着的密钥。**
+   * **不带 `apiKey`、指定一条没有密钥的记录，拿不到别家存着的密钥。**
    *
-   * 原来 `aiKeyFrom` 对「字段缺失」无条件沿用存着的密钥，于是这条请求会拿真密钥去
+   * 原来这一支无条件沿用那**一把全应用共用**的 `aiKey`，于是这条请求会拿真密钥去
    * 请求调用方指定的任意地址——`Authorization: Bearer <真密钥>` 落在对方的访问日志
    * 里。第三方网页发得出这种请求（理由见 PUT /api/settings 那组测试）。
+   * 现在密钥住在各自的记录里，新地址要么是一条新记录（没有密钥可沿用），要么就是
+   * 被主机判据拦住——两条都断言在下面的用例里。
    *
    * 断言的是**发出去的请求头里没有那把密钥**，不是响应——密钥是从出站请求里漏的。
    */
-  it('不带 apiKey + 陌生 baseUrl：出站请求里没有存着的密钥', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl', aiBaseUrl: 'https://x.test/v1' });
+  it('不带 apiKey + 陌生记录：出站请求里没有别家存着的密钥', async () => {
+    writeSettings({
+      ...DEFAULT_SETTINGS, aiEndpointId: 'a',
+      aiEndpoints: { a: { baseUrl: 'https://x.test/v1', key: 'sk-abcdefghijkl', model: 'm' } },
+    });
     const f = replying('好');
-    await post2(testWith(f), { baseUrl: 'https://攻击者.test/v1', model: 'm' });
+    await post2(testWith(f), { endpointId: '陌生', baseUrl: 'https://攻击者.test/v1', model: 'm' });
 
     const [url, init] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
     expect(url).toContain('攻击者.test');
     expect(JSON.stringify(init.headers ?? {})).not.toContain('sk-abcdefghijkl');
   });
 
-  /** 验的是他此刻框里那份——拿存着的旧值去验等于答非所问。 */
-  it('用的是请求体里那三格，不是存着的那份', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiBaseUrl: 'https://存着的.test/v1', aiModel: '存着的模型' });
+  /** 验的是他此刻框里那一条——拿存着的旧值去验等于答非所问。 */
+  it('用的是请求体里那一条，不是存着的那条', async () => {
+    writeSettings({
+      ...DEFAULT_SETTINGS, aiEndpointId: '存着的',
+      aiEndpoints: { 存着的: { baseUrl: 'https://存着的.test/v1', key: '', model: '存着的模型' } },
+    });
     const f = replying('好');
-    await post2(testWith(f), { baseUrl: 'https://刚填的.test/v1', model: '刚填的模型', apiKey: '' });
+    await post2(testWith(f), { endpointId: '刚填的', baseUrl: 'https://刚填的.test/v1', model: '刚填的模型', apiKey: '' });
 
     const [url, init] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
     expect(url).toContain('刚填的.test');
@@ -3363,15 +3586,53 @@ describe('POST /api/ai/test：设置页那颗「测试连接」', () => {
   });
 
   /**
-   * 界面读回来的密钥是打码串。「改了地址、没动密钥」是最常见的一种试法——不认那串
-   * 打码的话，会拿着 `••••abcd` 去认证，然后报一个跟真实原因毫无关系的 401。
+   * 界面读回来的密钥是打码串，用户不碰那一格就会原样送回来——不认它的话，
+   * 「只改了模型名再测一次」会拿 `••••abcd` 去认证，报一个跟真实原因无关的 401。
+   * 认的范围是**这一条记录自己**的那把。
    */
-  it('密钥收到的是打码串时，用存着的真值去试', async () => {
-    writeSettings({ ...DEFAULT_SETTINGS, aiKey: 'sk-abcdefghijkl' });
+  it('密钥收到的是这条记录的打码串时，用它自己的真值去试', async () => {
+    writeSettings({
+      ...DEFAULT_SETTINGS, aiEndpointId: 'a',
+      aiEndpoints: { a: { baseUrl: 'https://x.test/v1', key: 'sk-abcdefghijkl', model: 'm' } },
+    });
     const f = replying('好');
-    await post2(testWith(f), { baseUrl: 'https://x.test/v1', model: 'm', apiKey: '••••ijkl' });
+    await post2(testWith(f), { endpointId: 'a', baseUrl: 'https://x.test/v1', model: 'm', apiKey: '••••ijkl' });
 
     const [, init] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>).authorization).toBe('Bearer sk-abcdefghijkl');
+  });
+
+  /**
+   * **这一条接管了旧的「打码串 + 换了地址 → 照样沿用」。** 那条判据是假 401 的产地：
+   * 它把上一家的密钥发到了新主机上。现在同一条记录里换主机要重打一次密钥；
+   * 没重打就一条不带 Authorization 发出去，让对端去说「没给密钥」，
+   * 而不是替用户拿一把来路不对的钥匙去撞。
+   */
+  it('打码串 + 同一条记录里换了主机 → 不带密钥出门', async () => {
+    writeSettings({
+      ...DEFAULT_SETTINGS, aiEndpointId: 'a',
+      aiEndpoints: { a: { baseUrl: 'https://x.test/v1', key: 'sk-abcdefghijkl', model: 'm' } },
+    });
+    const f = replying('好');
+    await post2(testWith(f), { endpointId: 'a', baseUrl: 'https://代理.test/v1', model: 'm', apiKey: '••••ijkl' });
+
+    const [url, init] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('代理.test');
+    expect(JSON.stringify(init.headers ?? {})).not.toContain('sk-abcdefghijkl');
+  });
+
+  /** 不给 `endpointId` 就是测当前选中的那条：三样都从存着的那条打底。 */
+  it('不给 endpointId：拿当前选中那条记录去试', async () => {
+    writeSettings({
+      ...DEFAULT_SETTINGS, aiEndpointId: 'a',
+      aiEndpoints: { a: { baseUrl: 'https://选中的.test/v1', key: 'sk-abcdefghijkl', model: '选中的模型' } },
+    });
+    const f = replying('好');
+    await post2(testWith(f), {});
+
+    const [url, init] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('选中的.test');
+    expect(JSON.parse(init.body as string).model).toBe('选中的模型');
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer sk-abcdefghijkl');
   });
 
@@ -3404,7 +3665,7 @@ describe('PUT /api/settings：AI 那几格改了就把「已经自动试过」�
 
     // 先让它自动试一次并「失败」——直接把条目标进 attempted 的最短路径是跑一次
     // 手动拆解？不行，那会 clearAll。改用真实那条：等自动排期跑完。
-    writeSettings({ ...DEFAULT_SETTINGS, autoExpand: true, autoExpandDelaySec: 10, aiMode: 'api', aiBaseUrl: '', aiModel: '' });
+    writeSettings({ ...DEFAULT_SETTINGS, autoExpand: true, autoExpandDelaySec: 10, aiMode: 'api' });
     bus.emit('data-changed', { file: 'inbox' });
     await vi.advanceTimersByTimeAsync(11_000);
     const failed = seen.filter((s) => s.state === 'failed').length;
@@ -3413,7 +3674,11 @@ describe('PUT /api/settings：AI 那几格改了就把「已经自动试过」�
 
     await withBus.request('/api/settings', {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...DEFAULT_SETTINGS, autoExpand: true, autoExpandDelaySec: 10, aiMode: 'api', aiBaseUrl: 'https://x.test/v1', aiModel: 'm', ...change }),
+      body: JSON.stringify({
+        ...DEFAULT_SETTINGS, autoExpand: true, autoExpandDelaySec: 10, aiMode: 'api',
+        aiEndpointId: 'x', aiEndpoints: { x: { baseUrl: 'https://x.test/v1', key: '', model: 'm' } },
+        ...change,
+      }),
     });
     await vi.advanceTimersByTimeAsync(11_000);
     return seen;
@@ -3429,7 +3694,8 @@ describe('PUT /api/settings：AI 那几格改了就把「已经自动试过」�
   });
 
   it('只改番茄钟时长不清——那不该把因为别的原因失败过的条目全放回候选池', async () => {
-    const seen = await scheduledAfter({ aiMode: 'api', aiBaseUrl: '', aiModel: '', focusMinutes: 40 });
+    // 表跟当前存着的那份一模一样（空），只有 focusMinutes 变了。
+    const seen = await scheduledAfter({ aiEndpointId: '', aiEndpoints: {}, focusMinutes: 40 });
     expect(seen.some((s) => s.state === 'scheduled'), 'AI 那几格没变，不该重新排期').toBe(false);
   });
 });
@@ -3545,6 +3811,7 @@ describe('POST /api/breakdown', () => {
     const proc = Object.assign(fakeProc(), { kill: vi.fn() });
     const spawnFn: Spawner = vi.fn(() => proc);
     const withRunner = createApp(undefined, spawnFn);
+    pendingInbox();
 
     expect((await withRunner.request('/api/breakdown', post({ taskId: 'T1' }))).status).toBe(200);
     const blocked = await withRunner.request('/api/expand', { method: 'POST' });

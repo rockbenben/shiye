@@ -144,7 +144,7 @@ describe('TaskDetail：滴答那张形', () => {
   }
 
   const notesBox = () => screen.getByRole('button', { name: '备注' });
-  const notesInput = () => screen.getByPlaceholderText('备注（打 / 插入格式）') as HTMLTextAreaElement;
+  const notesInput = () => screen.getByPlaceholderText('写点什么…（输入 / 插入格式）') as HTMLTextAreaElement;
 
   it('**非编辑态渲染 markdown**——正文是 markdown 文本，看的时候看到的是排好版的东西，不是一串 #', () => {
     panel(task({ notes: `# 大标题
@@ -204,9 +204,43 @@ describe('TaskDetail：滴答那张形', () => {
 
   it('还没写过备注的任务也有地方可点——空正文不是一块点不着的空白', () => {
     panel(task({ notes: '' }));
-    expect(screen.getByText('写点什么……')).toBeTruthy();
+    expect(screen.getByText('写点什么…')).toBeTruthy();
     fireEvent.click(notesBox());
     expect(notesInput().value).toBe('');
+  });
+
+  /**
+   * 读的那一块写着「写点什么…」，点进去的框**得说同一句话**。原来那一格吃的是
+   * 编辑表单的默认提示（「备注（支持 Markdown，输入 / 插入格式）」），于是同一块
+   * 地方两副口吻：上面一句人话，点下去变成一句术语。
+   */
+  it('点进去之后 placeholder 还是那句话，不换成术语', () => {
+    panel(task({ notes: '' }));
+    const read = screen.getByText('写点什么…').textContent;
+    fireEvent.click(notesBox());
+    expect(notesInput().placeholder).toContain(read);
+  });
+
+  /**
+   * 操作那一排同理：`.ink-dt-actions` 是「面板里这一行不折，按钮该回到 10px 内
+   * 边距、并且跟上面的内容之间有一道界行」的挂点，卡片档不挂（那 4px 是量出来的，
+   * 见 theme.css 里 `.ink-task-card .ant-space-horizontal .ant-btn-sm` 那段）。
+   * 挂点没了样式静默失效，表现是面板里五个控件挤成一坨。
+   *
+   * **比之前先折叠空白再比**：组件测试是脱离 `main.tsx` 单独渲染的，拿不到那层
+   * `button={{ autoInsertSpace: false }}`，于是恰好两个汉字的按钮在测试里被 antd
+   * 插了空格（状态那颗是「开 始」，应用本体里是「开始」——规则见 main.tsx）。
+   * 这一条以前写的是 `toContain('开始')`——它能过，靠的是那一排里还有一颗
+   * 「开始**专注**」，那个「开始」是番茄钟的开头，不是状态按钮。番茄钟改名之后
+   * 这一条立刻变红，露出来的是**它一直在测错的那颗按钮**：断言命中了另一颗，
+   * 所以状态那颗被摘掉它也不会响。
+   */
+  it('操作那一排挂着 .ink-dt-actions，卡片档那份 4px 不跟着进面板', () => {
+    panel(task({ notes: '' }));
+    const row = document.querySelector('.ink-dt-actions');
+    expect(row, '面板里那一排动作的挂点不见了').not.toBeNull();
+    // 折叠空白再比：antd 在两字按钮里插的那个空格不算文案的一部分。
+    expect(row!.textContent!.replace(/\s+/g, '')).toContain('开始');
   });
 
   it('「/」菜单在这里照样有——用的就是编辑表单那一个 NotesEditor，不是另写的框', async () => {

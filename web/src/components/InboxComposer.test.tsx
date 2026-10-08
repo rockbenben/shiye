@@ -77,3 +77,16 @@ describe('InboxComposer：框自己的名字', () => {
     expect(hint!.textContent).toContain('Ctrl+Enter');
   });
 });
+
+describe('InboxComposer：框自己说得出名字', () => {
+  /**
+   * 打磨稿第一轮量出来的其中一条：整屏有「一个没有可及名字的控件」，就是它。
+   * 上面那句「随手记」原本只是摆在旁边的标题，跟框没有发生关系，读屏走到框上
+   * 只能念占位符。**断言用 `getByRole(name:)` 而不是读 `aria-labelledby` 属性**
+   * ——可及名字是算出来的，属性拼错一个字母（id 对不上）属性看着仍是对的。
+   */
+  it('可及名字算出来是「随手记」', () => {
+    render(<InboxComposer onSubmit={vi.fn()} />);
+    expect(screen.getByRole('textbox', { name: '随手记' })).toBeTruthy();
+  });
+});

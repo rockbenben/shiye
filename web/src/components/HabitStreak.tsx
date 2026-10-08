@@ -15,7 +15,36 @@ import type { HabitState } from '../lib/habit.js';
  * `theme.css` 的前缀扫描守不到，见 theme.ts 顶部注释和 FilterBar/TaskCard
  * 两处已经踩过的坑）。打卡是人自己做的事，不上群青——那是配给 AI 产出的颜色。
  */
-export function HabitStreak({ habit, compact }: { habit: HabitState; compact?: boolean }) {
+/**
+ * 行档那一颗紧凑记号：`🔥5`（每天，数字是连续天数）/ `🔥2/3`（每周，本周
+ * 次数）。
+ *
+ * **为什么行档不共用上面那条完整的句子**：一行只有那么宽，右边那一列已经站着
+ * 旗、🔁、📌、、⏳ 五六个记号，再塞一句「连续 5 天 · 今天还没打卡」会把
+ * 真正要看的截止时间挤没（`.ink-trow-meta` 有右缘渐隐，挤不下的字是静默消失的）。
+ * 所以行档只留同一个记号（火苗 + 数字），**整句话走 `aria-label` 和 `title`**——
+ * 悬停和读屏听到的，跟卡档屏幕上写着的是同一份。
+ *
+ * 没话可说的情况回 `null`，判据跟组件那边一字不差（共用那两个条件），
+ * 免得同一个习惯在卡档有打卡条、在行档多出一个空的 🔥。
+ */
+export const habitMark = (habit: HabitState): { mark: string; label: string } | null => {
+  const w = habit.week;
+  if (w) {
+    if (w.done === 0 && habit.streak === 0) return null;
+    return {
+      mark: `${w.done}/${w.target}`,
+      label: `本周已打卡 ${w.done} 次，目标 ${w.target} 次${habit.streak > 0 ? `，连续 ${habit.streak} 周达标` : ''}`,
+    };
+  }
+  if (habit.streak === 0 && !habit.doneToday) return null;
+  return {
+    mark: `${habit.streak}`,
+    label: `连续打卡 ${habit.streak} 天${habit.doneToday ? '' : '，今天还没打卡'}`,
+  };
+};
+
+export function HabitStreak({ habit }: { habit: HabitState }) {
   /**
    * **每周的习惯说的是另一句话。** 一条「一周三次」的健身，周一三五做完之后
    * 「连续天数」是 1（周二没做）——那个数字对它是句假话，它本来就不用天天做。
@@ -28,7 +57,7 @@ export function HabitStreak({ habit, compact }: { habit: HabitState; compact?: b
     if (w.done === 0 && habit.streak === 0) return null;
     return (
       <div
-        className={`ink-habit-streak${compact ? ' ink-habit-streak-compact' : ''}`}
+        className="ink-habit-streak"
         aria-label={`本周已打卡 ${w.done} 次，目标 ${w.target} 次${habit.streak > 0 ? `，连续 ${habit.streak} 周达标` : ''}`}
       >
         <span aria-hidden="true">🔥</span>
@@ -40,9 +69,7 @@ export function HabitStreak({ habit, compact }: { habit: HabitState; compact?: b
   if (habit.streak === 0 && !habit.doneToday) return null;
   return (
     <div
-      // compact（task-5）：行档（TaskRow）下用，收窄间距——.ink-habit-streak-compact
-      // 定义见 theme.css，只调 margin/padding，不碰字色/背景，群青规矩不变。
-      className={`ink-habit-streak${compact ? ' ink-habit-streak-compact' : ''}`}
+      className="ink-habit-streak"
       // aria-label 挂在这个裸 div 上——generic 角色的元素不保证读屏软件会
       // 采信 aria-label（accessible-name 计算对 generic 角色不认它），多数
       // 会退回去读子节点的可见文本。原来「今天还没打卡」那半句连子节点都是

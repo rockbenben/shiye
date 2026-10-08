@@ -18,7 +18,10 @@ export type KeyAction =
   | { kind: 'done' } // D —— 把选中的几条标成已完成
   | { kind: 'due'; to: RescheduleTo } // T / M / W —— 把选中的几条改到今天 / 明天 / 下周
   | { kind: 'help' } // ? —— 弹出快捷键一览，仿滴答清单（它那边也是 ?）
-  | { kind: 'escape' }; // Esc
+  | { kind: 'escape' } // Esc
+  /** ↑/↓ —— 在屏幕上那份顺序里挪光标。`extend`（按着 Shift）是连选。 */
+  | { kind: 'move'; dir: 'up' | 'down'; extend: boolean }
+  | { kind: 'selectAll' }; // Ctrl/Cmd+A —— 选中光标所在那一组
 
 /** 只读事件需要的那几个字段——测试里好造，也不依赖真 DOM 事件。 */
 export interface KeyLike {
@@ -58,10 +61,23 @@ export function keyAction(e: KeyLike): KeyAction | null {
   // Esc 是输入框里的第二个例外：「从输入框退出来」。
   if (e.key === 'Escape') return { kind: 'escape' };
 
+  // Ctrl/Cmd+A：**恰恰不在输入框里认**。那里的全选是「选中框里那些字」，是打字
+  // 的一部分；抢过来会变成在备注框里按 Ctrl+A 把整屏任务选上，紧接着一下 `D`
+  // 就是批量完成——一个编辑动作串成了一个破坏性动作。
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !e.inField) {
+    return { kind: 'selectAll' };
+  }
+
   // 剩下的（新建/搜索/切视图）不认任何修饰键，输入框里一律不触发。
   if (e.inField || e.ctrlKey || e.metaKey || e.altKey) return null;
 
   if (e.key === 'n' || e.key === 'N') return { kind: 'new' };
+  // ↑/↓ 走位，Shift 是连选。**这一支必须在上面那道守卫之后**：输入框里的
+  // 方向键是挪光标，`Ctrl+←` 是跳词。而它**不能被 shift 挡掉**——上面那道
+  // 刻意不挡 shift（`?` 就是 Shift+/），正是为了让这一支收得到连选。
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    return { kind: 'move', dir: e.key === 'ArrowDown' ? 'down' : 'up', extend: !!e.shiftKey };
+  }
   // **建任务的另一条路一直没有键。** `N` 走的是「随手记」——往收件箱丢一段话、
   // 等 AI 拆（默认 60 秒）；而「已经知道自己要做什么」的时候该走的是「新任务」
   // 表单，标题里写「明天下午两点交周报 #工作」当场就成一条任务（`smartInput`）。

@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
-import { App as AntApp, Button } from 'antd';
-import type { Task } from '../types.js';
+import { App as AntApp, Dropdown } from 'antd';
+import type { List, Task } from '../types.js';
 import type { StatusFilter } from '../lib/taskView.js';
-import { parseSmartInput } from '../lib/smartInput.js';
+import { parseIgnoring } from '../lib/smartInput.js';
 import { smartDraft, type ComposeDefaults } from '../lib/composeDefaults.js';
 import { createdNote } from '../lib/createdNote.js';
 import { presetToRemindAt } from '../lib/remindPreset.js';
-import { emptyDraft, type TaskDraft } from './TaskFields.js';
+import { dueChipText, emptyDraft, quickDayChips, type TaskDraft } from './TaskFields.js';
+import { SmartHint } from './SmartHint.js';
 
 interface Props {
   onCreate: (draft: TaskDraft) => Promise<Task>;
@@ -27,6 +28,11 @@ interface Props {
    */
   indent?: boolean;
   /**
+   * 归到哪个清单的候选项，给右边那颗「清单」chip 用。判据跟表单里那个下拉框
+   * 同源（归档的不给、智能清单不给），所以传的是**全份** `lists`，筛在这边做。
+   */
+  lists: List[];
+  /**
    * 下面那片东西铺满整列（卡片网格 / 「按来源」的瀑布流），这一行也跟着铺满。
    *
    * 这一行封顶在 `--row-measure`，那是**行档**的宽度：行档下面的
@@ -40,14 +46,19 @@ interface Props {
    */
   wide?: boolean;
   /**
-   * 开那张完整的表单（备注、子任务、重复、附件……）。
+   * 开/合那张完整的表单（备注、子任务、重复、附件…）。**开关，不是单向入口**：
+   * 表单开着的时候再点一下收掉它。
    *
    * **摆在输入框右端**，照滴答清单的文档写的：「在任务列表页顶部的『任务添加栏』
    * 输入内容，按回车键即创建成功……点击**输入框右侧的下拉选项**，可以快速设置
    * 优先级、添加附件」。它那边桌面版没有另一颗「新任务」按钮——加任务只有这
    * 一个地方，要填全就从这一条展开。
    */
-  onOpenForm: () => void;
+  onToggleForm: () => void;
+  /** 那张表单现在开着没有。这颗按钮靠它翻字形和报 `aria-expanded`——
+   *  **状态由调用方持有**（表单本体在那儿），这一层不自己记一份，
+   *  不然两份迟早对不上：按钮写着开着而屏幕上没有。 */
+  formOpen: boolean;
 }
 
 /**
@@ -68,22 +79,57 @@ interface Props {
  * 时间听谁的走 `mergePicked`、去哪了走 `createdNote`，四份都跟那张表单同一套，
  * 没有第二份判据。
  */
-export function QuickAdd({ onCreate, view, boardFilter, now, defaults, indent, wide, onOpenForm }: Props) {
+export function QuickAdd({ onCreate, view, boardFilter, now, defaults, indent, lists, wide, onToggleForm, formOpen }: Props) {
   const { message } = AntApp.useApp();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   // 「取消识别」按过就这一趟不再识别，跟 TaskComposer 同一个开关。区别在这一行
   // 建完还留着，所以它得跟着重置——不然一次「别认」会静静地管住后面每一条。
   const [smartOff, setSmartOff] = useState(false);
+  /** 被逐词点掉的那几段（键的算法见 `smartSpanKey`）。跟 `smartOff` 同一条寿命：
+   *  建完一条要清空，否则上一句里点掉的「明天」会管到下一句去。 */
+  const [ignored, setIgnored] = useState<string[]>([]);
+  /** 右边那两颗 chip 上**亲手挑过**的值。寿命同上一条：一条任务一个。 */
+  const [pickedDue, setPickedDue] = useState<string | null>(null);
+  const [pickedListId, setPickedListId] = useState<string | null>(null);
+  /** 光标在不在这一行里。那一簇空着的时候不摆出来（见下面 `showCluster`）。 */
+  const [focused, setFocused] = useState(false);
+  /** 开着的那个弹层。它开着的时候焦点不在输入框上，那一簇也不能收走。 */
+  const [menu, setMenu] = useState<'due' | 'list' | null>(null);
 
-  const smart = useMemo(() => parseSmartInput(text, now, defaults.smart), [text, now, defaults.smart]);
+  const smart = useMemo(() => parseIgnoring(text, now, defaults.smart, ignored), [text, now, defaults.smart, ignored]);
   const smartOn = !smartOff && smart.hits.length > 0;
   // 草稿怎么拼**搬去了 lib/composeDefaults.ts 的 smartDraft**——收件箱里
   // 「变成任务」要拼的是同一份，两处各写一份迟早分叉，理由写在那儿。
   // 这里还留着 `smart`：下面那颗「智能识别按掉」的开关要读 `smart.hits`
   // 决定出不出现，那是这一行独有的东西，不属于草稿本身。
-  const built = smartDraft(text, defaults, now, { smartOff, presetToRemindAt });
+  // `ignored` 必须一起递给 `smartDraft`：界面上撤掉的那一段，建出来的任务里
+  // 不能还认着。`picked` 同理——chip 上显示的东西就是建出来会用的东西。
+  const built = smartDraft(text, defaults, now, {
+    smartOff,
+    ignore: ignored,
+    picked: { due: pickedDue, listId: pickedListId },
+    presetToRemindAt,
+  });
   const title = built.title;
+  /** 这一行**接下来按回车会建出的截止**：挑过的优先，其次才是标题里认出来的。
+   *  chip 上显示的就是它——那颗 chip 的全部意义是「不用打字也能把这条排到某天」。 */
+  const shownDue = pickedDue ?? (smartOn ? smart.due : null);
+  const shownList = pickedListId ?? defaults.listId;
+  const pickList = (id: string | null) => {
+    // 跟站在某份清单里时预填的那一份比较：点回同一个清单等于没挑，退回预填
+    // 那一档（`mergePicked` 的 ① 就是这么判的，不在这儿另立一套）。
+    setPickedListId(id === defaults.listId ? null : id);
+  };
+  /** 能归的清单：归档的不给、智能清单不给——跟表单里那个下拉框同一份判据。 */
+  const usableLists = lists.filter((l) => !l.archived && l.filter === null);
+  const listName = usableLists.find((l) => l.id === shownList)?.name ?? null;
+  /** 那一簇什么时候摆出来。**空着的一行不摆**：一行上写着「添加任务」四个字的
+   *  时候，右边三颗可点的东西是在跟那句提示抢注意力；一有字、一有焦点、一挑过
+   *  东西，它们就是这一行的下一半。⌄ 不在这一簇的开关里——它是开整张表单的
+   *  唯一入口，收起来等于把那条路也收了。 */
+  const showCluster = focused || menu !== null || text.trim() !== ''
+    || pickedDue !== null || pickedListId !== null;
 
   const submit = async () => {
     if (!title || busy) return;
@@ -94,6 +140,9 @@ export function QuickAdd({ onCreate, view, boardFilter, now, defaults, indent, w
       if (note) void message.success(note);
       setText('');
       setSmartOff(false);
+      setIgnored([]);
+      setPickedDue(null);
+      setPickedListId(null);
     } catch (e) {
       // 失败时那句话原样留在输入框里——清空等于把他刚打的字连同这次失败一起
       // 弄丢，跟 TaskComposer / InboxComposer / TaskCard 同一条教训。
@@ -119,40 +168,138 @@ export function QuickAdd({ onCreate, view, boardFilter, now, defaults, indent, w
           value={text}
           disabled={busy}
           onChange={(e) => setText(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           // Esc 清空。**不 blur**：清掉打错的一句之后多半是接着重打，把焦点
           // 一起收走等于再点一次输入框。
           // **也不 stopPropagation**：全局那个 Esc 除了搜索框那一支，还负责
           // 「退出选中态」（App.tsx 的 case 'escape'），拦下来等于站在这一行里
           // 按 Esc 就清不掉刚才选中的那几条任务。Esc 的语义是「从当前状态里
           // 退出来」，这一行的清空是它的一部分，不是它的替代。
-          onKeyDown={(e) => { if (e.key === 'Escape') { setText(''); setSmartOff(false); } }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return;
+            setText('');
+            setSmartOff(false);
+            setIgnored([]);
+            setPickedDue(null);
+            setPickedListId(null);
+          }}
         />
-      {/* 要填全的时候从这儿展开成整张表单。**放在输入框右端**，不是另开一颗
-          「新任务」按钮摆在标题栏上——滴答清单文档里桌面版加任务只有「任务
-          添加栏」这一个地方，附加选项挂在输入框右侧。
+      {/* 输入框右端那一簇：**日期 · 清单 · ⌄**。滴答清单文档里桌面版加任务只有
+          「任务添加栏」这一个地方，附加选项挂在输入框右侧（那句原话抄在这颗
+          ⌄ 的注释下面）；Todoist 也是一切都在单行栏里完成。
+          原来这一行右端只有一颗 ⌄，而且它孤零零贴在**行的**右边缘——1280 卡档
+          下离输入框起点 798px，看着不像这一行的东西，像个页面杂点。现在三颗
+          挨着排，输入着字（或者已经挑过东西）才出来：空着的一行摆三颗可点的
+          东西，是在跟那句「添加任务」抢注意力。 */}
+      {showCluster && (
+        <span className="ink-quickadd-tools">
+          <Dropdown
+            trigger={['click']}
+            open={menu === 'due'}
+            onOpenChange={(o) => setMenu(o ? 'due' : null)}
+            menu={{
+              items: [
+                ...quickDayChips(now).map((c) => ({ key: c.label, label: c.label })),
+                ...(pickedDue ? [{ key: '__due-clear', label: '不清' }] : []),
+              ],
+              onClick: ({ key }) => {
+                if (key === '__due-clear') setPickedDue(null);
+                else {
+                  const c = quickDayChips(now).find((x) => x.label === key);
+                  // **只说哪天，不发明时刻**：已经有的时分（挑过的或认出来的）保留，
+                  // 没有就落「全天」（本地零点）。跟表单日期那一行的快捷档同一条
+                  // 规矩，那份判据在 `quickDayChips` 旁边。
+                  if (c) {
+                    const keep = shownDue ? new Date(shownDue) : null;
+                    setPickedDue(new Date(
+                      c.date.getFullYear(), c.date.getMonth(), c.date.getDate(),
+                      keep?.getHours() ?? 0, keep?.getMinutes() ?? 0,
+                    ).toISOString());
+                  }
+                }
+                setMenu(null);
+              },
+            }}
+          >
+            <button
+              type="button"
+              className={`ink-quickadd-chip${shownDue ? ' ink-quickadd-chip-on' : ''}${!pickedDue && shownDue ? ' ink-quickadd-chip-smart' : ''}`}
+              aria-label={shownDue ? `截止 ${dueChipText(shownDue, now)}` : '排到某一天'}
+              // 认出来的那个日期在 chip 上也得说清不是他挑的——点一下「不清」就能撤。
+              title={pickedDue || !shownDue ? undefined : '这是从标题里认出来的，点这里可以改'}
+            >
+              {shownDue ? dueChipText(shownDue, now) : '日期'}
+            </button>
+          </Dropdown>
+          {usableLists.length > 0 && (
+            <Dropdown
+              trigger={['click']}
+              open={menu === 'list'}
+              onOpenChange={(o) => setMenu(o ? 'list' : null)}
+              menu={{
+                items: [
+                  ...usableLists.map((l) => ({ key: l.id, label: l.name })),
+                  { key: '__list-none', label: '不属于任何清单' },
+                ],
+                onClick: ({ key }) => {
+                  pickList(key === '__list-none' ? null : String(key));
+                  setMenu(null);
+                },
+              }}
+            >
+              <button
+                type="button"
+                className={`ink-quickadd-chip${shownList ? ' ink-quickadd-chip-on' : ''}${!pickedListId && shownList ? ' ink-quickadd-chip-smart' : ''}`}
+                aria-label={listName ? `归到清单 ${listName}` : '归到哪个清单'}
+                title={pickedListId || !shownList ? undefined : '这是你站着的那份清单，点这里可以换'}
+              >
+                {listName ?? '清单'}
+              </button>
+            </Dropdown>
+          )}
+        </span>
+      )}
+      {/* 要填全的时候从这儿展开成整张表单。**这颗 ⌄ 不受上面那一簇的开关影响，
+          一直在那儿**：它是这一行开整张表单的唯一入口，跟着那一簇一起收起来
+          等于把那条路也收了。
 
           **名字叫「新任务表单」。** 它开的那张表单在别处一直是这个名字：
           快捷键表（`C 新任务表单`）、设置里那两条「新任务默认清单/优先级」的
           说明（「只影响「新任务」表单的初值」）。这颗按钮原来自称「填完整的
           表单」——那是一句描述，不是名字，于是同一个东西在屏幕上有三种叫法，
-          照着设置里那句话去找的人找不到它。 */}
+          照着设置里那句话去找的人找不到它。
+
+          **它是一颗开关，不单向的入口**：表单开着的时候再点一下就该收掉。
+          原来它只 `setComposing(true)`，于是这一行上唯一能关那张表单的按钮
+          关不掉它——而它自己写着 `aria-expanded`，等于对着读屏宣称一个
+          做不到的状态。字形跟着翻（⌄ 开 ⌃ 合），不开读屏工具也看得出状态。 */}
       <button
         type="button"
         className="ink-quickadd-more"
         aria-label="新任务表单"
-        title="新任务表单（备注、子任务、重复、附件……）"
-        onClick={onOpenForm}
-      >⌄</button>
+        aria-expanded={formOpen}
+        title="新任务表单（备注、子任务、重复、附件…）"
+        onClick={onToggleForm}
+      >
+        <span aria-hidden="true">{formOpen ? '⌃' : '⌄'}</span>
+      </button>
       </form>
-      {/* 识别到什么、标题会变成什么——认走的那几个字会从标题里消失，这是最需要
-          提前说清楚的一件事。样式跟表单里那条共用 `.ink-smart-hint`，不用群青：
-          这是本机一条正则算出来的，不是 AI 产出，群青是配给制。 */}
-      {smartOn && (
-        <div className="ink-smart-hint" role="status">
-          <span>识别到 {smart.hits.join(' · ')}，标题会变成「{smart.title}」</span>
-          <Button size="small" type="text" onClick={() => setSmartOff(true)}>取消识别</Button>
-        </div>
-      )}
+      {/* 识别到什么、原话里哪几个字被读走了。样式跟表单里那条共用
+          `.ink-smart-hint`，渲染的是同一个组件——两处说的是同一件事，
+          措辞不该有两个版本。
+          **带子本身永远渲染**（里面没东西时它是 24px 呼吸空间）：这条带子的
+          存在理由和它为什么不许再变成 absolute，全写在 `theme.css` 那段。 */}
+      <div className="ink-quickadd-band">
+        {smartOn && (
+          <SmartHint
+            raw={text}
+            smart={smart}
+            onOff={() => setSmartOff(true)}
+            onIgnore={(key) => setIgnored((prev) => (prev.includes(key) ? prev : [...prev, key]))}
+          />
+        )}
+      </div>
     </div>
   );
 }

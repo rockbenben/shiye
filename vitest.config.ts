@@ -31,6 +31,29 @@ const TIMEOUT = 15_000;
 const MAX_WORKERS = Math.min(6, Math.max(2, availableParallelism() - 1));
 
 /**
+ * ⚠️ **「全量随机红」有两种，症状不一样，别当成一种。**
+ *
+ * 上面那段记的是**第一种**：铺满 worker 之后压 15s 线，红的永远是**超时**，
+ * 红的用例每次还不一样，而那些文件单独跑都是几秒全绿。判据是「红的报的是
+ * timeout」。
+ *
+ * **第二种是 2026-10-21 才查出来的，症状完全不同**：报的是**断言失败**或
+ * **500**，红的用例也每次不一样，但单独跑那个文件**不一定复现**。根因是
+ * Windows 上 `renameSync` 偶发 `EPERM`（目标文件刚写完、句柄还没完全释放），
+ * 落在写任务/写设置上就是「那次修改整个没落盘」。
+ *
+ * 实测（这台机器，修之前）：node 档每轮随机红 2~3 条，跨 6 个文件轮换
+ * （`app.test.ts` / `expand.test.ts` / `reminder.test.ts` / `import.test.ts`…），
+ * 红的全是这一条 `EPERM: operation not permitted, rename …`。**修法**在
+ * `server/src/entityStore.ts` 的 `renameIntoPlace`（带退避的重试），守卫在
+ * `entityStore.test.ts`。
+ *
+ * **所以下次见到「全量随机红」，先看它报的是哪一种**：报 timeout 是负载
+ * （上面那段），报 `EPERM` / 断言失败 / 500 就是文件系统那一条重试
+ * （`renameIntoPlace`）——**别用调 `MAX_WORKERS` 去治它**，那治不了。
+ */
+
+/**
  * **整套测试跑在哪个时区。**
  *
  * 这个应用的日期语义是「本地墙钟」（`dayKey`、`isAllDay`、四象限的「今天」全

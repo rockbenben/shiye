@@ -15,7 +15,7 @@ import { useCancelStuckDrag } from '../lib/dnd.js';
 import { clickToSelection, type SelState } from '../lib/selection.js';
 import { TaskCard, type DragHandleProps } from './TaskCard.js';
 import { TaskRow } from './TaskRow.js';
-import { HabitStreak } from './HabitStreak.js';
+import { HabitStreak, habitMark } from './HabitStreak.js';
 import { hasPendingProposal, type ProposalWiring } from './ProposalNote.js';
 
 interface Props {
@@ -28,6 +28,13 @@ interface Props {
    *  跟日历那七列、专注统计的「本周」必须是同一个数。不给按周一。 */
   weekStart?: WeekStart;
   tasks: Task[];
+  /**
+   * 「还没读到过任务」时该说的那一句（`lib/firstRun.ts` 的 `readHint`）。
+   * 非空的时候它顶上下面两种空态措辞——「今天没有要做的」和「还没有任何任务」
+   * 都是对「有没有」的断言，而 `tasks` 是 `[]` 的时候这两种都可能是假的。
+   * 由调用方算：这一层不知道那次 `GET /api/tasks` 成没成。
+   */
+  preRead?: string | null;
   now: Date;
   onPatch: (id: string, patch: Partial<Task>) => void;
   onEditTask: (id: string, patch: Partial<Task>) => Promise<unknown>;
@@ -182,7 +189,7 @@ function SortableTodayRow({
 /** 默认空集提到模块层：写成默认参数每次渲染都是新对象，白白让依赖比较判成「变了」。 */
 const EMPTY_LINGER: Set<string> = new Set();
 
-export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder, onDuplicate, onSkip, onBreakdown, onPromoteSubtask, proposals, lists, focusMinutes, breakMinutes, offline, onOpenDetail, openDetailId, density = 'card', selection, onSelectionChange, onDeferOverdue, linger = EMPTY_LINGER, weekStart = 1 }: Props) {
+export function TodayView({ tasks, preRead, now, onPatch, onEditTask, onDelete, onReorder, onDuplicate, onSkip, onBreakdown, onPromoteSubtask, proposals, lists, focusMinutes, breakMinutes, offline, onOpenDetail, openDetailId, density = 'card', selection, onSelectionChange, onDeferOverdue, linger = EMPTY_LINGER, weekStart = 1 }: Props) {
   const { message } = AntApp.useApp();
   // 正在编辑的任务 id：编辑到一半如果因为改了截止时间等原因掉出了「今天」的
   // 成员资格，筛选重算不该把编辑框连带草稿一起卸载掉——跟 TaskBoard 的
@@ -449,7 +456,9 @@ export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder
           // 一行安静的字，不是 antd 自带的 Empty 插画——见 theme.css 里
           // .ink-empty-note 的注释。
           // 「今天很闲」和「整个应用还是空的」不是同一句话，见 lib/firstRun.ts。
-          <p className="ink-empty-note">{isFirstRun(tasks) ? FIRST_RUN_HINT : '今天没有要做的'}</p>
+          // 而这两句都还在断言「有没有」——还没读到过的时候一句都不能说，
+          // 由调用方递 `preRead` 顶上（见 Props 上那句）。
+          <p className="ink-empty-note">{preRead ?? (isFirstRun(tasks) ? FIRST_RUN_HINT : '今天没有要做的')}</p>
         ) : (
           <>
             {/* 这一行回答两个问题：**今天这一堆是什么形状**（几条、其中几条
@@ -460,19 +469,27 @@ export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder
                 任务，几个数字不会各说各的。 */}
             <p className="ink-source-meta ink-mono">
               {meta}
-              {/* 「改到」不是「推到」：同一个动作在确认框（「把 N 条过期的改到
-                  今天？」）、命令面板（「把 N 条过期的改到今天」）和事后那句提示
-                  （「N 条过期的改到了今天」）里都叫「改到」，只有这两颗按钮
-                  （这里 + App.tsx 的分组头）叫「推到」。而这个应用里「推」另有
-                  其事——「推迟 1 小时」「推迟过 4 次」说的是往后拖，不是
-                  「挪到今天」。 */}
+              {/* **全站都叫「改到」，一颗「推到」都不留。**
+                  同一个动作在确认框（「把 N 条过期的改到今天？」）、命令面板
+                  （「把 N 条过期的改到今天」）、事后那句提示（「N 条过期的改到了
+                  今天」）和这两颗按钮（这里 + App.tsx 的分组头）里都叫「改到」。
+
+                  原来这两颗按钮写的是「推到」，而这段注释就是那时候写的
+                  ——注释说的「只有这两颗按钮叫推到」是真的，但**代码后来跟着改名
+                  了，注释没跟上**，于是它一度把一个已经统一的名字描述成一个例外。
+                  注释比代码旧，读的人会照着它以为界面上有两种说法。
+
+                  统一到「改到」而不是统一到「推到」，理由是这个应用里**「推」另有
+                  其事**：「推迟 1 小时」「推迟过 4 次」「推到下周」说的都是往后拖，
+                  不是「挪到今天」。让「挪到某一天」占用「推」，那两颗按钮就得跟
+                  一堆推迟相关的说法抢一个词。 */}
               {onDeferOverdue && overdueHere.length > 0 && (
                 <Button
                   size="small"
                   type="text"
                   style={{ marginInlineStart: 8 }}
                   onClick={() => onDeferOverdue(overdueHere)}
-                >全部改到今天</Button>
+                >{`${overdueHere.length} 条改到今天`}</Button>
               )}
             </p>
             <DndContext
@@ -518,19 +535,19 @@ export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder
                       >
                         {(drag) => (
                           <>
-                            {/* 打卡条：只在「今天」画——HabitStreak.tsx 只从这里被引用，
-                                TaskCard 不认识它，别的视图共用的还是裸 TaskCard，见
-                                HabitStreak.tsx 顶部注释。history 要用完整的 `tasks`
-                                （不是 `ordered`/`visible`）：同一个习惯已经打过卡的
-                                历史实例 status 是 done，早就被「今天」的成员资格筛掉了，
-                                算连续天数不能只看这一张卡自己还留在列表里的这份。
-                                compact（task-5）：行档下收窄间距，见 HabitStreak.tsx
-                                的注释——打卡是这类任务的全部意义，行档不丢它。 */}
-                            <HabitStreak habit={habitStreak(tasks, t, now, weekStart)} compact={density === 'row'} />
                             {/* move 每行各算一次（依赖 i，跨行不同）——不是各写一份：
                                 拖放/上下移在两档密度之间会慢慢漂开（跟 commit() 顶部
                                 「按钮和拖放共用同一段」同一条理由，见那处注释）。 */}
                             {(() => {
+                              // 打卡条/打卡记号：只在「今天」算——HabitStreak.tsx 只从
+                              // 这里被引用，TaskCard/TaskRow 自己不认识习惯，别的视图
+                              // 共用的还是裸组件，见 HabitStreak.tsx 顶部注释。history
+                              // 要用完整的 `tasks`（不是 `ordered`/`visible`）：同一个
+                              // 习惯已经打过卡的历史实例 status 是 done，早就被「今天」
+                              // 的成员资格筛掉了，算连续天数不能只看这一张卡自己还留在
+                              // 列表里的这份。**卡档画整句话、行档画火苗 + 数字**，两份
+                              // 都读这同一个 `hs`，不再各算一遍。
+                              const hs = habitStreak(tasks, t, now, weekStart);
                               const moveControls = {
                                 onUp: () => void move(t.id, 'up'),
                                 onDown: () => void move(t.id, 'down'),
@@ -561,6 +578,7 @@ export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder
                                   // 跟 TaskGrid.tsx 共用同一份（整分支审查 B1：以前这里
                                   // 自己复制了一份一模一样的表达式，零测试跟着）。
                                   hasProposal={hasPendingProposal(proposals, t.id)}
+                                  habit={habitMark(hs)}
                                   drag={drag}
                                   move={moveControls}
                                   current={openDetailId != null && t.id === openDetailId}
@@ -598,6 +616,7 @@ export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder
                                   breakMinutes={breakMinutes}
                                   offline={offline}
                                   rank={i + 1}
+                                  habitLine={<HabitStreak habit={hs} />}
                                   drag={drag}
                                   move={moveControls}
                                   select={selectFor(t.id)}
@@ -634,7 +653,7 @@ export function TodayView({ tasks, now, onPatch, onEditTask, onDelete, onReorder
                       服务端自己清 completedAt。
                       **跟勾完那一下弹的撤销提示不重复**：那条六秒就没了，管的是
                       「刚点错」；这一颗常驻，管的是「一小时后回头看今天做了什么，
-                      发现有一条不该在这儿」。判据在 lib/undoDone.ts。 */}
+                      发现有一条不该在这儿」。判据在 lib/undoStatus.ts。 */}
                   <button
                     type="button"
                     className="ink-today-done-undo"

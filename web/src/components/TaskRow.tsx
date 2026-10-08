@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { App as AntApp, Dropdown } from 'antd';
 import type { List, Task } from '../types.js';
 import { dueChip } from '../lib/dueChip.js';
 import { describeRepeat } from './RepeatFields.js';
 import { blockingAncestor, childProgress, parentOf } from '../lib/hierarchy.js';
+import { formatMinutes, taskFocusMinutes } from '../lib/focusStats.js';
+import { POSTPONE_MIN } from '../lib/suggest.js';
 import { listLabel } from '../lib/listIcon.js';
-import { allTags, formatWhen, isSettled, isTaskOverdue, displayReminderAt, notStarted, waitingText, CONTEXT_LABEL } from '../lib/taskView.js';
+import { allTags, formatWhen, isSettled, isTaskOverdue, displayReminderAt, notStarted, waitingText, CONTEXT_LABEL, multiDayLabel } from '../lib/taskView.js';
 import { PRI_LABEL } from './TaskFields.js';
 import { decodeTaskMenu, taskMenuItems } from '../lib/taskMenu.js';
 import { isInteractiveTarget } from '../lib/keymap.js';
@@ -98,6 +100,19 @@ export interface TaskRowProps {
    *  不一样。 */
   hasProposal?: boolean;
   /**
+   * 习惯的紧凑打卡记号（`🔥5` / `🔥2/3`），只有「今天」那一屏给。
+   *
+   * **行档不画卡档那一句完整的话**：`.ink-trow-meta` 这一列已经站着旗、🔁、
+   * 📌、⏳、 五六个记号，再塞一句「连续 5 天 · 今天还没打卡」会把该看的
+   * 截止时间挤到渐隐里去（那一列有右缘 mask，挤不下是静默消失的）。所以行档
+   * 只留同一个火苗 + 数字，**整句话走 `aria-label` 和 `title`**——悬停和读屏
+   * 听到的跟卡档屏幕上写着的是同一份（`HabitStreak.tsx` 的 `habitMark`）。
+   *
+   * 由调用方算好传进来，理由同 `TaskCard` 的 `habitLine`：这一行不认识
+   * `habitStreak()`，也不该让别的视图的行长出这个记号。
+   */
+  habit?: { mark: string; label: string } | null;
+  /**
    * 拖拽排序抓手的接线（task-5-brief）。**只有「今天」传**——其它五个走
    * `TaskGrid` 的密度视图没有手动排序这回事。跟 `TaskCard.tsx` 的 `drag`
    * prop 同一个形状，区别只在挂的位置：这里 `draggable` 挂在悬停/聚焦才
@@ -145,8 +160,8 @@ export interface TaskRowProps {
  * 必要：勾选是个纯 CSS 圆圈，「更多」是个纯文本按钮，批量操作的选中框是
  * 原生 `<input type="checkbox">`，都不需要 antd。
  */
-export function TaskRow({
-  t, now, onPatch, onOpen, select, hasProposal, drag, move, compact, lists, allTasks, onEdit, onDelete,
+export function TaskRowImpl({
+  t, now, onPatch, onOpen, select, hasProposal, habit, drag, move, compact, lists, allTasks, onEdit, onDelete,
   editRequested, onEditRequestHandled, current,
 }: TaskRowProps) {
   const { modal } = AntApp.useApp();
@@ -172,6 +187,11 @@ export function TaskRow({
   const chip = dueChip(t.due, now);
   // 「还没到开始时间」那枚。跟上面同一个函数，理由写在渲染处。
   const startChip = dueChip(t.startAt, now);
+  // 跨天的那一条走到第几天了。**可见的是短句、整句走 label**，同上面习惯打卡
+  // 那枚记号的裁决（这一列的宽度全归标题）；两份字串出自 taskView 的
+  // `multiDayLabel` 同一次拼接。
+  const spanChip = multiDayLabel(t, now, true);
+  const spanFull = multiDayLabel(t, now);
   // 过期红只在「还没做完」时才画——跟卡片上「已过期」标签同一条口径
   // （taskView.ts 的 isOverdue：done/later 不算过期，人已经对这条任务做过
   // 判断了）。**跟 TaskCard 用同一个判据**（整分支审查 C2）：以前这里只写
@@ -213,6 +233,16 @@ export function TaskRow({
   // 算在这里而不是在 JSX 里就地写：下面渲染处要用到三次（条件、aria-label、正文），
   // 三份各自兜底就是三个可以各自改漏的地方。
   const subCount = t.subtasks?.length ?? 0;
+  /**
+   * 已经专注了多少分钟。**跟卡片那侧共用同一个 `taskFocusMinutes`**，
+   * 不在这儿另算一遍——两处各写一遍就是两份可以各自改漏的判据，
+   * 而这一维正好是「行档漏画、卡片画了」那一族里的一个（见渲染处那段注释）。
+   *
+   * 附件数同理直接读 `t.attachments.length`：`attachments` 在 `Task` 上是
+   * 必有字段（不是 `subtasks` 那种服务端可能不写、读时得兜底的），
+   * 所以这里不抄 `subCount` 那个 `?? 0`。
+   */
+  const spent = taskFocusMinutes(t);
   /**
    * 「打标签」那一组的候选。从 `allTasks` 现算——它本来就在手上（层级记号也
    * 读它），不为这一组再穿一根 prop 下来。`useMemo` 是必要的而不是顺手：
@@ -297,16 +327,24 @@ export function TaskRow({
       // 28px 左内边距在这六个视图里恒空，分组标题顶格、下面每一行圆圈却
       // 缩进 28px，看着错位。见 TaskRowProps.drag 的注释。
       className={`ink-trow${select?.selected ? ' ink-trow-selected' : ''}${current ? ' ink-trow-current' : ''}${drag ? ' ink-trow-draggable' : ''}`}
+      // 键盘走位的两个钩子，跟 TaskCard.tsx 那两份成对：`data-task-id` 让 App
+      // 从屏幕上现读顺序，`tabIndex={-1}` 是「可编程聚焦、不进 Tab 序」。
+      // 行档尤其需要——手机上默认就是这一档。
+      data-task-id={t.id}
+      tabIndex={-1}
       // 读屏那一侧的同一件事：这一行是「当前打开的那一条」。`aria-current`
       // 没有 `true` 之外更合适的取值（page/step/location 都不是这个语义）。
       aria-current={current ? 'true' : undefined}
-      /** `X` 选中/取消选中这一行，`Shift+X` 连选。判据和理由跟 `TaskCard.tsx`
-       *  那份一字不差（那边的注释是正本）——同一个 `TaskGrid` 会按密度在卡片
-       *  和行之间切换，「键盘能不能进选中态」不该跟着密度变。 */
+      /** `X` 或 `空格` 选中/取消选中这一行，`Shift+X` 连选。判据和理由跟
+       *  `TaskCard.tsx` 那份一字不差（那边的注释是正本）——同一个 `TaskGrid`
+       *  会按密度在卡片和行之间切换，「键盘能不能进选中态」不该跟着密度变。 */
       onKeyDown={select ? (e) => {
-        if (e.key !== 'x' && e.key !== 'X') return;
+        if (e.key !== 'x' && e.key !== 'X' && e.key !== ' ') return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (isInteractiveTarget(e.target)) return;
+        // 空格落在行里某颗按钮上（标题按钮自己就是 `<button>`）时，那一下是
+        // 那颗控件自己的——按空格=打开这一行，不该顺手选中。
+        if (e.key === ' ' && isInteractiveTarget(e.target, 'button, a')) return;
         e.preventDefault();
         select.onClick({ shift: e.shiftKey, ctrlOrMeta: true });
       } : undefined}
@@ -431,9 +469,9 @@ export function TaskRow({
         <span className={`ink-trow-title${done ? ' ink-trow-title-done' : ''}`}>{t.title}</span>
         <span className="ink-trow-meta">
           {hasProposal && (
-            <span className="ink-trow-proposal" role="img" aria-label="有 AI 待决建议">●</span>
+            <span className="ink-trow-proposal" role="img" aria-label="有 AI 建议等你确认">●</span>
           )}
-          {/* **还没到开始时间。** 卡片上画着「9 月 1 日 开始」，行档原来一点记号都没有
+          {/* **还没到开始时间。** 卡片上画着「9月1日 开始」，行档原来一点记号都没有
               ——一条现在根本干不了的任务，在行密度下跟一条立刻能干的长得一模一样，
               而那正是这个字段存在的全部理由。跟下面「在等」「重复」那一段注释说的是同一件事：
               卡片上画得出来、行档上没有，同一条任务换个密度就少一条信息。
@@ -442,7 +480,7 @@ export function TaskRow({
               好几个语义，再挑一个「还没开始」的字形只会是个谜；而「起」这个后缀把它跟
               旁边那枚到期 chip 分开了，不会被读成截止时间。排在到期前面：开始在截止之前。 */}
           {/* 用 `dueChip` 而不是卡片那边的 `dueText`：**两枚 chip 就摆在一起**，各用一个
-              格式化函数的话，一枚写「明天」、旁边一枚写「9 月 1 日 18:00」，看着像两种
+              格式化函数的话，一枚写「明天」、旁边一枚写「9月1日 18:00」，看着像两种
               不同的东西（实拍出来的）。`dueChip` 就是行档这一档的写法：只答「哪一天」，
               只有「今天」那一档才带时刻。它返回的 `overdue` 这儿用不上——开始时间没有
               「过期」这回事（到了就是到了，这枚 chip 自己就消失了）。 */}
@@ -472,8 +510,32 @@ export function TaskRow({
             // C2）。
             <span className="ink-trow-due ink-trow-due-overdue">已过期</span>
           )}
+          {/* **跨天的那一条：今天走到第几天。** 挨着到期 chip 画——两句说的是
+              同一个区间，先尽头再进度。卡片上写全句「第 3 天 · 共 12 天」，这儿
+              只留「第 3 天」：这一列已经有 🔔⏳🔁⚑ 五六个记号，整句会把该看的
+              截止时间挤进右缘那道 mask 里静默消失（习惯打卡那枚同样的取舍，
+              理由见 `TaskRowProps.habit`）。共几天靠 `title`/`aria-label` 补全。
+              复用 `.ink-trow-start` 那一条声明（11px 等宽、`--dim`、不折行）：
+              同一档视觉分量，不新开一条 CSS 规则。`compact`（看板一列 217px）
+              下不画，跟标签/子项数/清单名同一档——多字符串在这种宽度里是最先
+              该让路的东西。 */}
+          {!compact && spanChip && (
+            <span className="ink-trow-start" role="img" aria-label={spanFull ?? spanChip} title={spanFull ?? spanChip}>{spanChip}</span>
+          )}
           {remindAt && (
-            <span className="ink-trow-remind" role="img" aria-label={`提醒：${formatWhen(remindAt)}`}>🔔</span>
+            // **开了「持续提醒」要在 aria-label 里说出来**，否则这一行看不出
+            // 它响过一次还会再响：这个字段是 `TaskFields.tsx` 里那个
+            // `persistentReminder` 勾选框，
+            // 卡片那侧也没画，而滴答把它做成一条独立的提醒形态
+            // （`docs/dida365/持续提醒.md`，
+            // https://help.dida365.com/articles/7374016921986924544 ）。
+            // 「网页响了一声我就去静音了，结果它一直响」是这个字段存在的理由，
+            // 界面上看不出来等于没开。仍然只一个字形 + `aria-label`，不占宽度。
+            <span
+              className="ink-trow-remind"
+              role="img"
+              aria-label={`提醒：${formatWhen(remindAt)}${t.persistentReminder ? '（持续提醒，会一直响）' : ''}`}
+            >🔔</span>
           )}
           {/* 在等谁 / 会重复。**跟 🔔 一字不差的写法**：一个字形 + `aria-label`
               带上内容，不写正文——这一行的宽度全靠标题吃，卡片上那种「⏳ 在等
@@ -497,6 +559,11 @@ export function TaskRow({
           {/* 置顶。**这个记号不是锦上添花，是在解释这一行为什么在这儿**：置顶是
               所有排序的第一个比较键（`taskView.ts` 的 `byPinned`），一条被顶到
               最前的任务在行档上没有任何说明，整份列表的顺序看起来就是乱的。 */}
+          {habit && (
+            <span className="ink-trow-habit" role="img" aria-label={habit.label} title={habit.label}>
+              🔥{habit.mark}
+            </span>
+          )}
           {t.pinned && <span className="ink-trow-pin" role="img" aria-label="已置顶">📌</span>}
           {/* 层级。子任务写「↳ 父亲的标题」，父任务写「n/m」——跟卡片上同一对
               记号、同一份判据（`lib/hierarchy.ts`），只是省掉「属于」「子任务」
@@ -554,6 +621,18 @@ export function TaskRow({
           {!compact && t.context && (
             <span className="ink-context-mark">@{CONTEXT_LABEL[t.context]}</span>
           )}
+          {/* 分段。**跟着上面情境那条一起补的**——`CONTRIBUTING.md` 那份
+              「不会红的」清单点名过同一形状的病（`waitingFor`、`startAt` 各漏过
+              一轮，这是第三次），而这一处
+              更彻底：卡片上也没画，**两处都没有**，等于这个字段只活在
+              「按分段分组」那一个视图里。填它的理由跟站在哪一屏无关（`section`
+              是自由文本，不是分组视图的附属品），所以画在卡片上就该画在行档上。
+
+              复用 `.ink-context-mark` 那一条声明（同为等宽 11px `--dim`）——
+              「两个密度长得一样」正是这一下要的，不新开一个 `.ink-trow-` 类。 */}
+          {!compact && t.section && (
+            <span className="ink-context-mark" aria-label={`分段 ${t.section}`}>§{t.section}</span>
+          )}
           {/* compact：标签/子项数不渲染——看板一列 217px，这两样是最先该
               让路的（到期/优先级更要紧，标题本身要靠这两样让路才读得全）。
               见 TaskRowProps.compact 的注释。 */}
@@ -578,6 +657,58 @@ export function TaskRow({
               role="img"
               aria-label={`${subCount} 个子任务`}
             >· {subCount}</span>
+          )}
+          {/* **下面三枚是同一个约定第三次补上的**：卡片画了、行档没有，
+              于是同一条任务换个密度就少一条信息。`waitingFor`、`startAt` 漏过
+              上一轮（`CONTRIBUTING.md` 那张「不会红的」清单点名了它们），这一轮
+              是第三次。两条互不相干的排查各自走到了这一处，所以这不是看漏了。
+
+              复用 `.ink-trow-subcount` 那一族（等宽 11px `--dim`、不折行），
+              **不新开 CSS 规则**——「两个密度长得一样」正是这一下要的。
+              同样只 `role="img"` + `aria-label`、**不加 `title`**：外面那颗
+              `.ink-trow-open` 自己挂着 `title={t.title}`，里面再挂一个等于在
+              那颗按钮上挖一块悬停读不到标题的死区（理由见上面 `subCount` 那段）。
+
+              ① **已专注 / 预计**：`formatMinutes` 与 `taskFocusMinutes` 跟卡片
+                 共用同一份（`lib/focusStats.ts`），不在这儿手写第二套算法——
+                 两处各写一遍就是两份可以各自改漏的判据。**「专注超了预计」在
+                 卡片上用的是过期色，这里用 `--dim`**：这一行已经有过期记号了，
+                 同一排再上一次红，等于把唯一的警示色稀释成常态。
+              ② **推迟过 N 次**：门槛 `POSTPONE_MIN` 跟卡片、`lib/suggest.ts`
+                 的「一拖再拖」那一组共用同一个常量，不各写一个 2。
+                 **这一维比前三个更要紧**：`ReviewView.tsx` 里那个 stale 筛选、
+                 `SuggestPanel.tsx` 的「一拖再拖」那一组都拿它当依据——系统拿
+                 这个数做判断，而用户在默认档看不见判断的依据。
+              ③ **附件数**：卡片那侧是「有才渲染」（`TaskCard.tsx` 里那个
+                 `Attachments`），行档
+                 一个字都没有。一条挂着三张图的任务和一个字形记号都没有，看不出
+                 它有资料——而「这条我拍过照／存过 PDF」正是判断要不要点开的关键。
+
+              `compact`（看板一列 217px）按现有约定让路，跟标签/子项数/清单名同一档。 */}
+          {!compact && (spent > 0 || t.estimateMinutes) && (
+            <span
+              className="ink-trow-subcount"
+              role="img"
+              aria-label={t.estimateMinutes
+                ? `已专注 ${formatMinutes(spent)}，预计 ${formatMinutes(t.estimateMinutes)}`
+                : `已专注 ${formatMinutes(spent)}`}
+            >{t.estimateMinutes
+              ? `${formatMinutes(spent)}/${formatMinutes(t.estimateMinutes)}`
+              : `专注${formatMinutes(spent)}`}</span>
+          )}
+          {!compact && t.postponeCount >= POSTPONE_MIN && (
+            <span
+              className="ink-trow-subcount"
+              role="img"
+              aria-label={`推迟过 ${t.postponeCount} 次`}
+            >推迟{t.postponeCount}</span>
+          )}
+          {!compact && t.attachments.length > 0 && (
+            <span
+              className="ink-trow-subcount"
+              role="img"
+              aria-label={`${t.attachments.length} 个附件`}
+            >📎{t.attachments.length}</span>
           )}
         </span>
       </button>
@@ -668,3 +799,14 @@ export function TaskRow({
    */
   return rowMenu ? <Dropdown menu={rowMenu} trigger={['contextMenu']}>{row}</Dropdown> : row;
 }
+
+/**
+ * **`TaskRow` 是 `memo` 过的，导出的是它。**
+ *
+ * 理由跟 `TaskCard` 那份一字不差（见 TaskCard.tsx 末尾那段）：行档是密度更高的
+ * 那一档，一屏排几十条，每一条也是一整棵子树；父级任何一处无关的 state 变动
+ * 都不该让它们跟着重渲染。`TaskGrid.tsx` 那边同步做了接线稳定化，两边是一件事
+ * 的两半——memo 单上一半不生效，`cardRenderBudget.test.tsx` 数的是真渲染次数。
+ */
+export const TaskRow = memo(TaskRowImpl);
+export type TaskRow = ReturnType<typeof TaskRowImpl>;

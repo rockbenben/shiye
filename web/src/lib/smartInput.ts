@@ -40,9 +40,87 @@ export interface SmartInput {
   context: TaskContext | null;
   /** 给界面显示的人话，认出一样有一条。空数组 = 什么都没认出来，界面不该出提示条。 */
   hits: string[];
+  /**
+   * 原话里**被这一次识别读走的每一段**，落在 `raw` 上的下标区间。
+   *
+   * 为什么要有它：`hits` 说的是「认出了什么」，可它说不出**是哪几个字**。
+   * 「明天下午三点开会」这条，提示条写「识别到 明天 下午三点，标题会变成
+   * 「开会」」——句子一长，人得自己拿两份文字对一遍才知道少了哪半句。而真正
+   * 会让人愣一下的恰恰是「我打的字去哪了」，那是一句**位置**的话，不是内容的话。
+   *
+   * `gone` 分两档，因为识别有两个不同的动作：
+   * - `true`：这几个字**不会进标题**（「明天」被摘走了）。
+   * - `false`：这几个字被读走了，但按设置**留在标题里**（「认了但不摘日期」
+   *   那一档，或者 `#标签` 接回末尾）。
+   * 把两档并成一档的话，「不摘」那一档就会在界面上说「这几个字没了」，而它们
+   * 明明还在——那比不标更坏。
+   *
+   * **区间是 UTF-16 下标**，跟 `String.prototype.slice` 一致，界面直接拿来切。
+   * 认不出来的那些字不会被标；一次都没认出来时这是空数组。
+   */
+  spans: SmartSpan[];
 }
 
-const EMPTY = (title: string): SmartInput => ({ title, due: null, remindAt: null, tags: [], repeat: null, context: null, hits: [] });
+/** 一段被读走的字是哪一类。界面用它决定标成什么颜色/说什么话。 */
+export type SmartSpanKind = 'context' | 'tag' | 'repeat' | 'date' | 'time' | 'remind';
+
+export interface SmartSpan {
+  /** `raw` 上的起点（含）。 */
+  start: number;
+  /** 终点（不含）。 */
+  end: number;
+  kind: SmartSpanKind;
+  /** 这几个字会不会从标题里消失。见 `SmartInput.spans`。 */
+  gone: boolean;
+}
+
+const EMPTY = (title: string): SmartInput => ({
+  title, due: null, remindAt: null, tags: [], repeat: null, context: null, hits: [], spans: [],
+});
+
+/**
+ * 记一步「这次从串里吃掉了哪几段」，返回新的**下标对照表**（这一步的串上的
+ * 每个位置 → 原话上的位置）。
+ *
+ * 判据只有一条：`after` 得是 `before` 的子序列。整条流水线只做删除（`take`
+ * 是 `slice + slice`），所以这一步永远成立。**万一不成立就整跳过账、一个
+ * 字都不标**——宁可漏一处高亮，也不能把人没写错的字标成「被吃掉了」，那是
+ * 指着他写的东西说谎。
+ *
+ * 匹配用最左到右的贪心：同一个字出现两次时（「点点点」吃掉一个），标掉后面
+ * 那个。这种歧义只影响"哪一颗"，不影响"吃掉了几个"，而界面要说的正是后者。
+ */
+function eatSpans(
+  before: string,
+  after: string,
+  from: number[],
+  kind: SmartSpanKind,
+  step: number,
+  out: { start: number; end: number; kind: SmartSpanKind; step: number }[],
+): number[] {
+  const keep = new Uint8Array(before.length);
+  let j = 0;
+  for (let i = 0; i < before.length && j < after.length; i += 1) {
+    if (before[i] === after[j]) { keep[i] = 1; j += 1; }
+  }
+  if (j < after.length) return from;
+  const next: number[] = [];
+  let runStart = -1;
+  const flush = (lastRemoved: number) => {
+    out.push({ start: from[runStart], end: from[lastRemoved] + 1, kind, step });
+    runStart = -1;
+  };
+  for (let i = 0; i < before.length; i += 1) {
+    if (keep[i]) {
+      next.push(from[i]);
+      if (runStart >= 0) flush(i - 1);
+    } else if (runStart < 0) {
+      runStart = i;
+    }
+  }
+  if (runStart >= 0) flush(before.length - 1);
+  return next;
+}
 
 const CN_DIGIT: Record<string, number> = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 /** 正则里「一个数」的写法：阿拉伯数字或中文数字，两处（时刻、重复间隔）共用。 */
@@ -721,6 +799,21 @@ export function parseSmartInput(raw: string, now: Date, opts: SmartOptions = {})
 
   const hits: string[] = [];
 
+  /**
+   * 每一步「吃掉了原话里的哪几段」都记在这儿。`pos[i]` 是**当前这份串**上第
+   * i 个字符对应到原话里的下标——每摘走一段，后面那些字的下标全体左移，所以
+   * 这个对照表必须跟着每一步走，不能事后拿 `title` 跟原话对（`title` 是
+   * **拼出来**的：`#标签` 在「认了但不摘标签」那一档会被接回末尾，全角的
+   * `＃` 也会归一成 `#`——拿结果反推位置会把这两件事都看不见）。
+   */
+  const eaten: { start: number; end: number; kind: SmartSpanKind; step: number }[] = [];
+  let pos: number[] = Array.from({ length: input.length }, (_, i) => i);
+  let step = 0;
+  const eat = (before: string, after: string, kind: SmartSpanKind) => {
+    pos = eatSpans(before, after, pos, kind, step, eaten);
+    step += 1;
+  };
+
   // 情境**排在最前面**，理由跟「标签先摘走」一模一样：后面每一步都从摘干净的
   // 那份往下认。摘早了不会误伤——`@` 后面必须是那五个固定词之一。
   //
@@ -728,6 +821,7 @@ export function parseSmartInput(raw: string, now: Date, opts: SmartOptions = {})
   // `takeContext` 上面那段），所以这一行没有 `wantXxx` 守卫。
   const ctx = takeContext(input);
   if (ctx.context) hits.push(`@${CONTEXT_LABEL[ctx.context]}`);
+  eat(input, ctx.rest, 'context');
 
   const taken = wantTag ? takeTags(ctx.rest) : { rest: ctx.rest, tags: [] as string[] };
   // 认了但不摘：标签照样进 `tags`，标题原样留着。**后面几步仍然从「摘掉标签
@@ -736,11 +830,13 @@ export function parseSmartInput(raw: string, now: Date, opts: SmartOptions = {})
   const noTags = taken.rest;
   const tags = taken.tags;
   if (tags.length > 0) hits.push(tags.map((t) => `#${t}`).join(' '));
+  eat(ctx.rest, noTags, 'tag');
 
   const rep = wantDate
     ? takeRepeat(noTags)
     : { rest: noTags, repeat: null, label: '', monthDay: null, period: undefined, bail: false } as ReturnType<typeof takeRepeat>;
   const { rest: noRepeat, repeat, label: repeatLabel, monthDay, period: repeatPeriod, bail } = rep;
+  eat(noTags, noRepeat, 'repeat');
   // 表达不了的重复说法：整次识别作废，原话还回去。理由在 `RepeatHit.bail`。
   if (bail) return EMPTY(input);
   if (repeat) hits.push(repeatLabel);
@@ -760,11 +856,17 @@ export function parseSmartInput(raw: string, now: Date, opts: SmartOptions = {})
     : wantDate
       ? takeTime(noDate, now, date !== null, date?.period ?? repeatPeriod)
       : { rest: noDate, part: null };
+  // 「半小时后」这种一次定下日期和钟点的，整段算**时刻**：它说的就是那一刻，
+  // 拆成「日期 + 时刻」两段会在界面上把同一个词说两遍。
+  eat(noRepeat, noDate, moment ? 'time' : 'date');
+  // 走了上面那一支时 `noDate` 和 `noTime` 是同一份串，这一步自然吃不掉任何字。
+  eat(noDate, noTime, 'time');
 
   // 「提前 N 提醒」——只产生一个偏移，不产生日期，所以在日期/时刻都认完之后
   // 再抠。**从 `noTime` 上抠**：前面那几步已经把日期和钟点摘走了，剩下的串里
   // 「提前半小时」不会跟它们互相吃。
   const before = wantDate ? takeRemindBefore(noTime) : { rest: noTime, minutes: null, label: '' };
+  eat(noTime, before.rest, 'remind');
 
   // 落在哪一天。几种来源，从确定到含糊：
   let day = date ? date.day : null;
@@ -835,11 +937,87 @@ export function parseSmartInput(raw: string, now: Date, opts: SmartOptions = {})
   // 的时候（没排上提醒）原样留着——摘掉它等于把人写的字吃掉却什么也没做成。
   const usedBefore = remindAt !== null && before.minutes !== null;
   const base = stripDate ? (usedBefore ? before.rest : noTime) : noTags;
+  // 每一步吃掉的那几段**到不到得了标题**，看最后挑了哪一份中间结果当底：
+  // 底是 `noTags` 时（不摘日期）只有情境和标签那两步的删除留得住；底是 `noTime`
+  // 时「提前半小时」那一步白吃（它没被用上）；只有真的用上了才连它一起算。
+  // 标签另有一档：不摘的话它是**接回末尾**的，那几个字照样在标题里。
+  const lastGone = stripDate ? (usedBefore ? 5 : 4) : 1;
+  const spans: SmartSpan[] = eaten.map((s) => ({
+    start: s.start,
+    end: s.end,
+    kind: s.kind,
+    gone: s.step <= lastGone && !(s.kind === 'tag' && !stripTag),
+  }));
   const title = (stripTag ? base : [base.trim(), ...tags.map((t) => `#${t}`)].filter(Boolean).join(' '))
     .replace(/\s+/g, ' ').trim();
   // 认走之后标题空了（整句就是「明天下午两点」）：这不是一条任务，是一个时间。
   // 整份识别作废，把原话还回去让他自己看着办，别建一条没有标题的任务。
   if (!title) return EMPTY(input);
 
-  return { title, due, remindAt, tags, repeat, context: ctx.context, hits: hits.filter(Boolean) };
+  return { title, due, remindAt, tags, repeat, context: ctx.context, hits: hits.filter(Boolean), spans };
+}
+
+/**
+ * 一段被读走的字在「这几段别认」名单里的身份：`起点|那几个字`。
+ *
+ * **为什么连字一起带，不只记下标**：他还会接着改这句话。只记下标的话，点掉
+ * 「明天」的识别、再把前面的「#导入」删了，整句左移一格，那个旧下标如今指着
+ * 别的词——「别认」就静静地盖到另一个词上，屏幕上一点痕迹都没有。键里带上字，
+ * 位置或字任一变了这个键就对不上，那一段**重新被认出来**。两种失败方向挑看得
+ * 见的那一种：认多回来，那颗 chip 又出现在提示条上；认少回来，他以为撤了其实
+ * 没撤，什么信号都没有。
+ */
+export const smartSpanKey = (raw: string, s: SmartSpan): string => `${s.start}|${raw.slice(s.start, s.end)}`;
+
+/** 遮字从 Unicode 私用区第一页起排。识别正则没有一处认它：不是数字、不是 CJK
+ *  日期词、不在 `#`/`@` 之后，也不是 `\s`。 */
+const MASK_BASE = 0xe000;
+
+/**
+ * 「这几段别认」的那一次识别。
+ *
+ * 做法是**遮字重解析**，不是拿第一次的结果手工抠掉某一段：识别是一串顺序吃
+ * 的（`#每周报` 里的「每周」不该再被当成重复规则，所以先摘标签再认日期），
+ * 手工抠就得在旁边重算一遍那套顺序——那是第二份判据，迟早跟正本分叉。
+ * 遮字重解析复用同一个 `parseSmartInput`，除了「哪几段被遮」之外没有任何新逻辑。
+ *
+ * 遮字**每段各用一个码位**（私用区连着排）而长度跟原文一样：长度不变，返回的
+ * `spans`/`hits` 下标就还落在原话上，提示条那句划掉的原话照样对得齐；码位不同，
+ * 还原标题时看一眼就知道这串遮字原本是第几段，两段一样长也不会认错。
+ *
+ * 区间真交叠时（`eaten` 允许后一步在前一步留下的空洞上继续抠）先到先得，
+ * 被占过的位置不再遮。那种时候还原会重复几个字——而那本来就是一句自相矛盾的
+ * 话（同一段字被两步各认一次），不为它多写一层判断。
+ */
+export function parseIgnoring(raw: string, now: Date, opts: SmartOptions = {}, keys: string[]): SmartInput {
+  const first = parseSmartInput(raw, now, opts);
+  if (keys.length === 0) return first;
+  const picked = [...first.spans.filter((s) => keys.includes(smartSpanKey(raw, s)))].sort((a, b) => a.start - b.start);
+  if (picked.length === 0) return first;
+
+  // `split('')` 而不是 `Array.from`：spans 的下标是 UTF-16 码元下标（文件里
+  // `SmartSpan.start` 那句注释写死了），`Array.from` 按码点切，遇到 emoji 就错位。
+  const units = raw.split('');
+  const claimed = new Array<boolean>(units.length).fill(false);
+  const texts: string[] = [];
+  picked.forEach((s, i) => {
+    const mask = String.fromCodePoint(MASK_BASE + i);
+    texts.push(raw.slice(s.start, s.end));
+    for (let p = s.start; p < s.end; p++) {
+      if (claimed[p]) continue;
+      claimed[p] = true;
+      units[p] = mask;
+    }
+  });
+
+  const again = parseSmartInput(units.join(''), now, opts);
+  // 只还原标题：`spans`/`hits` 里没有遮字（遮住的地方什么都认不出来），下标也没动。
+  // **按「一串」还原，不是一颗一颗换**：一段三个字就是三个遮字，逐颗换会把那几个
+  // 字印三遍（实测踩过：撤掉「#工作」之后标题变成「开会 #工作#工作#工作」）。
+  const masks = texts.map((_, i) => String.fromCodePoint(MASK_BASE + i));
+  const title = again.title.replace(new RegExp(`[${masks.join('')}]+`, 'g'), (run) => {
+    const i = (run.codePointAt(0) ?? 0) - MASK_BASE;
+    return texts[i] ?? run;
+  });
+  return { ...again, title };
 }

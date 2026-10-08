@@ -1,16 +1,17 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, App as AntApp, AutoComplete, Button, ConfigProvider, Form, Input, InputNumber, Modal, Radio, Select, Space, Switch, Tag, Typography } from 'antd';
+import { App as AntApp, Button, ConfigProvider, Form, Input, Modal, Select, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { api } from '../api.js';
-import type { AiCliKind, List, Settings, WeekStart } from '../types.js';
+import type { List, Settings, WeekStart } from '../types.js';
 import { NAV_MODE_LABEL, type NavMode, type NavModes } from '../lib/navVisibility.js';
 import { NAV_GROUPS, NAV_GROUP_LABEL, RAIL_GROUPS, type NavGroup } from '../lib/views.js';
 import { REMIND_PRESETS } from '../lib/remindPreset.js';
-import { modelSuggestionsFor, visibleAiPresets } from '../lib/aiPresets.js';
-import { getShowCodingPlans, setShowCodingPlans } from '../lib/showCodingPlans.js';
+import { getShowCodingPlans } from '../lib/showCodingPlans.js';
+import { getAiBaseUrlHistory, pushAiBaseUrl } from '../lib/aiBaseUrlHistory.js';
 import { boardLocalTheme } from '../theme.js';
 import { ServerSetup } from './ServerSetup.js';
 import { PRI_LABEL_ALL } from './TaskFields.js';
+import { AiSettingsSection, SwitchItem, NumberItem } from './AiSettingsSection.js';
 
 interface Props {
   open: boolean;
@@ -85,37 +86,24 @@ const NAV_MODE_ORDER: NavMode[] = ['show', 'auto', 'hide'];
 // provider 目录派生（地址 / 默认模型跟着上游更新），Google OpenAI 兼容端点与
 // Ollama / LM Studio 是本地特殊项。那不是白名单——地址框本来就能自己填。
 
-const CLI_META: Record<AiCliKind, { defaultCmd: string; help: string }> = {
-  claude: {
-    defaultCmd: 'claude',
-    help: '留空默认使用系统 PATH 中的 claude 命令（支持环境变量 CLAUDE_CLI）。',
-  },
-  agy: {
-    defaultCmd: 'agy',
-    help: '留空默认使用系统 PATH 中的 agy 命令（支持环境变量 AGY_CLI）。',
-  },
-  codex: {
-    defaultCmd: 'codex',
-    help: '留空默认使用系统 PATH 中的 codex 命令（支持环境变量 CODEX_CLI）。非交互执行时自动调用 codex exec。',
-  },
-  gemini: {
-    defaultCmd: 'gemini',
-    help: '留空默认使用系统 PATH 中的 gemini 命令（支持环境变量 GEMINI_CLI）。',
-  },
-  aider: {
-    defaultCmd: 'aider',
-    help: '留空默认使用系统 PATH 中的 aider 命令（支持环境变量 AIDER_CLI）。',
-  },
-  custom: {
-    defaultCmd: '可执行文件路径或名称，如 my-agent',
-    help: '可执行文件名称或完整路径，留空退回 claude。',
-  },
-};
+/**
+ * 每家命令行工具的两句话。**`help` 会原样进 DOM，所以这里不许出现 `<`**——
+ * antd `Form.Item` 的 `help` 走的是 Typography，文本里一个尖括号会被它当标签开
+ * 头吃掉（实测把 codex 那句改成带 `<` 的写法，界面上那句话短了一截，测试还全绿）。
+ *
+ * 写法上的三条规矩（batch8 那轮统一）：
+ * - **不写环境变量**（`CLAUDE_CLI` 那一类）：那是逃生口，界面上没人用它，
+ *   而「系统 PATH」是终端词汇。写在哪：README「怎么叫 AI」那一节。
+ * - **不写「主流」「常用」这类空话**：用户要知道的是有哪几家，名单就在下面。
+ * - 占位与说明用同一个顺序（「命令名或完整路径」），别一处正着一处反着。
+ */
 
 /** 「默认标签」那个框：逗号分开的一行字 ←→ 字符串数组。中英文逗号都认——
  *  中文输入法下打出来的是全角逗号，为这个让人回去改一遍是没道理的。 */
+// 分隔符认三种：半角逗号、全角逗号、顿号——中文输入法下打并列词，手指
+// 最先按到的就是顿号；示例 placeholder 写的必须是真的能用的那个。
 const parseTags = (s: string): string[] =>
-  [...new Set(s.split(/[,，]/).map((x) => x.trim()).filter(Boolean))];
+  [...new Set(s.split(/[,，、]/).map((x) => x.trim()).filter(Boolean))];
 
 /**
  * 「导入数据」认的九个键——跟「导出数据」产出的那份 JSON 一字不差地对。
@@ -132,13 +120,6 @@ const REQUIRED_KEYS = Object.keys(IMPORT_LABELS);
 
 export function SettingsModal({ open, value, onClose, onSave, navOptions, navModes, onNavModes, lists }: Props) {
   const { message } = AntApp.useApp();
-  /**
-   * 「测试连接」那颗的状态。`null` = 还没测过（不画结果条）。
-   *
-   * **改了任何一格就清空**：一条绿色的「连接成功」挂在已经被改过的地址旁边，
-   * 比没有结论更糟——他会以为新填的这个也验过了。跟 `ServerSetup` 那颗同一条规矩。
-   */
-  const [aiTest, setAiTest] = useState<{ testing: boolean; error?: string | null }>({ testing: false });
   // 草稿跟着 value 可空——**没读到设置就没有草稿**，也就没有任何东西可以被
   // 保存。这不是「渲染出表单再拦住保存」（那样 `draft` 里仍然躺着一份编出来
   // 的值，下一处疏忽就能把它送出去），是这个状态下压根不存在可 PUT 的对象。
@@ -157,6 +138,9 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
   // 不上服务端。默认关——两个订阅套餐端点（火山 Coding Plan / 阿里 Token Plan）
   // 的封号风险写在开关下方。
   const [showCodingPlans, setShowCodingPlansState] = useState(getShowCodingPlans);
+  // 「接口地址」的最近用过（localStorage，见 `lib/aiBaseUrlHistory.ts`）。跟
+  // `showCodingPlans` 一样不进 draft、不上服务端。
+  const [urlHistory, setUrlHistory] = useState(getAiBaseUrlHistory);
 
   // 每次打开都从当前设置重新起草：弹层关掉时组件不卸载，
   // 不同步的话上次改了没保存的草稿会一直留着。
@@ -171,6 +155,9 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
     setBusy(true);
     try {
       await onSave(draft);
+      // 存过才记：清单里该是「真跑过拆解会用到的那个地址」。PUT 失败那次多半正是
+      // 地址填错，进了清单就是把它推荐一遍。`cli` 模式下这条记录是残留值，同样不记。
+      if (draft.aiMode === 'api') setUrlHistory(pushAiBaseUrl(draft.aiEndpoints[draft.aiEndpointId]?.baseUrl ?? ''));
       onClose();
     } catch (e) {
       // 保存失败就别关弹层——草稿还在，用户能直接重试，不用重填一遍。
@@ -409,7 +396,7 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
       return (
         <>
           <Typography.Paragraph type="secondary" style={{ marginTop: 0, fontSize: 12 }}>
-            数据存在这个文件夹的 data/ 下（inbox/、tasks/、proposals/ 三个目录，一条记录一个文件）。AI 不直接改这些文件，只写 outbox-*.json，服务发现后自动合并进去再删掉它——所以 data/ 下偶尔会看到一闪而过的 outbox-*.json，是正常现象。这里的设置（webhook 地址、系统通知开关……）不在 data/ 里，存在这台机器本地，不会跟着 data/ 一起同步到别的设备——手机上关掉系统通知，电脑上的不会跟着没。这个页面会跟着改动自己刷新。
+            数据存在这个文件夹的 data/ 下（inbox/、tasks/、proposals/ 三个目录，一条记录一个文件）。AI 不直接改这些文件，只写 outbox-*.json，服务发现后自动合并进去再删掉它——所以 data/ 下偶尔会看到一闪而过的 outbox-*.json，是正常现象。这里的设置（webhook 地址、系统通知开关…）不在 data/ 里，存在这台机器本地，不会跟着 data/ 一起同步到别的设备——手机上关掉系统通知，电脑上的不会跟着没。这个页面会跟着改动自己刷新。
           </Typography.Paragraph>
 
           {/* 回顾**已经有按钮了**（回顾那一屏底部那颗「让 AI 回顾一遍」）。这一块
@@ -463,12 +450,7 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
         <Form layout="vertical" className="ink-settings-form">
           {section === 'notify' && (
             <>
-              <Form.Item label="系统通知" help="到提醒时间弹一条 Windows 通知。只在 Windows 上有效。">
-                <Switch
-                  checked={draft.toastEnabled}
-                  onChange={(v) => setDraft({ ...draft, toastEnabled: v })}
-                />
-              </Form.Item>
+              <SwitchItem label="系统通知" help="到提醒时间弹一条 Windows 通知。只在 Windows 上有效。" checked={draft.toastEnabled} onChange={(v) => setDraft({ ...draft, toastEnabled: v })} />
               <Form.Item label="每日概览" help="每天这个时刻推一条「今天有什么」（过期的和今天到期的）。留空 = 不推。一件事都没有的那天不会打扰你。">
                 <Input
                   value={draft.dailySummaryAt ?? ''}
@@ -504,20 +486,8 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
                   style={{ width: 160 }}
                 />
               </Form.Item>
-              <Form.Item label="显示农历" help="日号底下那半行小字：节气、传统节日、农历日。一格只写一样，节气优先。">
-                <Switch
-                  aria-label="显示农历"
-                  checked={draft.showLunar}
-                  onChange={(v) => setDraft({ ...draft, showLunar: v })}
-                />
-              </Form.Item>
-              <Form.Item label="显示节假日" help="法定节假日标「休」，调休要上班的周末标「班」。数据来自国务院办公厅每年的放假通知，只标到有通知的那一年为止——再往后一天不标，不会替它猜。">
-                <Switch
-                  aria-label="显示节假日"
-                  checked={draft.showHolidays}
-                  onChange={(v) => setDraft({ ...draft, showHolidays: v })}
-                />
-              </Form.Item>
+              <SwitchItem label="显示农历" help="日号底下那半行小字：节气、传统节日、农历日。一格只写一样，节气优先。" checked={draft.showLunar} onChange={(v) => setDraft({ ...draft, showLunar: v })} />
+              <SwitchItem label="显示节假日" help="法定节假日标「休」，调休要上班的周末标「班」。数据来自国务院办公厅每年的放假通知，只标到有通知的那一年为止——再往后一天不标，不会替它猜。" checked={draft.showHolidays} onChange={(v) => setDraft({ ...draft, showHolidays: v })} />
             </>
           )}
 
@@ -561,12 +531,16 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
                 />
               </Form.Item>
               <Form.Item label="默认提醒" help="只在这条新任务真的有截止时间时才落——没有截止时间就没有「提前」的参照物。">
+                {/* 四个「不预填」是同一个意思，**必须说同一个词**。原来这一格写的是
+                    「不预设」而上面三格是「不预填」——四格上下排在一起，用户扫过去
+                    会以为提醒那一项特殊。四者都是「不给新任务填一个默认值」，少数
+                    派跟着多数派走。 */}
                 <Select
                   aria-label="新任务默认提醒"
                   value={draft.defaultRemindMinutes ?? -1}
                   onChange={(v: number) => setDraft({ ...draft, defaultRemindMinutes: v < 0 ? null : v })}
                   options={[
-                    { value: -1, label: '不预设' },
+                    { value: -1, label: '不预填' },
                     ...REMIND_PRESETS.map((p) => ({ value: p.minutes, label: p.label })),
                   ]}
                   style={{ width: 200 }}
@@ -578,8 +552,8 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
                   // 服务可能还是旧版本（新字段那时候还不存在）——这个应用的
                   // 桌面端和手机端本来就可以各自更新。少了这一句，连上一台旧
                   // 服务就是整张设置弹层白屏（实测：`.join` of undefined）。
-                  value={(draft.defaultTags ?? []).join(', ')}
-                  placeholder="比如 工作, 紧急"
+                  value={(draft.defaultTags ?? []).join('、')}
+                  placeholder="比如 工作、紧急"
                   aria-label="新任务默认标签"
                   onChange={(e) => setDraft({ ...draft, defaultTags: parseTags(e.target.value) })}
                 />
@@ -599,233 +573,40 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
               <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
                 情境（<code>@外出</code>）也认，但<strong>不在下面这几个开关里</strong>：它只匹配那五个固定的词，误判不了，所以一直开着。
               </Typography.Paragraph>
-              <Form.Item label="识别日期" help="连「每周一」这种重复说法一起——认出来的重复和它的锚点日期是同一次识别的两半。">
-                <Switch checked={draft.smartDate} onChange={(v) => setDraft({ ...draft, smartDate: v })} />
-              </Form.Item>
-              <Form.Item label="把日期从标题里摘掉" help="关掉之后日期照样设上，那几个字还留在标题里——「10 月 1 日国庆值班」摘掉就只剩「国庆值班」了。">
-                <Switch
-                  checked={draft.smartStripDate}
-                  disabled={!draft.smartDate}
-                  onChange={(v) => setDraft({ ...draft, smartStripDate: v })}
-                />
-              </Form.Item>
-              <Form.Item label="识别标签" help="标题里的 #工作 变成标签。">
-                <Switch checked={draft.smartTag} onChange={(v) => setDraft({ ...draft, smartTag: v })} />
-              </Form.Item>
-              <Form.Item label="把标签从标题里摘掉" help="关掉之后 #工作 既进标签、也留在标题里（会被挪到标题末尾）。">
-                <Switch
-                  checked={draft.smartStripTag}
-                  disabled={!draft.smartTag}
-                  onChange={(v) => setDraft({ ...draft, smartStripTag: v })}
-                />
-              </Form.Item>
+              <SwitchItem label="识别日期" help="连「每周一」这种重复说法一起——认出来的重复和它的锚点日期是同一次识别的两半。" checked={draft.smartDate} onChange={(v) => setDraft({ ...draft, smartDate: v })} />
+              <SwitchItem label="把日期从标题里摘掉" help="关掉之后日期照样设上，那几个字还留在标题里——「10 月 1 日国庆值班」摘掉就只剩「国庆值班」了。" checked={draft.smartStripDate} disabled={!draft.smartDate} onChange={(v) => setDraft({ ...draft, smartStripDate: v })} />
+              <SwitchItem label="识别标签" help="标题里的 #工作 变成标签。" checked={draft.smartTag} onChange={(v) => setDraft({ ...draft, smartTag: v })} />
+              <SwitchItem label="把标签从标题里摘掉" help="关掉之后 #工作 既进标签、也留在标题里（会被挪到标题末尾）。" checked={draft.smartStripTag} disabled={!draft.smartTag} onChange={(v) => setDraft({ ...draft, smartStripTag: v })} />
             </>
           )}
 
           {section === 'ai' && (
-            <>
-              {/* **摆在这一节最上面**：下面「自动拆解」那两格描述的是「什么时候拆」，
-                  而这一格决定「谁来拆」——没这一格的时候，没装 Claude Code 的人打开
-                  这一屏只能看到两个开关，看不出为什么点了拆解永远报「命令行工具没找到」。 */}
-              <Form.Item label="怎么叫 AI" help="本机命令行本事最大（能自己反复读文件、自己纠错），代价是这台机器上要装对应 CLI。调接口只要一个地址加密钥，任何 OpenAI 兼容的服务都行。">
-                <Radio.Group
-                  value={draft.aiMode}
-                  optionType="button"
-                  buttonStyle="solid"
-                  onChange={(e) => setDraft({ ...draft, aiMode: e.target.value as Settings['aiMode'] })}
-                  options={[
-                    { value: 'cli', label: '本机命令行' },
-                    { value: 'api', label: '调接口' },
-                  ]}
-                />
-              </Form.Item>
-
-              {draft.aiMode === 'cli' && (
-                <>
-                  <Form.Item label="命令行工具" help="选择调用的 Agent CLI。已支持主流 Agent 命令行工具，或自定义命令行。">
-                    <Radio.Group
-                      value={draft.aiCli ?? 'claude'}
-                      optionType="button"
-                      buttonStyle="solid"
-                      onChange={(e) => setDraft({ ...draft, aiCli: e.target.value as Settings['aiCli'] })}
-                      options={[
-                        { value: 'claude', label: 'Claude Code' },
-                        { value: 'agy', label: 'Antigravity CLI (agy)' },
-                        { value: 'codex', label: 'OpenAI Codex' },
-                        { value: 'gemini', label: 'Gemini CLI' },
-                        { value: 'aider', label: 'Aider' },
-                        { value: 'custom', label: '自定义' },
-                      ]}
-                    />
-                  </Form.Item>
-
-                  <Form.Item
-                    label={draft.aiCli === 'custom' ? '命令或路径' : '命令路径（可选）'}
-                    help={CLI_META[draft.aiCli ?? 'claude']?.help ?? CLI_META.claude.help}
-                  >
-                    <Input
-                      value={draft.aiCliPath ?? ''}
-                      placeholder={CLI_META[draft.aiCli ?? 'claude']?.defaultCmd ?? 'claude'}
-                      aria-label="命令行工具路径"
-                      onChange={(e) => setDraft({ ...draft, aiCliPath: e.target.value })}
-                    />
-                  </Form.Item>
-
-                  {draft.aiCli === 'custom' && (
-                    <Form.Item
-                      label="参数模板"
-                      help='参数模板，用空格分隔。支持 {prompt} 占位符；若未包含 {prompt}，提示词将自动追加在末尾。'
-                    >
-                      <Input
-                        value={draft.aiCliCustomArgs ?? ''}
-                        placeholder='-p "{prompt}" --mode accept-edits --dangerously-skip-permissions'
-                        aria-label="自定义命令行参数"
-                        onChange={(e) => setDraft({ ...draft, aiCliCustomArgs: e.target.value })}
-                      />
-                    </Form.Item>
-                  )}
-                </>
-              )}
-
-              {draft.aiMode === 'api' && (
-                <>
-                  <Form.Item label="接口地址" help="OpenAI 兼容的对话接口。点上面的名字填一个常见的，也可以自己写——完整地址、或者只写到 /v1 都认。">
-                    {/* 快捷地址用 `Tag.CheckableTag` 而不是下拉：这几条是**起点**不是选项，
-                        点完还能接着改地址框。下拉会让人以为只能选里头这几个。 */}
-                    <Space size={[4, 4]} wrap style={{ marginBottom: 8 }}>
-                      {visibleAiPresets(showCodingPlans, draft.aiBaseUrl).map((p) => (
-                        <Tag.CheckableTag
-                          key={p.label}
-                          checked={draft.aiBaseUrl === p.url}
-                          // 模型名只在这条预置**带**模型名时才跟着改：本机那两条的
-                          // 模型名留空，不能拿空串把他已经填好的模型名冲掉。
-                          onChange={() => { setDraft({ ...draft, aiBaseUrl: p.url, ...(p.model ? { aiModel: p.model } : {}) }); setAiTest({ testing: false }); }}
-                        >
-                          {p.label}
-                        </Tag.CheckableTag>
-                      ))}
-                    </Space>
-                    <Input
-                      value={draft.aiBaseUrl}
-                      placeholder="https://…/v1/chat/completions"
-                      onChange={(e) => { setDraft({ ...draft, aiBaseUrl: e.target.value }); setAiTest({ testing: false }); }}
-                    />
-                    {/* 高级开关，默认关：火山 Coding Plan / 阿里 Token Plan 是订阅套餐
-                        专属端点。hidden 只过滤这行预置 Tag——已存的地址、手填地址、
-                        请求全都不受影响。
-
-                        整个开关做成一颗小字链接、默认次色——这是个很少用的高阶开关，
-                        不该跟上面那行预置 Tag 抢视觉。开了才换主色 + 下方展开风险说明。
-                        role=switch + aria-checked 让测试和读屏还能把它当一个开关用。 */}
-                    <div style={{ marginTop: 4 }}>
-                      <Typography.Link
-                        type={showCodingPlans ? undefined : 'secondary'}
-                        style={{ fontSize: 12 }}
-                        role="switch"
-                        aria-checked={showCodingPlans}
-                        aria-label="显示订阅套餐节点（Coding Plan / Token Plan）"
-                        onClick={() => { const next = !showCodingPlans; setShowCodingPlansState(next); setShowCodingPlans(next); }}
-                      >
-                        {showCodingPlans ? '已显示订阅套餐节点' : '订阅套餐节点'}
-                      </Typography.Link>
-                      {showCodingPlans && (
-                        <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
-                          官方文档指明：套餐仅限在 AI 编程工具中交互式使用，在允许范围之外使用套餐的 Base URL 和 API Key 可能被识别为滥用，导致订阅停用或账号 / API Key 封禁。请确认了解风险后再开启。
-                        </Typography.Paragraph>
-                      )}
-                    </div>
-                  </Form.Item>
-                  <Form.Item label="模型" help="原样发给接口。地址落在目录里某一家的端点上，就出它家那份模型清单；地址是自己填的，这里照样能自己写。">
-                    <AutoComplete
-                      value={draft.aiModel}
-                      placeholder="gemini-3.7-flash"
-                      options={[...modelSuggestionsFor(draft.aiBaseUrl)]}
-                      onChange={(v: string) => { setDraft({ ...draft, aiModel: v }); setAiTest({ testing: false }); }}
-                    />
-                  </Form.Item>
-                  <Form.Item label="密钥" help="只存在这台机器上，读回来的是打码后的形状（改了才会覆盖）。本机跑的 Ollama / LM Studio 不要密钥，留空就行。">
-                    <Input.Password
-                      value={draft.aiKey}
-                      autoComplete="off"
-                      placeholder="留空 = 不带密钥"
-                      onChange={(e) => { setDraft({ ...draft, aiKey: e.target.value }); setAiTest({ testing: false }); }}
-                    />
-                  </Form.Item>
-                  {/* **一颗「测试连接」**，跟「数据与服务」那一屏的服务地址同一个做法。
-                      没有它的话，填完这三格唯一的验证方式是真跑一次拆解——要等一两
-                      分钟、烧一次额度，而失败是以看板顶上一条红横幅的形式出现的，
-                      离刚填的这三个框十万八千里。
-
-                      它打的是一次一句话的调用（不是把 AGENTS.md 全文贴过去的那份
-                      提示词），几乎不花钱，见 server 那边 `testAi` 的注释。 */}
-                  <Form.Item label=" " colon={false}>
-                    <Button
-                      loading={aiTest.testing}
-                      onClick={() => {
-                        setAiTest({ testing: true });
-                        void api.testAi({ baseUrl: draft.aiBaseUrl, model: draft.aiModel, apiKey: draft.aiKey })
-                          .then((r) => setAiTest({ testing: false, error: r.ok ? null : r.error }))
-                          // 离线（`offlineUnsupported`）和网络本身出错都走这儿——
-                          // 这两种也是「没测成」，照样要给他一句话，不能静默。
-                          .catch((e: Error) => setAiTest({ testing: false, error: e.message }));
-                      }}
-                    >
-                      测试连接
-                    </Button>
-                    {aiTest.error !== undefined && !aiTest.testing && (
-                      <Alert
-                        style={{ marginTop: 8 }}
-                        type={aiTest.error === null ? 'success' : 'error'}
-                        showIcon
-                        message={aiTest.error === null ? '连接成功，这三格都填对了。' : aiTest.error}
-                      />
-                    )}
-                  </Form.Item>
-                </>
-              )}
-
-              <Form.Item label="自动拆解" help="收件箱出现还没处理的条目，等一段时间没有新动静就自动拆一次；拆不动的条目不会无限重试，「重新拆解」或点「立即拆解」能让它重新排上。">
-                <Switch
-                  checked={draft.autoExpand}
-                  onChange={(v) => setDraft({ ...draft, autoExpand: v })}
-                />
-              </Form.Item>
-              <Form.Item label="自动拆解延迟" help="连着记好几条只算一批，每来一条重新计时。10～3600 秒，默认 60。">
-                {/* 关掉加减箭头，理由同 FocusStats 里那处：1×15px 够不着，
-                    而且 aria-label 是写死的英文，antd 的 locale 覆盖不到。 */}
-                <InputNumber
-                  controls={false}
-                  min={10}
-                  max={3600}
-                  value={draft.autoExpandDelaySec}
-                  disabled={!draft.autoExpand}
-                  addonAfter="秒"
-                  onChange={(v) => setDraft({ ...draft, autoExpandDelaySec: typeof v === 'number' ? v : draft.autoExpandDelaySec })}
-                />
-              </Form.Item>
-            </>
+            <AiSettingsSection
+              draft={draft}
+              setDraft={setDraft}
+              stored={value ?? draft}
+              urlHistory={urlHistory}
+              showCodingPlans={showCodingPlans}
+              setShowCodingPlansState={setShowCodingPlansState}
+            />
           )}
 
           {section === 'focus' && (
             <>
-              <Form.Item label="专注时长" help="卡片上「开始专注」倒计时多久。1～180 分钟，默认 25。">
-                <InputNumber
-                  min={1}
-                  max={180}
-                  value={draft.focusMinutes}
-                  addonAfter="分钟"
-                  onChange={(v) => setDraft({ ...draft, focusMinutes: typeof v === 'number' ? v : draft.focusMinutes })}
-                />
-              </Form.Item>
-              <Form.Item label="休息时长" help="一轮专注走完之后歇多久。0 = 不休息，走完直接回到「开始专注」。0～60 分钟，默认 5。">
-                <InputNumber
-                  min={0}
-                  max={60}
-                  value={draft.breakMinutes}
-                  addonAfter="分钟"
-                  onChange={(v) => setDraft({ ...draft, breakMinutes: typeof v === 'number' ? v : draft.breakMinutes })}
-                />
-              </Form.Item>
+              <NumberItem label="专注时长" help="卡片上「番茄钟」倒计时多久。1～180 分钟，默认 25。"
+                min={1}
+                max={180}
+                value={draft.focusMinutes}
+                addonAfter="分钟"
+                onChange={(v) => setDraft({ ...draft, focusMinutes: typeof v === 'number' ? v : draft.focusMinutes })}
+              />
+              <NumberItem label="休息时长" help="一轮专注走完之后歇多久。0 = 不休息，走完直接回到「番茄钟」。0～60 分钟，默认 5。"
+                min={0}
+                max={60}
+                value={draft.breakMinutes}
+                addonAfter="分钟"
+                onChange={(v) => setDraft({ ...draft, breakMinutes: typeof v === 'number' ? v : draft.breakMinutes })}
+              />
             </>
           )}
         </Form>
@@ -839,12 +620,22 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
   // 摆一颗对它们没用的按钮只会让人以为没点它就没生效。
   const showSave = !!current?.needsDraft && !!draft;
 
+
   return (
     <Modal
       open={open}
       onCancel={onClose}
       footer={null}
-      width={760}
+      // **760 → 920**（2026-10-16）：左边导航固定 132px（`.ink-set-nav` 的
+      // `flex: 0 0 132px`），760 减掉导航、`.ink-set-pane` 的 20px 左内边距
+      // 和弹层自身的内边距，正文只剩 560px 出头——「AI 拆解」那一节的厂商芯片
+      // 一行排不下、长说明文字一句折两行，项与项之间又各自带一大截空当，
+      // 整页读下来是「挤」和「空」同时存在。920 让正文落到 720px 左右，
+      // 芯片和说明文字都回到一行。
+      //
+      // 窄屏由 theme.css 里 `.ant-modal.ink-setmodal { max-width }` 兜住
+      // （760 那个数在手机上同样是溢出的，只是以前没人提）。
+      width={920}
       title="设置"
       className="ink-setmodal"
       classNames={{ body: 'ink-set' }}
@@ -852,13 +643,50 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
     >
       {/* 左边一列分区、右边正文——照滴答清单那张设置弹层的形状。
           `role="tablist"` 而不是一列普通按钮：读屏会报「10 个中的第 3 个」，
-          方向键也能切。 */}
-      <nav className="ink-set-nav" role="tablist" aria-label="设置分区">
+          而这套角色要求的键盘规矩（方向键在这一组里走、Tab 键进出这一组）
+          由下面那个 `onKeyDown` 和那颗的 `tabIndex` 兑现。 */}
+      <nav
+        className="ink-set-nav"
+        role="tablist"
+        aria-label="设置分区"
+        /**
+         * 方向键换分区——APG 那份 tablist 的键盘规矩：方向键在这一组里走，Tab 键
+         * 进出这一组。以前只有下面 `role="tablist"` 那句注释说了「方向键也能切」，
+         * 而处理器根本不存在：读屏按 tablist 念给用户的，是一个键盘走得动的组。
+         *
+         * 换完**把焦点交给新选中那一颗**，两件事一起才成立：不 focus 的话第二下
+         * 还是从原来那颗上按的（读屏念「未选中」，屏幕上高亮却在别处）；而 `focus()`
+         * 顺带把它滚进视野——窄屏这一排是横滚的（十节 707px 装进 326px），不滚的
+         * 话键盘用户跟着高亮走出屏幕外就丢了位置。
+         *
+         * 上下键一起认：宽屏这一排是**竖着**的（左边一列），窄屏才是横着那条带，
+         * 同一双手在两种版面里按的是同一个方向。
+         */
+        onKeyDown={(e) => {
+          const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1
+            : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+          if (!step) return;
+          e.preventDefault();
+          const at = SETTING_SECTIONS.findIndex((s) => s.key === section);
+          const to = (at + step + SETTING_SECTIONS.length) % SETTING_SECTIONS.length;
+          setImportPreview(null);
+          setSection(SETTING_SECTIONS[to].key);
+          /**
+           * 这十颗按钮**本来就都在 DOM 里**（换分区改的是属性，不是节点），所以
+           * 这儿当场聚焦就行，不用等下一次渲染——`tabIndex="-1"` 的元素照样能
+           * 被脚本聚焦，React 随后会把它改成 0。
+           */
+          (e.currentTarget.querySelectorAll('[role="tab"]')[to] as HTMLElement | undefined)?.focus();
+        }}
+      >
         {SETTING_SECTIONS.map((s) => (
           <button
             key={s.key}
             type="button"
             role="tab"
+            // roving tabindex：整组只有一个停留点。Tab 因此是「进出这一组」，
+            // 不是「把十颗按钮数完」——组里怎么换交给上面的方向键。
+            tabIndex={section === s.key ? 0 : -1}
             aria-selected={section === s.key}
             className={`ink-set-navitem${section === s.key ? ' ink-set-navitem-active' : ''}`}
             onClick={() => {

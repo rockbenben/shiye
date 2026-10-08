@@ -135,7 +135,7 @@ export function suggestGroups(tasks: Task[], now: Date): SuggestGroup[] {
 
   return [
     { key: 'recent', title: '最近添加', hint: '刚记下来、还没排时间的', tasks: recent },
-    { key: 'postponed', title: '一拖再拖', hint: `改过 ${POSTPONE_MIN} 次以上期的`, tasks: postponed },
+    { key: 'postponed', title: '一拖再拖', hint: `推迟过 ${POSTPONE_MIN} 次以上的`, tasks: postponed },
     { key: 'stale', title: '躺很久了', hint: `建了 ${STALE_DAYS} 天以上还没做完的`, tasks: stale },
     { key: 'upcoming', title: '即将到来', hint: '明天、后天到期的', tasks: upcoming },
   ].filter((g) => g.tasks.length > 0);

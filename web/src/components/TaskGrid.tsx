@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import {
   DndContext, KeyboardSensor, PointerSensor, closestCorners, useDndContext, useDroppable, useSensor, useSensors,
   type DragEndEvent,
@@ -23,6 +23,22 @@ export interface GridSection {
    * 按钮」等于把某一个视图的规矩塞进公共件里。
    */
   action?: ReactNode;
+  /**
+   * 组头计数后面那半句次要的话（现在只有「已过期」用：「最久的 20 天」）。
+   *
+   * 为什么在组头而不是每张卡上：那一组里「欠得最久」是**这一组**的属性，摆到
+   * 卡上就变成要逐张数才知道的事。造 sections 的那一方算好了传进来，这一层
+   * 只管画——跟 `action` 同一条分工。
+   */
+  hint?: string;
+  /**
+   * 这一组里的卡片**少说一个字**：过期记号只报时长（「3 天」而不是「过期 3 天」）。
+   *
+   * 给「已过期」那一组用——组头已经写了「已过期」，19 张卡再各说一遍「过期」，
+   * 眼睛先扫到 19 个「过期」才轮到任务本身。默认（不给）照旧说全，因为别的
+   * 落点没有那句话：「今天」里一张过期的卡，卡上不说就没人说了。
+   */
+  briefTime?: boolean;
   /**
    * 这一组**一开始就是折起来的**（现在只有清单/标签视图的「已完成」
    * 「已放弃」用）。不是「能不能折」——每一组都能折，见下面 sectionNodes
@@ -357,6 +373,9 @@ function SectionHeading(
       {/* 计数不上群青：它是对现有卡片的机械统计，不是 AI 产出的新信息。
           双色墨水是配额制的，见 theme.css 顶部。 */}
       <span className="ink-grid-count ink-mono">{section.tasks.length}</span>
+      {/* 组头那半句次要的话（「最久的 20 天」）。放在计数之后：先回答「多少条」，
+          再回答「最久的一条有多久」。 */}
+      {section.hint && <span className="ink-grid-hint">{section.hint}</span>}
     </>
   );
   return (
@@ -392,7 +411,7 @@ function GridCell({
 }: {
   section: GridSection;
   density: Density;
-  renderTask: (t: Task, drag: DragHandleProps) => ReactNode;
+  renderTask: (t: Task, drag: DragHandleProps, briefTime?: boolean) => ReactNode;
 }) {
   const { setNodeRef } = useDroppable({ id: section.key });
   const { over } = useDndContext();
@@ -412,7 +431,7 @@ function GridCell({
         <SortableContext id={section.key} items={section.tasks.map((t) => t.id)} strategy={noReflowStrategy}>
           {section.tasks.map((t) => (
             <SortableTaskItem key={t.id} id={t.id} dragTitle="拖动可以放进另一个格子">
-              {(drag) => renderTask(t, drag)}
+              {(drag) => renderTask(t, drag, section.briefTime)}
             </SortableTaskItem>
           ))}
         </SortableContext>
@@ -445,12 +464,17 @@ export function TaskGrid({
   // 只是「编辑」换成了「看了一眼」；写在这里是为了让下一个读到这段代码、
   // 不知道这段历史的人不用重新想一遍「这是不是漏洞」。
   const [editingIds, setEditingIds] = useState<Set<string>>(new Set());
-  const setEditing = (id: string, editing: boolean) =>
+  // `useCallback` 出来的**稳定引用**——下面那个 `open` 要把它列进依赖数组，
+  // 而 `open` 的引用稳定与否，决定了进到每张卡上的 `onOpen`/`onEdit` 稳不稳，
+  // 于是决定了 `TaskRow` 的 memo 拦不拦得住（见文件末尾 `wiringFor` 那段）。
+  // 里面只用了 `setEditingIds`（React 保证稳定的 setState），所以空依赖是对的。
+  const setEditing = useCallback((id: string, editing: boolean) => {
     setEditingIds((prev) => {
       const next = new Set(prev);
       if (editing) next.add(id); else next.delete(id);
       return next;
     });
+  }, []);
 
   // 拖拽用的传感器——指针（鼠标/触屏，真实浏览器用）+ 键盘（Tab 到抓手→
   // Space 拿起→方向键移动→Space 放下，task-3-brief 的主要收益）。
@@ -480,6 +504,31 @@ export function TaskGrid({
   const isFolded = (s: GridSection) => foldChoice[s.key] ?? s.startFolded ?? false;
   const toggleFold = (s: GridSection) =>
     setFoldChoice((prev) => ({ ...prev, [s.key]: !(prev[s.key] ?? s.startFolded ?? false) }));
+
+  // 「打开这一条」。给了 `onOpenDetail` 就交给右边那一栏，没给就退回原来
+  // 那条路（就地膨胀成一张卡）——三处落点（点标题、⋯ 菜单里的「编辑」、
+  // 'E' 键）共用这一个，不各写一遍 `onOpenDetail ? … : …`：三处本来就是
+  // 同一个动作，写三遍就会有一天只改到其中两处。
+  //
+  // **它稳定，且直接传下去、没有 per-card 闭包。** 这一点是渲染预算的地基：
+  // `TaskRow` 的 `onOpen`/`onEdit` 本来就收 `(id) => …`（id 由它自己从 `t.id`
+  // 取），所以同一个函数喂给每一行就够了。以前这里写的是
+  // `onOpen={() => open(t.id)}` / `onEdit={(id) => open(id, true)}`——
+  // 那两个闭包每次渲染都现造，`TaskRow` 的 memo 判定「props 变了」，一张都
+  // 省不掉（`cardRenderBudget.test.tsx` 量的就是这个）。
+  //
+  // **两个 `useCallback` 为什么写在「空屏提前 return」的上方**：Hooks 不能
+  // 写在条件 return 后面——空屏那一帧直接 return，这两个 hook 一次都不跑；
+  // 下一帧有卡了才跑，React 对不上账，报 `Rendered fewer hooks than expected`
+  // （`TaskGrid.test.tsx` 那条「卡片被删/被筛掉时」当场就撞上了）。
+  const open = useCallback((id: string, edit = false) =>
+    (onOpenDetail ? onOpenDetail(id, edit ? { edit: true } : undefined) : setEditing(id, true)),
+    [onOpenDetail, setEditing]);
+
+  // 「⋯ 菜单里的『编辑』」落点：**要的是「以编辑态打开」那一份**，所以固定
+  // `edit = true`。跟 `open` 同一个来源，只是把第二参数钉住——写成
+  // `(id) => open(id, true)` 又会回到 per-card 闭包（见上面那段）。
+  const openForEdit = useCallback((id: string) => open(id, true), [open]);
 
   // 每张（不在编辑中的）卡最后一次落在哪一组——用来把正在编辑的卡钉住。
   // ref 不是 state：这份记录不需要触发重渲染，只是给下面的钉组逻辑读上一轮
@@ -518,12 +567,15 @@ export function TaskGrid({
   // 修复轮 1 · I2）。
   useCancelStuckDrag(activeDragId, shown.some((s) => s.tasks.some((t) => t.id === activeDragId)));
 
+  // 一屏一张卡都没有时直接出那句空态。**在所有 hook 之后**——`useCallback`
+  // 写在它下面的话，空屏那一帧直接 return、hook 少跑一次，下一帧有卡了才补上，
+  // React 对不上账就报 `Rendered fewer hooks than expected`。
   if (layout !== 'cells' && shown.every((s) => s.tasks.length === 0)) {
     return <p className="ink-empty-note">{emptyFiltered ?? empty}</p>;
   }
 
   // 拖进格子改字段（看板/四象限用，onDropTo 没给时这套完全不接线）。
-  const renderTaskBody = (t: Task, drag: DragHandleProps | undefined): ReactNode => {
+  const renderTaskBody = (t: Task, drag: DragHandleProps | undefined, briefTime?: boolean): ReactNode => {
     // 选中态：只有 selection/onSelectionChange 两个都给了才接线——见
     // Props.selection 的注释，今天所有调用方都没给，这里是 undefined，
     // 两个分支的行为都一个字不变。**在两个分支之外算一次、两个分支
@@ -547,13 +599,6 @@ export function TaskGrid({
     // B1：以前两处各写一份一模一样的表达式，TodayView 那份没有测试）。
     const hasProposal = hasPendingProposal(proposals, t.id);
 
-    // 「打开这一条」。给了 `onOpenDetail` 就交给右边那一栏，没给就退回原来
-    // 那条路（就地膨胀成一张卡）——三处落点（点标题、⋯ 菜单里的「编辑」、
-    // 'E' 键）共用这一个，不各写一遍 `onOpenDetail ? … : …`：三处本来就是
-    // 同一个动作，写三遍就会有一天只改到其中两处。
-    const open = (id: string, edit = false) =>
-      (onOpenDetail ? onOpenDetail(id, edit ? { edit: true } : undefined) : setEditing(id, true));
-
     return density === 'row' && !editingIds.has(t.id) ? (
       // 行档、且这张卡没被「打开」：紧凑的一行。点标题（TaskRow 的
       // onOpen）复用既有的 editingIds/setEditing/home 钉组那一整套——
@@ -573,7 +618,7 @@ export function TaskGrid({
         t={t}
         now={now}
         onPatch={onPatch}
-        onOpen={() => open(t.id)}
+        onOpen={open}
         select={selectWiring}
         hasProposal={hasProposal}
         drag={drag}
@@ -587,7 +632,7 @@ export function TaskGrid({
         // **带上「他要改」这个意图**：点标题是「看看这条」，⋯ 菜单里的
         // 「编辑」和 'E' 键（TaskRow 内部也走 onEdit）是「我要改它」——
         // 后者直接把面板里那张卡开成表单，不让人开了面板再去翻一次 ⋯ 菜单。
-        onEdit={(id) => open(id, true)}
+        onEdit={openForEdit}
         onDelete={onDelete}
         current={openDetailId != null && t.id === openDetailId}
         editRequested={t.id === editRequestId}
@@ -614,6 +659,11 @@ export function TaskGrid({
         // drag，抓手整个不出现。
         drag={drag}
         select={selectWiring}
+        // 「这一组的组头已经说了『已过期』」——过期记号因此只报时长。
+        // 从 section 传下来，不在这里按 `section.key` 猜：TaskGrid 被六个
+        // 视图共用，把某一个视图的分组规矩写进公共件里，下一个视图照抄就错
+        // （同 `action` 那条分工，见 GridSection 的注释）。
+        briefTime={briefTime}
         // 'E' 键的落点：只有 t.id 恰好等于 editRequestId 的那张卡拿到
         // true，其余卡（包括 editRequestId 是 undefined/null 的默认
         // 情况）拿到 false——见 Props.editRequestId 的注释。
@@ -698,7 +748,7 @@ export function TaskGrid({
         {!isFolded(s) && (
           <div className={density === 'row' ? 'ink-row-list' : 'ink-card-grid'} role="list">
             {s.tasks.map((t) => (
-              <div role="listitem" key={t.id}>{renderTaskBody(t, undefined)}</div>
+              <div role="listitem" key={t.id}>{renderTaskBody(t, undefined, s.briefTime)}</div>
             ))}
           </div>
         )}

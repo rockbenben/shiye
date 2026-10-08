@@ -1,10 +1,7 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+﻿import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, Modal } from 'antd';
-import {
-  NoMotion, pickCardMenu, btnIn, confirmDialog, keyboardDrag, mockDndRects, pressTab,
-  installFullCalendarFakeLayout, fcDragEvent, fcSlotPoint, fcTimeGridDrag,
-} from './test-utils.js';
+import { NoMotion, addField, btnIn, confirmDialog, fcDragEvent, fcSlotPoint, fcTimeGridDrag, installFullCalendarFakeLayout, keyboardDrag, mockDndRects, pickCardMenu, pressTab } from './test-utils.js';
 import { App, DENSITY_VIEWS } from './App.js';
 import { api, type ReminderBatch } from './api.js';
 import { CLIENT_API_VERSION } from './components/ServerSetup.js';
@@ -52,7 +49,7 @@ let trashFetchCount = 0;
 // focusMinutes，卡片会悄悄落回那个写死的默认值——如果这里的夹具也用 25，
 // 「传对了」和「传漏了」在屏幕上长得一模一样，测试测不出来。45 分钟没有
 // 别的含义，只是随手挑一个不等于 25 的数。
-const settings: Settings = { webhookUrl: '', toastEnabled: true, autoExpand: true, autoExpandDelaySec: 60, focusMinutes: 45, breakMinutes: 5, dailySummaryAt: null, dailySummaryOn: null, defaultListId: null, defaultPriority: 0, defaultDue: 'none' as const, defaultRemindMinutes: null, defaultTags: [], weekStart: 1 as const, smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true, showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiCli: 'claude' as const, aiCliPath: '', aiCliCustomArgs: '', aiBaseUrl: '', aiKey: '', aiModel: '' };
+const settings: Settings = { webhookUrl: '', toastEnabled: true, autoExpand: true, autoExpandDelaySec: 60, focusMinutes: 45, breakMinutes: 5, dailySummaryAt: null, dailySummaryOn: null, defaultListId: null, defaultPriority: 0, defaultDue: 'none' as const, defaultRemindMinutes: null, defaultTags: [], weekStart: 1 as const, smartDate: true, smartStripDate: true, smartTag: true, smartStripTag: true, showLunar: true, showHolidays: true, aiMode: 'cli' as const, aiCli: 'claude' as const, aiCliPath: '', aiCliCustomArgs: '', aiEndpointId: '', aiEndpoints: {} };
 
 vi.mock('./api.js', () => ({
   api: {
@@ -409,7 +406,7 @@ afterEach(() => {
   // 一模一样，见 task-2-report 里同族的假绿。
   resetOnlineCache();
   // density.ts 直接读写真实的 window.localStorage（jsdom 里是有的，但会
-  // 跨用例串，见 CLAUDE.md）——不清的话「密度开关」那组测试留下的
+  // 跨用例串）——不清的话「密度开关」那组测试留下的
   // setDensity('row') 会漏到后面所有测试里。
   //
   // **修复轮 1 · I1：这里曾经写的是 `setDensity('card')`**——看起来是清理，
@@ -436,6 +433,38 @@ afterEach(() => {
   // 也就是说：**新加一个直接读写 localStorage 的偏好，就得在这儿加一行**，
   // 忘了不会得到一句「你忘了清 quadrantRule」，只会得到几条指着别处的红。
   localStorage.removeItem('quadrantRule');
+  // 第四个同款：`navModes`（`lib/navVisibility.ts`）——「这台机器上我想看到哪几个
+  // 入口」。下面「把某个去处设成隐藏之后数字键序号跟着收拢」那条用例会往里写
+  // `nolist: 'hide'`，而**数字键和命令面板的 hint 现在都是从它推出来的**：
+  // 漏清的话，后面每一条按 1..9 的用例测的都不是「默认全显示」那一份顺序，
+  // 而报错会指向「按 5 跳到了错的去处」——跟真正的原因隔着一整个偏好开关。
+  localStorage.removeItem('navModes');
+  // 同一条的另一半：`navDefaultsV1` 是「这台机器见没见过新的默认」那个记号。
+  // 它只影响 `FRESH_NAV_MODES` 补不补齐（垃圾箱/已完成/未归类 默认 `'auto'`），
+  // 同样会让导航顺序在用例之间飘。
+  localStorage.removeItem('navDefaultsV1');
+
+  // ── 补账：上面那五行是当年一份份补上去的，漏掉的代价各不相同，但形状是同一个
+  // ——**直接读写 localStorage 的偏好忘了清，就会在用例之间飘**。
+  //
+  // 2026-10-21 升 Vitest 5 时被逮到一次：`calendarPrefs` 一直没清，于是「拖到
+  // 0 点那个小时格」那条用例**进场面时「显示全天 24 小时」已经是开着的**（上一条
+  // 用例点开过，localStorage 留着），它再点一下反而是**关掉**——0 点那格压根
+  // 不存在，拖拽什么也不发生，断言等到超时。表现是「单独跑绿、连着跑红」，
+  // 最难查的那一类。
+  //
+  // 所以这份名单现在是**按模块扫出来的**（`web/src/lib/*` 里每个 `const KEY = '…'`
+  // 加上 App.tsx 那两个宽度键），不是等谁踩了再补。**下面每加一个直接读写
+  // localStorage 的偏好，就得往这个列表里加一行。**
+  for (const key of [
+    'calendarPrefs',    // 日历那七个显示开关（lib/calendarPrefs.ts）
+    'folder-fold',      // 侧栏文件夹的收放（lib/folderFold.ts）
+    'groupSort',        // 清单的分组/排序（lib/grouping.ts）
+    'showCodingPlans',  // 设置里「显示编码额度」（lib/showCodingPlans.ts）
+    'aiBaseUrlHistory', // 设置里接口地址的输入历史（lib/aiBaseUrlHistory.ts）
+    'detailWidth',      // 详情面板宽度（App.tsx）
+    'navWidth',         // 侧栏宽度（App.tsx）
+  ]) localStorage.removeItem(key);
 
   // 兜底还原假时钟。这个文件里钉时钟的测试各自都在 `finally` 里调过
   // `vi.useRealTimers()`，这一句是**第二道**：没钉过的时候它是空操作，
@@ -595,7 +624,7 @@ describe('App：同时到点的几条合成一条横幅', () => {
    * 更费事（得先去列表里把它们找出来），那是拿一个退步换一个进步。
    *
    * 走的是跟看板上勾选同一个 `patchOne`：所以撤销提示、连带完成子任务这些
-   * 都在（`lib/undoDone.ts`），不是另开一条只标个状态的窄路。
+   * 都在（`lib/undoStatus.ts`），不是另开一条只标个状态的窄路。
    */
   it('逐条那颗勾还在：点它把这一条标成 done，这一摞里的别的照旧留着', async () => {
     await raiseMany(3);
@@ -751,6 +780,11 @@ describe('App：提醒横幅上能直接处理这条提醒', () => {
    * 『完成』以及『稍后提醒』」）——这个应用的番茄钟长在任务卡里，所以这一颗
    * 做的是把卡打开，专注按钮就在那儿。
    *
+   * **上面引的是滴答清单那颗按钮的原文，不是本应用那颗。** 本应用自己那颗
+   * 曾经也叫「开始专注」，后来改成「番茄钟」——同一张卡上最左边还有一颗
+   * 「开始」是状态动作，两颗撞名（理由见 FocusTimer.tsx 顶部那段）。**引文
+   * 不要跟着改**：它记的是别人产品上的字。
+   *
    * 补的是一个两边不一致：**桌面通知点本体一直会打开那条任务**
    * （`desktop-open-task` → `openTask`），网页横幅在这之前只能「完成」或
    * 「稍后」——想真去做它得先关掉横幅再自己去找。
@@ -779,7 +813,7 @@ describe('App：提醒横幅上能直接处理这条提醒', () => {
 });
 
 /**
- * 勾完之后那一次撤销（仿滴答清单）。**算什么在 `lib/undoDone.test.ts`**，
+ * 勾完之后那一次撤销（仿滴答清单）。**算什么在 `lib/undoStatus.test.ts`**，
  * 这里只测接线：提示弹不弹、点了撤销发的是什么。
  *
  * 借提醒横幅那颗「完成」进来，是因为它跟五个视图上的勾选框走的是同一个
@@ -822,7 +856,7 @@ describe('App：勾完给一次撤销', () => {
   });
 
   /**
-   * 「下次 X」。判据在 `lib/undoDone.test.ts`（日期怎么算更在服务端的
+   * 「下次 X」。判据在 `lib/undoStatus.test.ts`（日期怎么算更在服务端的
    * `repeat.ts`，跟真正生成下一条走的是同一个 `advance`），这里只测接线：
    * 那句话真的画进了提示里，而且只对重复任务说。
    */
@@ -1096,11 +1130,18 @@ describe('App：三栏都挂着自己的类名——min-width 全靠它落到 CS
 });
 
 describe('App：去处写进 URL hash', () => {
+  // **这两条拿「按来源」当跳板，不拿「已完成」。**
+  // 「已完成」默认是 `FRESH_NAV_MODES` 里的 `'auto'`（2026-10-16 那个启动顺序
+  // 修好之后它才真的生效），**空着的时候就不在导航上**——`navButton(/已完成/)`
+  // 直接 0 命中抛错。
+  // 这两条守的是「切去处 → 写 hash」和「hashchange → 视图兜回去」，
+  // 跟**跳板是哪一个**无关：换成永远显形的「按来源」，判据一字不动。
+  // （`lib/navVisibility.ts` 的 `initialNavModes`，理由写在那一步的注释里。）
   it('切去处会写进 hash，刷新回到同一个去处', async () => {
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
-    fireEvent.click(navButton(/已完成/));
-    await screen.findByRole('heading', { level: 1, name: '已完成' });
-    expect(window.location.hash).toBe('#/done');
+    fireEvent.click(navButton(/按来源/));
+    await screen.findByRole('heading', { level: 1, name: '按来源' });
+    expect(window.location.hash).toBe('#/source');
   });
 
   it('带着 hash 打开就落在那个去处，不是「今天」——初始读自己做到的，不是靠 hashchange 补的', async () => {
@@ -1121,8 +1162,8 @@ describe('App：去处写进 URL hash', () => {
 
   it('后退回到上一个去处', async () => {
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
-    fireEvent.click(navButton(/已完成/));
-    await screen.findByRole('heading', { level: 1, name: '已完成' });
+    fireEvent.click(navButton(/按来源/));            // 跳板见上面那段说明
+    await screen.findByRole('heading', { level: 1, name: '按来源' });
     window.location.hash = '#/today';                       // 模拟后退
     fireEvent(window, new HashChangeEvent('hashchange'));
     expect(await screen.findByRole('heading', { level: 1, name: '今天' })).toBeTruthy();
@@ -1180,7 +1221,7 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
   // `[draggable="true"]` 查询，转手把 `TaskCard` 常驻的 `.ink-rank` 抓手
   // 递出去，「看板还能拖」测得住，「看板是用行在拖」测不住——这正是这个
   // 仓库反复栽的「N 个接线点只覆盖一部分」，跟 `App.test.tsx` 上面
-  // `DENSITY_VIEWS` 那个循环（1749 行前后）同一个形状，这里补齐看板/四象限
+  // `DENSITY_VIEWS` 那个循环同一个形状，这里补齐看板/四象限
   // 两个没被那个循环覆盖到的接线点（它们不在 `DENSITY_VIEWS` 里，见
   // `App.tsx` 顶部注释）。
   it('看板固定行档——面板里渲染的是 TaskRow，不是 TaskCard（修复轮 1 · C-1）', async () => {
@@ -1325,7 +1366,7 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
    * 这一条从点击出发，看格子标题里那个数字。
    */
   it('四象限：切到「按时间 + 优先级」，任务真的换格子', async () => {
-    // priority 0 + 今天到期：按优先级那套落「不重要也不紧急」（priority 0 那格），
+    // priority 0 + 今天到期：按优先级那套落「没定优先级」（priority 0 那一格），
     // 按时间那套落「不重要但紧急」（今天到期）。挑的就是两套规则给不同答案的
     // 那种任务——挑一条两套都落同一格的，这条用例会永远绿。
     const due = new Date();
@@ -1337,22 +1378,26 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
     const panel = container.querySelector('.ink-view-panel-quadrant') as HTMLElement;
 
     /** 某一格标题里那个计数。锚在 <h2> 上按标题开头找，不用 getByText：
-     *  格子标题里「不重要也不紧急」和「不重要但紧急」只差一个字，而
-     *  getByText 的子串匹配会同时命中两个。 */
+     *  格名两两只差一个字（「不重要也不紧急」/「不重要但紧急」，默认那套的
+     *  「中优先级」/「低优先级」也一样），而 getByText 的子串匹配会同时命中
+     *  两个。 */
     const countIn = (title: string) => [...panel.querySelectorAll('h2.ink-grid-heading')]
       .find((el) => el.textContent?.startsWith(title))
       ?.querySelector('.ink-grid-count')?.textContent;
 
     await waitFor(() => expect(within(panel).getByText('今天的小事')).toBeDefined());
-    expect(countIn('不重要也不紧急'), '默认档是按优先级：priority 0 该落「不重要也不紧急」').toBe('1');
-    expect(countIn('不重要但紧急'), '默认档下不该有东西在「紧急」那一列').toBe('0');
+    expect(countIn('没定优先级'), '默认档是按优先级：priority 0 该落「没定优先级」那一格').toBe('1');
+    expect(countIn('中优先级'), '默认档下它不该坐在别的格里').toBe('0');
+    // 默认那套**没有**常驻说明：四格自己就叫 高 / 中 / 低 / 没定优先级，
+    // 原来那句「四格就是四档优先级，跟截止时间无关」是在替格名打补丁。
+    expect(panel.querySelector('.ink-quadrant-note'), '默认那套还挂着那句说明——格名已经自己说了这件事').toBeNull();
 
     fireEvent.click(within(panel).getByLabelText('按时间 + 优先级'));
 
     await waitFor(() => expect(countIn('不重要但紧急')).toBe('1'));
-    expect(countIn('不重要也不紧急'), '换了规则它不该还留在原来那格').toBe('0');
-    // 说明那行也得跟着换——不然屏幕上摆着「跟截止时间无关」，而格子正是按
-    // 截止时间分的，人有理由认为是算错了。
+    expect(countIn('不重要也不紧急'), '换了规则它不该还留在「不急」那一列').toBe('0');
+    // 二维那套的说明得跟着回来——那一套的格名说的是重要/紧急，两根轴各自从
+    // 哪儿算出来，光看格子看不出来。
     expect(panel.textContent, '切了规则，那行说明没跟着换').toContain('3 天内到期');
   });
 
@@ -1391,7 +1436,7 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
     const restore = mockDndRects('.ink-cells-2x2 .ink-grid-section', { columns: 2, gap: 300 });
     try {
       // due:null 让这条任务的紧急/不紧急判定跟真实系统时钟无关，稳落在
-      // min-later（不重要也不紧急，QUADRANT_KEYS 第 4 格）。
+      // min-later（默认那套里叫「没定优先级」，QUADRANT_KEYS 第 4 格）。
       currentTasks = [task({ id: 'a', status: 'todo', priority: 0, due: null })];
       const { container } = render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
       fireEvent.click(navButton(/四象限/));
@@ -1430,30 +1475,20 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
     }
   });
 
-  // task-4-brief 修复轮 1 · B：这句说明以前是常驻的一整行（.ink-quadrant-hint），
-  // 跟日历那句「拖动任务到别的日期……」同一个待遇，挪进了 .ink-cells-2x2
-  // 的原生 `title`（悬停才弹出）——上限（不再常驻显示成一整行文字）+ 正向
-  // （title 里还有这句话，不是被整个删掉）各一条断言，跟 CalendarGrid.test.tsx
-  // 那条「挪进 title」的写法是同一个套路。
   /**
-   * 四象限那两句话按「**鼠标独占与否**」分开放，这条把两边都钉住。
+   * 四象限那两句话现在按「**这句话还剩下什么**」分开放。
    *
-   * 上一版这条叫「说明挪进 title，不再常驻占一整行」（修复轮 1 · B），钉的是
-   * 「一行常驻文案都没有」。那个结论建立在一个**已经退役的模型**上：当时横轴
-   * （紧急）是按 `due` 算出来的只读坐标，那句话讲的纯粹是「左右拖不动」这个
-   * 鼠标动作，触屏上看不到它的人本来就做不了那个动作。
+   * 上一版这条钉的是「拖拽那句在 title、怎么读那句常驻」，因为当时格名沿用
+   * 艾森豪威尔那套（重要且紧急 / …），而默认那套规则压根没算过时间——屏幕上
+   * 必须有一行字纠正它。**现在那行字没了**：格子自己就叫 高 / 中 / 低 / 没定
+   * 优先级，读标题读得出来。需要一句说明来纠正格名，说明的是格名在说谎，
+   * 而那种局面该改的是名字，不是加解释（判据见 lib/cells.ts 的 `QUADRANT_TITLE`）。
    *
-   * 向滴答清单靠齐那一轮把模型换成了「四格 = 四档优先级」（见 lib/cells.ts），
-   * 那句话因此装了两件事，而只有一件该藏：
-   * - **拖到哪一格就是设成那一档**：仍然是鼠标独占（HTML5 drag-and-drop 触屏
-   *   不触发），留在 `title` 里；
-   * - **四格就是四档优先级**：这是**怎么读这一屏**，跟输入设备无关。藏起来的
-   *   后果是手机上完全看不到，而屏幕上摆着看似矛盾的证据（一条今天到期的任务
-   *   坐在「不紧急」格里）。
-   *
-   * 所以现在两边都要在，而且**不许互相重复**。
+   * 拖拽那句仍然留在 `.ink-cells-2x2` 的原生 `title` 里（悬停才弹出）：它描述的
+   * 是 HTML5 拖放这个鼠标独占的动作，触屏不触发、也没有键盘路径，看不到这句话
+   * 的人本来就做不了这个动作。
    */
-  it('拖拽那句留在 title，怎么读这一屏那句常驻——两边都在，且不重复', async () => {
+  it('拖拽那句留在 title；默认那套不再有常驻说明——格名自己就是那句话', async () => {
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
     fireEvent.click(navButton(/四象限/));
     await screen.findByRole('heading', { level: 1, name: '四象限' });
@@ -1464,15 +1499,79 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
     // 写死文案）。
     expect(within(panel).getByTitle('拖到哪一格，就是把这条任务的优先级设成那一档。')).toBeTruthy();
 
-    // 怎么读那句：常驻，不靠悬停。
-    const note = panel.querySelector('.ink-quadrant-note');
-    expect(note, '四象限少了那行常驻说明——手机上没有悬停，藏进 title 等于没有').not.toBeNull();
-    expect(note!.textContent).toContain('四格就是四档优先级');
-    expect(note!.textContent).toContain('跟截止时间无关');
+    // 「怎么读这一屏」改由四个格名自己说，所以四个都得在，而且说的就是优先级。
+    for (const name of ['高优先级', '中优先级', '低优先级', '没定优先级']) {
+      expect(within(panel).queryByRole('heading', { level: 2, name: new RegExp(`^${name}`) }), name).toBeTruthy();
+    }
+    expect(panel.querySelector('.ink-quadrant-note'), '默认那套还挂着那句说明——格名已经自己说了这件事').toBeNull();
+  });
 
-    // **两边不重复**：常驻那行不讲拖拽（触屏上根本拖不动，讲了也做不了），
-    // title 里也不再跟着念一遍「高 / 中 / 低 / 无」。
-    expect(note!.textContent).not.toContain('拖');
+  /**
+   * 「没定优先级」那一格挂一颗**「定优先级」**。
+   *
+   * `priority` 一律 0 是这个应用的规矩（AI 不许替他定，见 AGENTS.md），所以
+   * 这一格常常是四格里最大的那一格，而一次定完比一条一条拖二十几次现实。
+   * 范围就是格头上那个计数数出来的几条——跟「已过期」那组的「全部改到今天」
+   * 同一条规矩：一颗按钮不许改屏幕上看不见的任务（见 `withDeferAll`）。
+   */
+  describe('四象限：「没定优先级」那格的「定优先级」', () => {
+    const openQuadrant = async (ts: Task[]) => {
+      currentTasks = ts;
+      const { container } = render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+      fireEvent.click(navButton(/四象限/));
+      await screen.findByRole('heading', { level: 1, name: '四象限' });
+      return container.querySelector('.ink-view-panel-quadrant') as HTMLElement;
+    };
+    // 按 class 取，不走 getByRole({name})：可访问名要给这一屏每颗按钮算一遍，
+    // 慢到分钟级，见上面「全部改到今天」那组的注释。
+    const triageBtn = (panel: HTMLElement) => panel.querySelector('.ink-grid-action') as HTMLButtonElement | null;
+
+    it('点一下把这一格几条都定成中优先级——每条一份 patch，别的格不碰', async () => {
+      const panel = await openQuadrant([
+        task({ id: 'a', title: '没定的甲', priority: 0 }),
+        task({ id: 'b', title: '没定的乙', priority: 0 }),
+        task({ id: 'c', title: '已经高了', priority: 3 }),
+      ]);
+      const btn = triageBtn(panel);
+      expect(btn?.textContent, '「没定优先级」那格没有「定优先级」这颗按钮').toBe('定优先级');
+
+      fireEvent.click(btn!);
+      fireEvent.click(await screen.findByRole('menuitem', { name: '中' }));
+
+      await waitFor(() => expect(api.patchTasksEach).toHaveBeenCalled());
+      const [patches] = (api.patchTasksEach as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+      const list = patches as Array<{ id: string; patch: { priority: number } }>;
+      expect(list.map((e) => e.id).sort()).toEqual(['a', 'b']);
+      for (const e of list) expect(e.patch).toEqual({ priority: 2 });
+    });
+
+    it('选项里没有「无」：那正是这一格本身，点一下什么都不会变', async () => {
+      const panel = await openQuadrant([task({ id: 'a', title: '没定的', priority: 0 })]);
+      fireEvent.click(triageBtn(panel)!);
+      await screen.findByRole('menuitem', { name: '高' });
+      const labels = (await screen.findAllByRole('menuitem')).map((e) => e.textContent);
+      expect(labels.sort()).toEqual(['中', '低', '高']);
+    });
+
+    it('那一格空着就没有这颗按钮——一颗点了什么都不会发生的按钮比不摆糟', async () => {
+      const panel = await openQuadrant([task({ id: 'c', title: '已经高了', priority: 3 })]);
+      expect(triageBtn(panel), '「没定优先级」那格是空的，还挂一颗按钮').toBeNull();
+    });
+
+    /**
+     * 夹具挑的是 **priority 0 + 没有 due**：这条在两套规则下落的是同一个格子
+     * （`min-later`）。挑一条只在那一套里进这一格的，这条会在「规则判断没生效」
+     * 的情况下照样绿——上一版就是拿 priority 3 写的，它在二维那套里坐
+     * 「重要不紧急」，那颗按钮本来就不该出现，测了个空。
+     */
+    it('切到「按时间 + 优先级」也没有——那套里「没定优先级」这个说法不成立', async () => {
+      const panel = await openQuadrant([task({ id: 'a', title: '没定的', priority: 0 })]);
+      expect(triageBtn(panel), '默认那套这一格该有这颗按钮（下面切规则才验证它跟着消失）').toBeTruthy();
+
+      fireEvent.click(within(panel).getByLabelText('按时间 + 优先级'));
+      await waitFor(() => expect(panel.textContent).toContain('重要且紧急'));
+      expect(triageBtn(panel), '二维那套的格子是坐标，不是四档优先级').toBeNull();
+    });
   });
 
   it('四象限：任务都完成/搁置了时，显示一句提示——不是四个空盒子，跟「一条任务都没有」分得清', async () => {
@@ -1484,7 +1583,7 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
     // 「搁置」字样，会撞车（同一个字符串出现在两处）。锁住这句话的完整措辞。
     expect(screen.getByText('都做完、搁置，或者还没到开始时间——四象限只看现在能做的')).toBeTruthy();
     // 格子骨架还在——这句话是加在旁边的，不是把四个格子换掉。
-    expect(screen.getByRole('heading', { level: 2, name: /重要且紧急/ })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: /高优先级/ })).toBeTruthy();
   });
 
   it('四象限：真的一条任务都没有时，不显示「都做完了」这句话——那句话专指「有任务但被滤空」', async () => {
@@ -1511,7 +1610,7 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
     await screen.findByRole('heading', { level: 1, name: '四象限' });
     expect(await screen.findByText(/还没有任务。新建一条/)).toBeTruthy();
     // 格子骨架还在——这句话是加在旁边的，不是把坐标系换掉。
-    expect(screen.getByRole('heading', { level: 2, name: /重要且紧急/ })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: /高优先级/ })).toBeTruthy();
   });
 
   // 组件那一层（cells.test.ts）只证明 quadrantCells 支持 keep 参数——不证明
@@ -1713,7 +1812,7 @@ describe('App：日历接进导航', () => {
       // 切档。**必须还停在翻到的那一页**——回到 8/25 那一周就说明陈旧的
       // selectedKey 把锚点拽回去了，而用户从头到尾没要求回 8 月。
       // 周视图标题是「该周第一天 - 最后一天」，9 月第一周跨月，所以正确答案是
-      // 「8月31日 - 9月6日」——断言写成 /^9月/ 会错杀（这里踩过一次）。判据用
+      // 「8月31日–9月6日」——断言写成 /^9月/ 会错杀（这里踩过一次）。判据用
       // 「含 9月」+「不是 8/25 所在的那一周」两条，跨月周和错误答案都区分得开。
       fireEvent.change(within(panel).getByLabelText('看哪一档'), { target: { value: 'week' } });
       const heading = panel.querySelector('.ink-cal-heading')!.textContent!;
@@ -1964,7 +2063,7 @@ describe('App：日历接进导航', () => {
       // gridWiring/cardWiring，所以番茄钟时长这条接线照样在那儿验。
       fireEvent.click(within(grid).getByTitle('今天要做的事'));
       const detail = await screen.findByRole('complementary', { name: '任务详情' });
-      fireEvent.click(within(detail).getByText('开始专注'));
+      fireEvent.click(within(detail).getByText('番茄钟'));
       expect(within(detail).getByText('45:00')).toBeTruthy();
     } finally {
       vi.useRealTimers();
@@ -2070,9 +2169,9 @@ describe('App：日历接进导航', () => {
       const panel = container.querySelector('.ink-view-panel-calendar') as HTMLElement;
 
       fireEvent.change(within(panel).getByLabelText('看哪一档'), { target: { value: 'week' } });
-      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月17日 - 8月23日');
+      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月17日–23日');
       fireEvent.click(within(panel).getByRole('button', { name: '下一页' }));
-      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月24日 - 8月30日');
+      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月24日–30日');
 
       fireEvent.change(within(panel).getByLabelText('看哪一档'), { target: { value: 'day' } });
       // 切档不改 anchor，翻页之后的锚点（8/26，上面那次「下一页」+7 天）留着。
@@ -2115,13 +2214,13 @@ describe('App：日历接进导航', () => {
       const panel = container.querySelector('.ink-view-panel-calendar') as HTMLElement;
 
       fireEvent.change(within(panel).getByLabelText('看哪一档'), { target: { value: 'week' } });
-      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月10日 - 8月16日');
+      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月10日–16日');
       // 挂载这一刻 anchor 恒等于 now，这一页出现线测不出传对了哪个——只是
       // 确认「正常情况下线是会画的」，不是本条要守的那半。
       expect(panel.querySelectorAll('.fc-timegrid-now-indicator-line')).toHaveLength(1);
 
       fireEvent.click(within(panel).getByRole('button', { name: '下一页' }));
-      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月17日 - 8月23日');
+      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月17日–23日');
       // 真正要守的那半：真今天（8/16）不在这页里，线必须整棵树都不出现——
       // 如果 now 被串成了 anchor（这时候是 8/23，页里最后一天），这里会
       // 收到 1 条，不是 0。
@@ -2199,7 +2298,7 @@ describe('App：日历接进导航', () => {
   // 含 '8月19日'，上一批 I-1 就是这个坑（见 task-3-brief）。系统时间钉在
   // 2026-08-19（周三）：周视图那周的周一到周日是 8/17-8/23，跟 brief 举的
   // 例子一模一样。
-  it('标题栏文案：月「2026年8月」，周「8月17日 - 8月23日」，日「8月19日 周三」——精确文案', async () => {
+  it('标题栏文案：月「2026年8月」，周「8月17日–23日」，日「8月19日 周三」——精确文案', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 7, 19, 9, 0, 0));
     try {
@@ -2211,7 +2310,7 @@ describe('App：日历接进导航', () => {
       expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('2026年8月');
 
       fireEvent.change(within(panel).getByLabelText('看哪一档'), { target: { value: 'week' } });
-      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月17日 - 8月23日');
+      expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月17日–23日');
 
       fireEvent.change(within(panel).getByLabelText('看哪一档'), { target: { value: 'day' } });
       expect(panel.querySelector('.ink-cal-heading')!.textContent).toBe('8月19日 周三');
@@ -2717,7 +2816,7 @@ describe('App：设置里的番茄钟时长真的传到了卡片上——三处�
     await screen.findByRole('heading', { level: 1, name: '全部' });
     const panel = container.querySelector('.ink-view-panel-all') as HTMLElement;
 
-    fireEvent.click(within(panel).getByText('开始专注'));
+    fireEvent.click(within(panel).getByText('番茄钟'));
     expect(within(panel).getByText('45:00')).toBeTruthy();
   });
 
@@ -2727,7 +2826,7 @@ describe('App：设置里的番茄钟时长真的传到了卡片上——三处�
     const panel = () => container.querySelector('.ink-view-panel-today') as HTMLElement;
     await waitFor(() => expect(within(panel()).getByText('早该做了')).toBeDefined());
 
-    fireEvent.click(within(panel()).getByText('开始专注'));
+    fireEvent.click(within(panel()).getByText('番茄钟'));
     expect(within(panel()).getByText('45:00')).toBeTruthy();
   });
 
@@ -2739,7 +2838,7 @@ describe('App：设置里的番茄钟时长真的传到了卡片上——三处�
     const panel = () => document.querySelector('.ink-view-panel-source') as HTMLElement;
     await waitFor(() => expect(within(panel()).getByText('手工记的')).toBeDefined());
 
-    fireEvent.click(within(panel()).getByText('开始专注'));
+    fireEvent.click(within(panel()).getByText('番茄钟'));
     expect(within(panel()).getByText('45:00')).toBeTruthy();
   });
 });
@@ -2825,11 +2924,16 @@ describe('App：新建任务时 TaskDraft 的字段不能被 App.tsx 手挑漏�
     const form = within(card);
 
     fireEvent.change(form.getByPlaceholderText('标题'), { target: { value: '临时任务' } });
+    // 这一维本来没设，那一格还没上屏——先「＋ 加一项」请出来。
+    addField('标签');
     const tagBox = form.getByLabelText('加标签');
     fireEvent.change(tagBox, { target: { value: '紧急' } });
     fireEvent.keyDown(tagBox, { key: 'Enter' });
+    addField('优先级');
     fireEvent.click(form.getByRole('button', { name: '高' }));
+    addField('清单');
     fireEvent.change(form.getByLabelText('归到哪个清单'), { target: { value: 'L1' } });
+    addField('重复');
     fireEvent.change(form.getByLabelText('重复'), { target: { value: 'week' } });
     fireEvent.click(form.getByRole('button', { name: '周一' }));
     fireEvent.click(btnIn(card, '添加'));
@@ -2959,6 +3063,8 @@ describe('App：建一条任务 → 归到某个清单 → 切到那个清单的
     // 编辑它，在 TaskCard 内嵌的表单里选一个清单，保存——这一步走的是
     // TaskCard.tsx 的 save()，见上面的变异验证注释。
     await pickCardMenu('编辑', { scope: sourcePanel() });
+    // 这一维本来没设，那一格还没上屏——先「＋ 加一项」请出来。
+    addField('清单');
     fireEvent.change(within(sourcePanel()).getByLabelText('归到哪个清单'), { target: { value: 'L1' } });
     fireEvent.click(btnIn(sourcePanel(), '保存'));
     await waitFor(() => expect(api.patchTask).toHaveBeenCalledWith('new-task', expect.objectContaining({ listId: 'L1' })));
@@ -3010,6 +3116,8 @@ describe('App：建一条任务 → 编辑态里设成「每周一」重复 → 
     // 编辑它，在 TaskCard 内嵌的表单里把重复设成「每周一」，保存——这一步走的
     // 是 TaskCard.tsx 的 save()，见上面的变异验证注释。
     await pickCardMenu('编辑', { scope: sourcePanel() });
+    // 这一维本来没设，那一格还没上屏——先「＋ 加一项」请出来。
+    addField('重复');
     fireEvent.change(within(sourcePanel()).getByLabelText('重复'), { target: { value: 'week' } });
     fireEvent.click(within(sourcePanel()).getByRole('button', { name: '周一' }));
     fireEvent.click(btnIn(sourcePanel(), '保存'));
@@ -3327,13 +3435,67 @@ describe('App：「已过期」整组顺延', () => {
     ).toBe(true));
   };
 
+  /**
+   * 组头那半句「最久的 N 天」：卡上省掉的「过期」两个字由组头担着，那组头就
+   * 得说得出这一组里欠得最久的是多久——这件事原来是逐张数才知道的。
+   */
+  it('组头带着「最久的 N 天」', async () => {
+    // 钉住时钟，和下面那条「点了逐条发 patch」同一个理由：夹具的 due 落在 09:00，
+    // 而「过期几天」按整天下取——不钉的话这条**上午红、下午绿**（本机 07:46 实测
+    // 红成「最久的 2 天」）。断言一个字没动，动的是它站不站得住的前提。
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 7, 22, 15, 0, 0));
+    try {
+      await openUpcoming([overdue('a', 3), overdue('b', 1)]);
+      const head = [...document.querySelectorAll('.ink-grid-heading')]
+        .find((h) => h.textContent?.includes('已过期')) as HTMLElement;
+      expect(head.querySelector('.ink-grid-hint')?.textContent).toBe('最久的 3 天');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * **按屏幕上剩几条算，不按筛掉之前算。** `briefTime` 是分档那一层给的记号，
+   * 那句「最久的」要等到 `filterSections` 之后才算（`App.tsx` 的
+   * `withOverdueHint`）。摆到分档那一层去算的话：筛掉最久的那条，组头还写着
+   * 「最久的 3 天」，而屏幕上没有一条欠三天——那句成了假话。跟旁边那颗
+   * 「全部改到今天」的「计数是多少就改多少条」是同一条规矩。
+   */
+  it('筛选挡掉最久的那条：组头那句跟着改，不留在筛掉之前的数字上', async () => {
+    // 同上：夹具是 09:00 的，「最久的 N 天」按整天下取，不钉时钟的话上午红。
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 7, 22, 15, 0, 0));
+    try {
+      await openUpcoming([
+        { ...overdue('a', 3), title: '最久的那条' },        // 筛完会被挡掉的那一条
+        { ...overdue('b', 1), title: '次久的 共同的词' },
+        { ...overdue('c', 2), title: '第三久的 共同的词' },
+      ]);
+      // 用筛选栏的文本那一维：它改的是 `filter`，也就是 `filterSections` 读的那一份。
+      // 上面那排状态筹码走的是另一份 state（`boardFilter`，只管「按来源」那一屏），
+      // 拿它当筛选器测这条会一直等不到——第一版就是这么挂住的。
+      // 筛选栏空的时候是收起来的（只剩一颗「筛选」按钮，见 FilterBar 的
+      // `expanded`），先展开。
+      fireEvent.click(within(screen.getByRole('group', { name: '筛选' })).getByRole('button', { name: /筛\s*选/ }));
+      fireEvent.change(screen.getByLabelText('筛选文本'), { target: { value: '共同的词' } });
+      await waitFor(() => expect(
+        [...document.querySelectorAll('.ink-grid-hint')].map((e) => e.textContent),
+      ).toContain('最久的 2 天'));
+      expect([...document.querySelectorAll('.ink-grid-hint')].map((e) => e.textContent))
+        .not.toContain('最久的 3 天');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // 按 class 取，不走 findByRole({name})：可访问名要给这一屏每颗按钮算一遍，
   // 慢到分钟级，见「勾完给一次撤销」那组上面的注释。
   const deferBtn = () => document.querySelector('.ink-grid-action') as HTMLButtonElement | null;
 
-  it('「已过期」那一组的组头上有这颗按钮——这个应用没有「全选」，八条过期任务得点八下才轮得到批量改期', async () => {
+  it('「已过期」那一组的组头上有这颗按钮，条数写在名字上', async () => {
     await openUpcoming([overdue('a', 3), overdue('b', 1)]);
-    expect(deferBtn()?.textContent).toBe('全部改到今天');
+    expect(deferBtn()?.textContent).toBe('2 条改到今天');
   });
 
   it('别的组没有——「明天」「7 天内」整组顺延不是一个说得通的动作', async () => {
@@ -3406,9 +3568,23 @@ describe('App：四个网格视图各自的空状态文案', () => {
   it('「已完成」还空着时，说清这一屏是个去处不是个筛子——做完的会留在这儿', async () => {
     currentTasks = [];
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
-    await waitFor(() => expect(navButton(/已完成/)).toBeDefined());
+    await waitFor(() => expect(navButton(/今天/)).toBeDefined());
 
-    fireEvent.click(navButton(/已完成/));
+    // **走 hash 进这一屏，不点导航。**（2026-10-16）
+    // 这条**不能靠往夹具里塞一条 done 任务来改**——空状态文案恰恰要求
+    // `done` 是空的，而 `done` 空着正是它从导航上收掉的原因（`FRESH_NAV_MODES`
+    // 给它的默认是 `'auto'`）。塞了任务空状态就没了，测的东西整个换掉。
+    //
+    // 而这一屏**不是只有导航能进**：命令面板的条目来自**全量** `NAV_VIEW_SPECS`
+    // 而不是过滤后的 `navDefs`（`App.tsx` 里那段注释：「被设成隐藏的那个去处
+    // 照样跳得过去，只是不带数字号」），所以 hash 和面板两条路都在。走 hash 这条
+    // 最省事，也最接近「直接打开这个链接」的真实场景。
+    //
+    // **这里没有替产品做决定**：收窄默认之后，一个空的「已完成」还能不能从侧栏
+    // 点进去，是另一个问题（见差距清单第 17 条）。这条用例守的是「**进得去
+    // 之后**，空状态有没有把这一屏说清楚」，跟从哪进去无关。
+    window.location.hash = '#/done';
+    fireEvent(window, new HashChangeEvent('hashchange'));
 
     expect(await screen.findByText(/做完的会留在这儿/)).toBeDefined();
   });
@@ -3506,7 +3682,16 @@ describe('App：密度开关（task-2-brief）——只在「可切」的几个�
 
   it('今天 / 接下来 / 全部 / 已完成 / 搜索 / 某清单 / 某标签：能看到密度开关', async () => {
     currentLists = [list({ id: 'L1', name: '工作' })];
-    currentTasks = [task({ id: 'a', title: '带标签的', tags: ['紧急'] })];
+    // **加一条 done**（2026-10-16）：「已完成」默认是 `FRESH_NAV_MODES` 里的
+    // `'auto'`，空着就不在导航上（`initialNavModes`，理由在 lib/navVisibility.ts）。
+    // 这条要连点七个去处，覆盖 `DENSITY_VIEWS` 的每个成员——**所以是给夹具补
+    // 一条 done，而不是把 done 从这一腿里删掉**：删了就永久失去
+    // `DENSITY_VIEWS` 里 `'done'` 那一格的覆盖，而下面那条（3717）虽然也覆盖
+    // done，走的却是 `DENSITY_VIEWS` 派生循环的另一条路。
+    currentTasks = [
+      task({ id: 'a', title: '带标签的', tags: ['紧急'] }),
+      task({ id: 'z', title: '做完的', status: 'done', completedAt: '2026-01-01T00:00:00.000Z', due: null, reminders: [] }),
+    ];
     const { container } = render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
     await waitFor(() => expect(navButton(/全部/)).toBeDefined());
 
@@ -3557,7 +3742,7 @@ describe('App：密度开关（task-2-brief）——只在「可切」的几个�
    * 跟着把它测到，这里不用改一个字——但「今天」不是 `TaskGrid` 调用点，
    * `TodayView` 自己手写 row/card 分支（保留 rank/手动排序），这条测试
    * 断言的是「面板里渲染出的是 `.ink-trow` 还是 `.ink-task-card`」这个
-   * 结果，不关心走的是哪条内部路径，对它没有区别。现在总共 6 个（5 个
+   * 结果，不关心走的是哪条内部路径，对它没有区别。现在总共 7 个（6 个
    * `DENSITY_VIEWS` + 1 个 scoped）。
    */
   it('每个可切密度的去处都真的收到了 density——点一次「行」，挨个切到每个视图，面板里必须是 TaskRow 不是 TaskCard', async () => {
@@ -3923,6 +4108,17 @@ describe('App：同步冲突的常驻横幅——不解决，只是让人看见'
     expect(banner.textContent).not.toContain('3');
   });
 
+  it('点名是哪几个文件，超过六个收成「等 N 个」——横幅不能自己占掉半屏', async () => {
+    currentConflicts = Array.from({ length: 8 }, (_, i) => ({ kind: 'tasks', file: `t${i} (冲突副本).json` }));
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    const banner = await screen.findByRole('alert', { name: /冲突/ });
+    expect(banner.textContent).toContain('tasks/t0 (冲突副本).json');
+    expect(banner.textContent).toContain('tasks/t5 (冲突副本).json');
+    // 第七、第八个不铺开：只留个数。
+    expect(banner.textContent).not.toContain('tasks/t6');
+    expect(banner.textContent).toContain('等 2 个');
+  });
+
   it('没有冲突时整条横幅不渲染——不是渲染一个空的', async () => {
     currentConflicts = [];
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
@@ -3944,7 +4140,7 @@ describe('App：同步冲突的常驻横幅——不解决，只是让人看见'
 
 describe('App：全局快捷键——N / / / 1..9 / Esc（task-2-brief）', () => {
   it('按 1..9 切到导航上第 1..9 个去处，而且地址栏跟着变', async () => {
-    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    const { container } = render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
     await waitFor(() => expect(navButton(/今天/)).toBeDefined());
 
     // 挑首尾两个数字键，不只挑中间的——挡住「顺序整体错位一格」这种
@@ -3953,13 +4149,26 @@ describe('App：全局快捷键——N / / / 1..9 / Esc（task-2-brief）', () =
     await screen.findByRole('heading', { level: 1, name: '收件箱' });
     expect(window.location.hash).toBe('#/inbox');
 
-    // 第 9 个：注册表里第 9 条。**「未归类」插进来之后这里往后挪了一位**
-    // （原来第 9 是四象限）——它是 `listId` 为 null 的那些，摆在「全部」后面，
-    // 见 lib/views.tsx 那条 spec。这条测的是「数字键跟着屏幕上的顺序走」，
-    // 不是钉死在某个视图上——下一条测试才是顺序本身的真相来源（从 DOM 读）。
+    // 第 9 个：**从屏幕上数**（2026-10-16 改的）。
+    //
+    // 原来这里写死「第 9 个是日历」。收窄默认真的生效之后（`FRESH_NAV_MODES`
+    // 给空的垃圾箱/已完成/未归类 `'auto'`，见 `lib/navVisibility.ts` 的
+    // `initialNavModes`），空着的它们不在导航上，**第 9 个就成了「专注统计」**。
+    // 改数字不如改成**照这条用例自己那句话做**——它上面本来就写着「这条测的是
+    // 数字键跟着屏幕上的顺序走，不是钉死在某个视图上」，而写死一个视图名恰恰
+    // 是在钉死。从 DOM 读第 9 颗（读法跟下一条「顺序本身的真相来源」那一条
+    // 完全一致），以后默认再收窄也不用回来改这里。
+    // 读法跟下一条「顺序本身的真相来源」那一条**完全一致**：侧栏那两段 + 竖栏，
+    // 而竖栏要 `.slice(1)` 掐掉第一颗——那是「任务」那个模块，对应一整段、
+    // 不是某一条去处，命令面板里没有它，数字键也不数它（漏掉这一步就整体错一格）。
+    const navLabels = [
+      ...Array.from(container.querySelectorAll('.ink-nav-views .ink-nav-label')).map((el) => el.textContent!),
+      ...Array.from(container.querySelectorAll('.ink-modrail-list .ink-modrail-btn')).slice(1).map((el) => el.getAttribute('aria-label')!),
+    ];
+    const nav9 = navLabels[8];
+    expect(nav9, '导航上第 9 项没读到').toBeTruthy();
     fireEvent.keyDown(window, { key: '9' });
-    await screen.findByRole('heading', { level: 1, name: '日历' });
-    expect(window.location.hash).toBe('#/calendar');
+    await screen.findByRole('heading', { level: 1, name: nav9! });
   });
 
   // 核心断言：见 task-2-brief 第 ① 条。从 DOM 里读导航按钮实际显示的文字，
@@ -3993,6 +4202,60 @@ describe('App：全局快捷键——N / / / 1..9 / Esc（task-2-brief）', () =
     for (let i = 0; i < 9; i++) {
       fireEvent.keyDown(window, { key: String(i + 1) });
       await waitFor(() => expect(container.querySelector('.ink-view-title')?.textContent).toBe(labels[i]));
+    }
+  });
+
+  /**
+   * **同一条判据，但先让导航少一项。**
+   *
+   * 上面那条用的是**默认 `navModes`（全显示）**——而全显示时「按第几个」和
+   * 「注册表里第几项」本来就是同一件事，所以它在修复前后都是绿的，**这个洞
+   * 就是从它下面漏过去的**。
+   *
+   * 原来的 bug：数字键查的是模块顶层的 `NAV_VIEW_SPECS`（整份注册表，不过
+   * `visibleViews` 过滤），侧栏渲染的却是 `navDefs`。用户在设置里把任何一项设成
+   * 「隐藏」之后，侧栏少了一行，**数字键的序号却不收缩**——按 `3` 跳到一个
+   * 根本不在导航上的去处，而命令面板上标着「3」的那条屏幕上找不到对应行，
+   * `ShortcutHelp.tsx` 那句「切到导航上第 1～9 个去处」也跟着变成假话。
+   * 三处同时说谎，用户没有任何线索知道为什么。
+   *
+   * 滴答那边数字键绑的是**侧栏上真实存在的条目**——它是侧栏那一列的快捷方式，
+   * 侧栏显示什么就直接决定键位（`docs/dida365/用清单管理任务.md`，
+   * https://help.dida365.com/articles/6950654234933067776 ）。
+   *
+   * 这里选「未归类」下手，因为它在默认顺序里**正中间**（第 5 位）：隐藏掉它
+   * 之后，后面的每一项都往前挪一位，于是按 `5`–`9` 全都验得到。要是拿首尾
+   * 那两项下手，按中间几个键验的就还是老顺序，测不出错位。
+   */
+  it('把中间那一项设成「隐藏」之后，数字键的序号跟着收拢，不跳到看不见的那一项', async () => {
+    // `nolist` 是默认顺序里的第 5 项（收件箱/今天/接下来/全部/**未归类**/按来源/…）。
+    localStorage.setItem('navModes', JSON.stringify({ nolist: 'hide' }));
+    try {
+      const { container } = render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+      await waitFor(() => expect(navButton(/今天/)).toBeDefined());
+
+      // 跟上面那条完全同一份读法：顺序的唯一真相来源是 Sidebar 真正渲染出来的
+      // 那份 DOM，不是又找一份 App.tsx 自己算出来的列表跟它比。
+      const labels = [
+        ...Array.from(container.querySelectorAll('.ink-nav-views .ink-nav-label')).map((el) => el.textContent),
+        ...Array.from(container.querySelectorAll('.ink-modrail-list .ink-modrail-btn')).slice(1).map((el) => el.getAttribute('aria-label')),
+      ];
+
+      // **先确认前提真的成立**：它确实从屏幕上消失了。没这一句的话，哪天
+      // 「隐藏」这条路本身坏了，这条用例会因为 labels 少了 9 项而静悄悄失去
+      // 意义——变成一条测不到任何东西的绿。
+      expect(labels).not.toContain('未归类');
+      expect(labels.length).toBeGreaterThanOrEqual(9);
+
+      // 第 5 个键现在必须落到原来第 6 项（按来源）的位置上。**这一条是本用例
+      // 的心脏**：改之前按 `5` 会跳到「未归类」，而它已经不在屏幕上了。
+      for (let i = 0; i < 9; i++) {
+        fireEvent.keyDown(window, { key: String(i + 1) });
+        await waitFor(() => expect(container.querySelector('.ink-view-title')?.textContent).toBe(labels[i]));
+      }
+    } finally {
+      // 不清就漏给后面所有用例（模块顶部那个 removeItem 是第二道保险）。
+      localStorage.removeItem('navModes');
     }
   });
 
@@ -4487,45 +4750,67 @@ describe('App：命令面板接进 App（task-4-brief）', () => {
       // 去处，命令面板里没有它，数字键也不数它。
       ...Array.from(container.querySelectorAll('.ink-modrail-list .ink-modrail-btn')).slice(1).map((el) => el.getAttribute('aria-label')),
     ];
-    // 14 = 注册表里 14 条去处（**加了「未归类」之后从 13 变 14**，见
-    // lib/views.tsx 那条 spec）：9 个带 hint 的 + 后面 5 个没有。
-    expect(labels.length).toBe(14);
 
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
     const listbox = await screen.findByRole('listbox', { name: '命令列表' });
     const items = within(listbox).getAllByRole('option');
-    // 18 = 14 个视图命令（**加了「未归类」之后从 13 变 14**）+ 随手记 + 新任务
-    // + 快捷键 + 「把 N 条过期的改到今天」。默认夹具那条任务带着一个
-    // 2026-08-01、没盖章的提醒，按 `isTaskOverdue` 就是过期的，所以那一条命令
-    // 真的该出现。
-    expect(items.length).toBe(18);
 
-    for (let i = 0; i < 9; i++) {
-      expect(items[i].textContent).toContain(labels[i]);
-      expect(items[i].querySelector('.ink-cmd-key')?.textContent).toBe(String(i + 1));
+    // 分节确实接到了真实那份命令表上：默认夹具没有清单也没有标签，所以只有
+    // 两段，而且第一段就是「去处」。（`group` 是必填字段，分错档编译不过；
+    // 这里守的是另一件事——面板渲染出来的确实分了节，不是又拉平成一长条。）
+    expect(Array.from(listbox.querySelectorAll('.ink-cmd-group')).map((el) => el.textContent))
+      .toEqual(['去处', '动作']);
+    expect(listbox.firstElementChild?.className).toContain('ink-cmd-group');
+
+    // **这一段的判据整个换掉了**（2026-10-16）。原来它靠两个写死的数字    // （`labels.length === 14`、`items.length === 18`）加一个「逐行对照」的循环。
+    //
+    // 收窄默认真的生效之后（`FRESH_NAV_MODES` 给空的垃圾箱/已完成/未归类
+    // `'auto'`，见 `lib/navVisibility.ts` 的 `initialNavModes`），
+    // **面板和导航不再是同一份长度**：命令面板的条目来自**全量** `NAV_VIEW_SPECS`
+    // 而不是过滤后的 `navDefs`（`App.tsx` 里那段注释：「被设成隐藏的那个去处
+    // 照样跳得过去，只是不带数字号」），所以面板 14 条、导航 11 条。
+    //
+    // **于是「逐行对应」这句话本身不再成立**——`items[i]` 和 `labels[i]`
+    // 已经不是同一个东西了（面板第 5 条是「未归类」，DOM 第 5 项是「按来源」）。
+    // 只把 14 改成 11、18 改成 15，那个循环会拿错位的两列去比，红是红，
+    // **而报错指向一个跟真原因隔着一层的假象**。
+    //
+    // 换成下面这组断言，它验的是同一件事、而且更强：
+    // ① **每个看得见的去处，面板里的号等于它在屏幕上的第几位**（不再假设两边等长）；
+    // ② **看得见的第 10 项往后没有号**（数字键只有 9 个）；
+    // ③ **看不见的那些（被收窄掉的）在面板里一律不带号**——它们跳得过去，但按数字键
+    //    到不了，因为数字键数的是屏幕上真看得见的那几项（`App.tsx` 的 `navHints`）。
+    //    这一条是新的，原来的循环压根没有能力表达它。
+    const findItem = (label: string) => items.find((el) => (el.textContent ?? '').includes(label));
+    const visibleSet = new Set(labels as string[]);
+
+    for (let i = 0; i < labels.length; i++) {
+      const item = findItem(labels[i]!);
+      expect(item, `面板里找不到去处「${labels[i]}」`).toBeTruthy();
+      const key = item!.querySelector('.ink-cmd-key');
+      if (i < 9) expect(key?.textContent, `「${labels[i]}」是屏幕上第 ${i + 1} 个`).toBe(String(i + 1));
+      else expect(key, `第 ${i + 1} 项已经在数字键够不到的范围，不该有 hint`).toBeNull();
     }
-    // 第 10 项往后：数字键够不到，面板里也不该有 hint。（**「看板」删掉之后
-    // 这里从 5 项变 4 项**：习惯/专注统计/纪念日/回顾——四象限往前挪进了前九个。
-    // 数字键的契约一直是「导航上第 N 个」，它跟着屏幕上的顺序走，不是钉死在
-    // 某几项上。）
-    // 第 10 项往后到第 14 项（**加了「未归类」之后从 4 项变 5 项**）：
-    // 日历/习惯/专注统计/纪念日/回顾——数字键够不到，面板里也不该有 hint。
-    for (let i = 9; i < labels.length; i++) {
-      expect(items[i].textContent).toContain(labels[i]);
-      expect(items[i].querySelector('.ink-cmd-key')).toBeNull();
-    }
-    // 视图命令之后那三条固定项，下标跟着 labels 的长度走，不写死数字——
-    // 再往注册表里加一个去处时，这里不该又红一次。
-    const after = labels.length;
+
+    // ③ 收窄掉的那几条：面板里还在（跳得过去），但**不带数字号**。
+    const hiddenInPalette = items.filter((el) => {
+      const text = el.textContent ?? '';
+      return [...visibleSet].every((l) => !text.includes(l))
+        && ['收件箱', '今天', '接下来', '全部', '未归类', '按来源', '已完成', '垃圾箱', '日历', '四象限', '习惯', '专注统计', '纪念日', '回顾']
+          .some((name) => text.includes(name));
+    });
+    expect(hiddenInPalette.length, '夹具是空的，被收窄掉的那些应该在面板里但不带号').toBeGreaterThan(0);
+    for (const el of hiddenInPalette) expect(el.querySelector('.ink-cmd-key')).toBeNull();
+
+    // 视图命令之后那几条固定项——**按名字找，不按下标**（面板里视图命令的条数
+    // 跟导航上的条数已经不是一个数了，下标推不出来）。
+    const pick = (name: string) => items.find((el) => (el.textContent ?? '').includes(name))!;
     // 随手记：不是数字键，hint 固定是 'N'。
-    expect(items[after].textContent).toContain('随手记');
-    expect(items[after].querySelector('.ink-cmd-key')?.textContent).toBe('N');
+    expect(pick('随手记').querySelector('.ink-cmd-key')?.textContent).toBe('N');
     // 新任务：建任务的另一条路，hint 是 'C'——原来它既没有键、也不在面板里。
-    expect(items[after + 1].textContent).toContain('新任务');
-    expect(items[after + 1].querySelector('.ink-cmd-key')?.textContent).toBe('C');
+    expect(pick('新任务').querySelector('.ink-cmd-key')?.textContent).toBe('C');
     // 快捷键一览：`?` 本身要先知道才按得出来，所以两条路都通（`?` 和这里）。
-    expect(items[after + 2].textContent).toContain('快捷键');
-    expect(items[after + 2].querySelector('.ink-cmd-key')?.textContent).toBe('?');
+    expect(pick('快捷键').querySelector('.ink-cmd-key')?.textContent).toBe('?');
   });
 });
 
@@ -4626,6 +4911,114 @@ describe('App：批量操作接线——E / Del / 切视图清空 / Esc 清空 /
 
     fireEvent.keyDown(window, { key: 'd' });
     await waitFor(() => expect(api.patchTasks).toHaveBeenCalledWith(['a', 'b'], { status: 'done' }));
+  });
+  /**
+   * ↑/↓ 走位与 Ctrl + A。判据（往哪走、扩不扩、锚点留不留）在
+   * `lib/selection.test.ts`；这里测的是接线那三件事：**顺序从看得见的那一棵现读**、
+   * **焦点跟着光标走**、**Ctrl + A 不抢输入框里的全选文字**。
+   */
+  it('按 ↓ 选中屏幕上第一条、再按换到第二条——不累积，光标就是选中的那一条', async () => {
+    await renderOnAll();
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    await waitFor(() => expect(panel().querySelectorAll('.ink-task-card-selected').length).toBe(1));
+    // 焦点必须落在**看得见的那一棵**里：「今天」是 keepMounted 的，同一批任务
+    // 在两棵子树里各有一份，整份 DOM 现读会把光标停到藏着的那一份上。
+    expect((document.activeElement as HTMLElement).closest('.ink-view-panel-all')).not.toBeNull();
+    expect(document.activeElement?.getAttribute('data-task-id')).toBe('a');
+
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    await waitFor(() => expect(document.activeElement?.getAttribute('data-task-id')).toBe('b'));
+    expect(panel().querySelectorAll('.ink-task-card-selected')).toHaveLength(1);
+  });
+
+  it('Shift + ↓ 连着选两条——锚点不动，第二段并进来', async () => {
+    await renderOnAll();
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    fireEvent.keyDown(window, { key: 'ArrowDown', shiftKey: true });
+    await waitFor(() => expect(panel().querySelectorAll('.ink-task-card-selected').length).toBe(2));
+  });
+
+  it('空格把光标那条从选中里去掉、再按一下加回来', async () => {
+    await renderOnAll();
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    await waitFor(() => expect(panel().querySelectorAll('.ink-task-card-selected').length).toBe(1));
+
+    fireEvent.keyDown(document.activeElement!, { key: ' ' });
+    await waitFor(() => expect(panel().querySelectorAll('.ink-task-card-selected')).toHaveLength(0));
+
+    fireEvent.keyDown(document.activeElement!, { key: ' ' });
+    await waitFor(() => expect(panel().querySelectorAll('.ink-task-card-selected').length).toBe(1));
+  });
+
+  /**
+   * 空格只有一处该被抢走：焦点在**卡片本身**（走位走到的那个位置）上。
+   * 焦点落在卡里某颗按钮上时，空格是「按下这颗按钮」（原生语义），再顺手
+   * 改选中态就是同一下按出两个结果。`TaskCard`/`TaskRow` 里那句
+   * `isInteractiveTarget(e.target, 'button, a')` 挡的就是这个。
+   */
+  it('空格落在卡里某颗按钮上时不动选中——那一下是按钮自己的', async () => {
+    await renderOnAll();
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    await waitFor(() => expect(panel().querySelectorAll('.ink-task-card-selected').length).toBe(1));
+
+    const btn = panel().querySelector('.ink-task-card-selected button') as HTMLElement | null;
+    expect(btn, '夹具里没有卡住的按钮，这条会变成空转').not.toBeNull();
+    btn!.focus();
+    fireEvent.keyDown(btn!, { key: ' ' });
+
+    expect(panel().querySelectorAll('.ink-task-card-selected')).toHaveLength(1);
+  });
+  it('Ctrl + A 选中这一屏的三条，批量条跟着出现', async () => {
+    await renderOnAll();
+    fireEvent.keyDown(window, { key: 'a', ctrlKey: true });
+    await waitFor(() => expect(panel().querySelectorAll('.ink-task-card-selected').length).toBe(3));
+    expect(batchBar()).not.toBeNull();
+  });
+
+  /**
+   * 这一条守的是整批里最坏的那条串法：在随手记框里按 Ctrl + A 想选框里的字，
+   * 结果整屏任务被选上，紧接着一下 `D` 就是批量完成。
+   */
+  it('输入框里的 Ctrl + A 不抢——选中集合一个字不动', async () => {
+    await renderOnAll();
+    fireEvent.click(cardFor('任务甲'), { ctrlKey: true });
+    await waitFor(() => expect(panel().querySelectorAll('.ink-task-card-selected').length).toBe(1));
+
+    const box = screen.getByPlaceholderText('想到什么写什么，不用整理');
+    box.focus();
+    fireEvent.keyDown(box, { key: 'a', ctrlKey: true });
+
+    expect(panel().querySelectorAll('.ink-task-card-selected')).toHaveLength(1);
+  });
+  /**
+   * 批量「改到某天」的接线：一次批量请求、每条的 patch 各自算（原来几点还是
+   * 几点）。规矩本身钉在 `lib/reschedule.test.ts`，这里测的是「界面上真走得通」
+   * ——它前面那批键盘/选中改动如果哪一处没接上，这条会红。
+   */
+  it('批量条上选一天：一次批量请求，每条各自保留原来的钟点', async () => {
+    await renderOnAll([
+      task({ id: 'a', title: '任务甲', due: new Date(2026, 7, 21, 18).toISOString() }),
+      task({ id: 'b', title: '任务乙', due: new Date(2026, 7, 21, 9).toISOString() }),
+    ]);
+    fireEvent.keyDown(window, { key: 'a', ctrlKey: true });
+    await waitFor(() => expect(batchBar()).not.toBeNull());
+
+    const day = screen.getByLabelText('改到某天') as HTMLInputElement;
+    fireEvent.mouseDown(day);
+    fireEvent.change(day, { target: { value: '2026-10-12' } });
+    fireEvent.keyDown(day, { key: 'Enter' });
+
+    await waitFor(() => expect(api.patchTasksEach).toHaveBeenCalledTimes(1));
+    const [patches] = (api.patchTasksEach as ReturnType<typeof vi.fn>).mock.calls.at(-1)! as
+      [Array<{ id: string; patch: { due?: string | null } }>];
+    expect(patches.map((p) => p.id).sort()).toEqual(['a', 'b']);
+    const due: Record<string, string> = Object.fromEntries(patches.map((p) => [p.id, p.patch.due as string]));
+    for (const id of ['a', 'b']) {
+      const d = new Date(due[id]);
+      expect([d.getFullYear(), d.getMonth() + 1, d.getDate()]).toEqual([2026, 10, 12]);
+    }
+    expect(new Date(due.a).getHours()).toBe(18);
+    expect(new Date(due.b).getHours()).toBe(9);
   });
 
   /**
@@ -4763,8 +5156,12 @@ describe('App：批量操作接线——E / Del / 切视图清空 / Esc 清空 /
     fireEvent.click(cardFor('任务乙'), { ctrlKey: true });
     await waitFor(() => expect(batchBar()).not.toBeNull());
 
-    fireEvent.click(navButton(/已完成/));
-    await screen.findByRole('heading', { level: 1, name: '已完成' });
+    // 跳板用「按来源」而不是「已完成」（2026-10-16）：后者默认 `'auto'`、
+    // 空着就不在导航上（`initialNavModes`）。这一条守的是「看得见的集合一变，
+    // 选中就清空」——**跟切走的是哪一屏毫无关系**，它只是当跳板用的。
+    // 数据丢失防线一个字不动。
+    fireEvent.click(navButton(/按来源/));
+    await screen.findByRole('heading', { level: 1, name: '按来源' });
     fireEvent.click(navButton(/全部/));
     await screen.findByRole('heading', { level: 1, name: '全部' });
 
@@ -4997,7 +5394,7 @@ describe('App：批量操作接线——E / Del / 切视图清空 / Esc 清空 /
       await renderOnAll();
       fireEvent.click(cardFor('任务甲'), { ctrlKey: true });
 
-      fireEvent.change(screen.getByLabelText('批量改清单'), { target: { value: 'L1' } });
+      fireEvent.change(screen.getByLabelText('改清单'), { target: { value: 'L1' } });
 
       await waitFor(() => expect(api.patchTasks).toHaveBeenCalledWith(['a'], { listId: 'L1' }));
     });
@@ -6152,7 +6549,7 @@ describe('App：回到在线就把离线改动推回桌面（task-8-brief）', (
     expect(toast.textContent).toContain('随手记回收件箱');
     expect(toast.textContent).toContain('再删一次');
     // 既不是错误也不是「推成功了」：用 info 这一档。theme.ts 把 colorInfo 一并压成了
-    // 你的墨（56-81 行），群青是 AI 产出内容的配额，同步/冲突一点都不许借。
+    // 你的墨，群青是 AI 产出内容的配额，同步/冲突一点都不许借。
     expect(document.querySelector('.ant-message-info')).toBeTruthy();
     expect(screen.queryByText(/已把 .* 条离线改动推回桌面/)).toBeNull();
   });
@@ -6603,7 +7000,13 @@ describe('分组排序跟着去处走', () => {
   const groupSelect = () => screen.getByLabelText('分组') as HTMLSelectElement;
 
   it('在「全部」里改成按清单，翻到「已完成」还是默认档，翻回来又是按清单', async () => {
-    currentTasks = [task({ title: '写周报', due: null, reminders: [] })];
+    // **加一条 done**（2026-10-16）：「已完成」默认 `'auto'`，空着就不在导航上
+    // （`initialNavModes`）。这一条守的是「分组偏好**按去处各自记**」，
+    // 塞一条 done 任务让它留在导航上，`groupSelect` 的判据一字不动。
+    currentTasks = [
+      task({ title: '写周报', due: null, reminders: [] }),
+      task({ title: '做完的', status: 'done', completedAt: '2026-01-01T00:00:00.000Z', due: null, reminders: [] }),
+    ];
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
     await waitFor(() => expect(navButton(/今天/)).toBeDefined());
 
@@ -6721,6 +7124,14 @@ describe('App：打不开的文件', () => {
     expect(banner.textContent).toContain('不是被删了');
   });
 
+  it('点名是哪个文件（带目录）——数据目录里动辄几百个文件，只说「那几个文件」等于让人自己找', async () => {
+    currentBroken = [{ kind: 'tasks', file: 'a1b2.json' }, { kind: 'inbox', file: 'c3d4.json' }];
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    const banner = await screen.findByRole('alert', { name: '打不开的文件' });
+    expect(banner.textContent).toContain('tasks/a1b2.json');
+    expect(banner.textContent).toContain('inbox/c3d4.json');
+  });
+
   it('**跟同步冲突分成两条**——冲突是「有两份挑一份」，打不开是「这一条现在读不出来」，两种处置说不到一块去', async () => {
     currentBroken = [{ kind: 'tasks', file: 'a1b2.json' }];
     currentConflicts = [{ kind: 'inbox', file: 'x (冲突副本).json' }];
@@ -6778,7 +7189,13 @@ describe('App：列表顶上那一行「添加任务」', () => {
   const row = () => screen.queryByLabelText('添加任务');
 
   it('在「全部」这类任务列表上有，在「已完成」里没有——在已完成里建一条待办，它当场就不在这一屏', async () => {
-    currentTasks = [];
+    // **加一条 done**（2026-10-16）：「已完成」默认 `'auto'`，空着就不在导航上
+    // （`initialNavModes`）。塞一条让它留在导航上——而**塞完之后这条断言照样
+    // 成立**：它守的是「`canQuickAdd` 按去处逐屏取舍」，跟那屏有没有任务无关。
+    // （`QUICKADD_VIEWS` 里没有 done，见 App.tsx。）
+    currentTasks = [
+      task({ title: '做完的', status: 'done', completedAt: '2026-01-01T00:00:00.000Z', due: null, reminders: [] }),
+    ];
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
     await waitFor(() => expect(navButton(/全部/)).toBeDefined());
 
@@ -6806,6 +7223,41 @@ describe('App：列表顶上那一行「添加任务」', () => {
     await waitFor(() => expect(api.addTask).toHaveBeenCalledWith(
       expect.objectContaining({ title: '写周报', listId: 'L1' }),
     ));
+  });
+
+  it('点开「新任务表单」之后切去处，表单不跟着跑——它原来在每一屏顶上各画一份', async () => {
+    // **加一条 done**（2026-10-16）：「已完成」默认 `'auto'`，空着就不在导航上
+    // （`initialNavModes`）。这一条守的是「合成器是**逐视图**的，不是全局一份」，
+    // 切走就没了——跟那一屏有没有任务无关。
+    currentTasks = [
+      task({ title: '做完的', status: 'done', completedAt: '2026-01-01T00:00:00.000Z', due: null, reminders: [] }),
+    ];
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await waitFor(() => expect(navButton(/全部/)).toBeDefined());
+
+    fireEvent.click(navButton(/全部/));
+    await screen.findByRole('heading', { level: 1, name: '全部' });
+    fireEvent.click(screen.getByLabelText('新任务表单'));
+    await screen.findByPlaceholderText('标题');
+
+    // 「已完成」没有加任务行，表单走的是 `!canQuickAdd(view)` 那一条渲染路径
+    // ——正是它跟着切过去的那一处。
+    fireEvent.click(navButton(/已完成/));
+    await screen.findByRole('heading', { level: 1, name: '已完成' });
+    expect(screen.queryByPlaceholderText('标题'), '切到「已完成」之后那张表单还挂着').toBeNull();
+  });
+
+  it('在「今天」里点开表单，切去「习惯」也不该带过去', async () => {
+    currentTasks = [];
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await screen.findByRole('heading', { level: 1, name: '今天' });
+    fireEvent.click(screen.getByLabelText('新任务表单'));
+    await screen.findByPlaceholderText('标题');
+
+    // 任务模块之外的那几个去处各自走 `!canQuickAdd(view)` 那一条渲染路径。
+    fireEvent.click(navButton(/习惯/));
+    await screen.findByRole('heading', { level: 1, name: '习惯' });
+    expect(screen.queryByPlaceholderText('标题')).toBeNull();
   });
 });
 
@@ -7201,6 +7653,18 @@ describe('App：AI 拆解结果那条提示', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('横幅右上角那颗 × 报名——这几条常驻提示里它是唯一的出口', async () => {
+    // antd 的 `closable` 光是一颗不带名字的图标按钮（读屏走到那儿只念得出「按钮」）。
+    // 拆解失败/总览汇报这两条除了 × 没有别的关闭手段，而它正是「知道了」这个动作。
+    // 判据走**可及名字**而不是 `textContent` 里找得到那半句：藏在 `.ink-sr-only`
+    // 里的字要是算不进名字（比如哪天它被挪出按钮外面），只看文本的那条会照样绿。
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await act(async () => { await Promise.resolve(); });
+    推状态('failed', 'AI 命令行工具没找到');
+    const banner = await screen.findByText('AI 拆解失败').then((el) => el.closest('.ant-alert') as HTMLElement);
+    expect(within(banner).getByRole('button', { name: /关闭这条提示/ })).toBeTruthy();
+  });
+
   it('**「拆解失败」不自动消失**——它带着要读的原因，而人可能不在屏幕前', async () => {
     vi.useFakeTimers();
     try {
@@ -7338,5 +7802,38 @@ describe('App：任务详情那一栏的可拖界线', () => {
     localStorage.setItem('detailWidth', '9999');
     const grip = await openDetail();
     expect(grip.getAttribute('aria-valuenow')).toBe('640');
+  });
+});
+
+/**
+ * 「还没有任务」什么时候可以说。打磨稿拿离线夹具量「今天」那一屏时现形的：
+ * 本地快照里有 18 条，屏幕上那句是「还没有任何任务」——因为 `tasks` 的初值
+ * `[]` 跟「这人真的一条都没有」在类型上分不出来。
+ */
+describe('任务还没读到的那一段，不能替用户说「没有任务」', () => {
+  it('那一行还在飞：说「正在读」，不说「还没有任务」', async () => {
+    currentTasks = [];
+    // 一份永不落地的 promise——真·慢服务，不是桩子抛错。
+    vi.mocked(api.tasks).mockImplementationOnce(() => new Promise<Task[]>(() => {}));
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    expect(await screen.findAllByText(/正在读任务列表/)).toBeTruthy();
+    expect(screen.queryByText(/还没有任务。新建一条/)).toBeNull();
+  });
+
+  it('那一行抛了：说「没能读到」，既不说「还没有」也不说「正在读」', async () => {
+    currentTasks = [];
+    vi.mocked(api.tasks).mockRejectedValueOnce(new Error('连不上'));
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    expect(await screen.findAllByText(/没能读到任务列表/)).toBeTruthy();
+    expect(screen.queryByText(/还没有任务。新建一条/)).toBeNull();
+    // 「正在读」也必须退场：请求已经死了，那句是第二种谎。
+    await waitFor(() => expect(screen.queryByText(/正在读任务列表/)).toBeNull());
+  });
+
+  it('读到过一次之后，「还没有任何任务」那句照旧说出口（上面两条不许把它一起改掉）', async () => {
+    currentTasks = [];
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    // 两处同时说这句话（「今天」那一屏和它旁边的收件箱栏），所以按 findAll 收。
+    expect(await screen.findAllByText(/还没有任何任务。上面那行「添加任务」/)).toBeTruthy();
   });
 });

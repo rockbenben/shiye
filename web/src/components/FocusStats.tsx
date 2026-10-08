@@ -6,6 +6,7 @@ import {
   addSessionPatch, busiestHour, focusByDay, focusByGroup, focusByHour, focusByTask, focusTotals,
   formatMinutes, recentSessions, removeSessionPatch, type FocusGroupBy, type FocusTotal,
 } from '../lib/focusStats.js';
+import { dateRangeText } from '../lib/calendar.js';
 import { formatWhen } from '../lib/taskView.js';
 import { Heatmap } from './Heatmap.js';
 import { HEATMAP_DAYS } from '../lib/heatmap.js';
@@ -49,16 +50,33 @@ interface Props {
 }
 
 /** 名字那一格：接了 `onOpen` 就是一颗跳回那条任务的按钮，没接还是一行字。
- *  两种共用同一个类，外观差别只有一条下划线，见 theme.css 那段注释。 */
+ *  两种共用同一个类，外观差别只有一条下划线，见 theme.css 那段注释。
+ *
+ *  `title` 挂全文：这一行的省略号是**批过的**（任务标题不受控，换行会让排行扫下来
+ *  是锯齿），可省略号只解决「不撑破」，不解决「那是哪一条」。日历格子、行档的
+ *  任务标题都带着全文，实测 390 上唯独这几张表截了没地方读全。 */
 const RankName = ({ id, title, onOpen }: { id: string; title: string; onOpen?: (taskId: string) => void }) => (
   onOpen
-    ? <button type="button" className="ink-fstat-rank-name" style={{ textDecoration: 'underline' }} onClick={() => onOpen(id)}>{title}</button>
-    : <span className="ink-fstat-rank-name">{title}</span>
+    ? <button type="button" className="ink-fstat-rank-name" title={title} style={{ textDecoration: 'underline' }} onClick={() => onOpen(id)}>{title}</button>
+    : <span className="ink-fstat-rank-name" title={title}>{title}</span>
 );
 
-const Cell = ({ label, total }: { label: string; total: FocusTotal }) => (
+const Cell = ({ label, total, range }: {
+  label: string;
+  total: FocusTotal;
+  /** 名字旁边那行日期小字。「至今」没有范围可报——它数的是全部记录，一天都没被
+   *  排除在外，硬给它编一句「自第一次记录起」是把一句解释凑成四句排比。 */
+  range?: string;
+}) => (
   <div className="ink-fstat-cell">
-    <div className="ink-fstat-cell-label">{label}</div>
+    <div className="ink-fstat-cell-label">
+      <span>{label}</span>
+      {/* 这一档数的是哪几天。范围不自己算，读 `focusTotals` 那批边界变量，
+          见那边的注释。四块并排只有名字没有日子时，「本月 2 小时」摆在
+          「本周 3 小时 45 分」下面读起来像算错了——跨月那行小字自己就把
+          这件事答完，不用一句解释。 */}
+      {range && <span className="ink-fstat-cell-range">{range}</span>}
+    </div>
     <div className="ink-fstat-cell-value">{formatMinutes(total.minutes)}</div>
     <div className="ink-fstat-cell-sub">{total.count} 次</div>
   </div>
@@ -167,7 +185,7 @@ export function FocusStats({ tasks, lists, now, onPatch, onOpen, weekStart }: Pr
     return (
       <div className="ink-fstat-root">
         <p className="ink-empty-note">
-          还没有专注记录。卡片上有个「开始专注」，跑完一轮就会记在这里；忘了计时的那几段可以在下面补记。
+          还没有专注记录。卡片上有个「番茄钟」，跑完一轮就会记在这里；忘了计时的那几段可以在下面补记。
         </p>
         {backfill}
       </div>
@@ -192,9 +210,9 @@ export function FocusStats({ tasks, lists, now, onPatch, onOpen, weekStart }: Pr
   return (
     <div className="ink-fstat-root">
       <div className="ink-fstat-cells">
-        <Cell label="今天" total={totals.today} />
-        <Cell label="本周" total={totals.week} />
-        <Cell label="本月" total={totals.month} />
+        <Cell label="今天" total={totals.today} range={dateRangeText(totals.windows.today.from, totals.windows.today.to)} />
+        <Cell label="本周" total={totals.week} range={dateRangeText(totals.windows.week.from, totals.windows.week.to)} />
+        <Cell label="本月" total={totals.month} range={dateRangeText(totals.windows.month.from, totals.windows.month.to)} />
         <Cell label="至今" total={totals.all} />
       </div>
 
@@ -277,7 +295,8 @@ export function FocusStats({ tasks, lists, now, onPatch, onOpen, weekStart }: Pr
       <ul className="ink-fstat-rank" aria-label="按类别的分布">
         {groups.map((g) => (
           <li className="ink-fstat-rank-row" key={g.key ?? '__none__'}>
-            <span className="ink-fstat-rank-name">{g.label}</span>
+            {/* 类别名（清单名/标签/情境）也不受控——跟上面那张表同一个理由带全文。 */}
+            <span className="ink-fstat-rank-name" title={g.label}>{g.label}</span>
             <span className="ink-fstat-rank-value">{formatMinutes(g.total.minutes)}</span>
             <span className="ink-fstat-rank-sub">{g.total.count} 次</span>
           </li>

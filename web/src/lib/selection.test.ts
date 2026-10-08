@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rangeBetween, clickToSelection, type SelState } from './selection.js';
+import { rangeBetween, clickToSelection, moveSelection, selectAllIn, type SelState } from './selection.js';
 
 const O = ['a', 'b', 'c', 'd', 'e'];
 
@@ -67,5 +67,85 @@ describe('clickToSelection', () => {
     const s: SelState = { ids: new Set(['a']), anchor: 'b' };
     const r = clickToSelection(s, O, 'd', { shift: true, ctrlOrMeta: false });
     expect([...r.ids].sort()).toEqual(['b', 'c', 'd']); // a 没有被保留下来
+  });
+});
+
+describe('moveSelection（↑/↓ 走位）', () => {
+  const empty = (): SelState => ({ ids: new Set(), anchor: null });
+  const at = (id: string): SelState => ({ ids: new Set([id]), anchor: id });
+
+  it('屏幕上什么都没有 → 原样返回，不抛', () => {
+    expect(moveSelection(empty(), [], 'down', false)).toEqual(empty());
+  });
+
+  it('没有光标：往下落第一条、往上落最后一条，并且就选中那一条', () => {
+    expect(moveSelection(empty(), O, 'down', false)).toEqual(at('a'));
+    expect(moveSelection(empty(), O, 'up', false)).toEqual(at('e'));
+  });
+
+  it('有光标：走一步，选中集合收成那一条（不带着原来那几条一起走）', () => {
+    const r = moveSelection(at('b'), O, 'down', false);
+    expect([...r.ids]).toEqual(['c']);
+    expect(r.anchor).toBe('c');
+  });
+
+  // 不循环是设计判断：长列表里按到底再跳回第一条，表现是「我以为还在这几条上」
+  // 却已经跑到顶上，而省下的那一下按键不值这个。
+  it('走到头停住，不循环回第一条', () => {
+    expect(moveSelection(at('e'), O, 'down', false)).toEqual(at('e'));
+    expect(moveSelection(at('a'), O, 'up', false)).toEqual(at('a'));
+  });
+
+  it('Shift 扩选：锚点不动，选中换成锚点到光标那一段', () => {
+    const r = moveSelection(at('b'), O, 'down', true);
+    expect([...r.ids].sort()).toEqual(['b', 'c']);
+    expect(r.anchor).toBe('b');
+  });
+
+  it('Shift 连按两下 → 段跟着长；反方向按 → 段缩回去（锚点在后面）', () => {
+    const one = moveSelection(at('b'), O, 'down', true);
+    expect([...moveSelection(one, O, 'down', true).ids].sort()).toEqual(['b', 'c', 'd']);
+    expect([...moveSelection(one, O, 'up', true).ids].sort()).toEqual(['b']);
+  });
+
+  it('Shift 贴着边界再按不会把选中的缩掉', () => {
+    const wide = { ids: new Set(['d', 'e']), anchor: 'd' };
+    expect([...moveSelection(wide, O, 'down', true).ids].sort()).toEqual(['d', 'e']);
+  });
+
+  it('光标那条已经不在屏幕上（改了状态/被筛掉）→ 从看得见的那一头重新起', () => {
+    const gone: SelState = { ids: new Set(['zzz']), anchor: 'zzz' };
+    expect(moveSelection(gone, O, 'down', false)).toEqual(at('a'));
+    expect(moveSelection(gone, O, 'up', false)).toEqual(at('e'));
+  });
+
+  it('走的是列表顺序，不是字母序（乱序夹具）', () => {
+    const unordered = ['e', 'a', 'd', 'b', 'c'];
+    expect(moveSelection(at('e'), unordered, 'down', false).anchor).toBe('a');
+  });
+});
+
+describe('selectAllIn（Ctrl/Cmd+A）', () => {
+  const G = ['a', 'b', 'c'];
+
+  it('这一组一条都没有 → 原样返回', () => {
+    const prev: SelState = { ids: new Set(['x']), anchor: 'x' };
+    expect(selectAllIn(prev, [])).toEqual(prev);
+  });
+
+  it('整组选中，光标还在组里就别动它', () => {
+    const r = selectAllIn({ ids: new Set(['b']), anchor: 'b' }, G);
+    expect([...r.ids].sort()).toEqual(G);
+    expect(r.anchor).toBe('b');
+  });
+
+  it('光标在别的组（刚在那边全选过）→ 落到这一组第一条，不留一个屏幕上的空锚点', () => {
+    const r = selectAllIn({ ids: new Set(['z']), anchor: 'z' }, G);
+    expect(r.anchor).toBe('a');
+  });
+
+  it('换组全选是替换不是并入——全选的意思就是「就这一组」，不是「再加一组」', () => {
+    const r = selectAllIn({ ids: new Set(['z']), anchor: 'z' }, G);
+    expect([...r.ids].sort()).toEqual(G);
   });
 });

@@ -48,7 +48,7 @@ function checkSmartFilter(v: unknown): SanitizeResult<SmartFilter | null> {
 function checkGroup(v: unknown, allowOr: boolean): SanitizeResult<SmartFilter> {
   const fail = bad('filter', 'status/listIds/tags/priority/dueWithinDays/hasWaitingFor/text 七个键要给全，' +
     'tagsAll / noList / noTag / noDue（布尔）和 or（「或」组数组，只能嵌一层）可以不给，' +
-    '不能有别的键（status 是合法状态数组，priority 只收 0-3，dueWithinDays 是数字或 null，hasWaitingFor 是布尔值，text 是字符串）');
+    '不能有别的键（status 是合法状态数组，priority 只收 0～3，dueWithinDays 是数字或 null，hasWaitingFor 是布尔值，text 是字符串）');
   if (typeof v !== 'object' || v === null) return fail;
   const f = v as Record<string, unknown>;
   if (Object.keys(f).some((k) => !(FILTER_KEYS as readonly string[]).includes(k))) return fail;
@@ -156,7 +156,7 @@ export function checkListPatch(body: unknown): SanitizeResult<ListPatch> {
   // `!== undefined`，不是判真值——`.find()` 找不到才是真的「没有坏键」，
   // 键名 `""` 是合法但不在白名单里的键，truthy 判断会把它当成「没找到」放过去。
   const badKey = Object.keys(b).find((k) => !(LIST_KEYS as readonly string[]).includes(k));
-  if (badKey !== undefined) return bad(badKey, `不是清单允许改的字段——白名单只有 ${LIST_KEYS.join(' / ')}，你传的是 "${badKey}"`);
+  if (badKey !== undefined) return bad(badKey, `不是清单允许改的字段——白名单只有 ${LIST_KEYS.join(' / ')}，你传的是「${badKey}」`);
 
   const out: ListPatch = {};
   if ('name' in b) {
@@ -199,7 +199,7 @@ export function checkFolderPatch(body: unknown): SanitizeResult<FolderPatch> {
   const b = body as Record<string, unknown>;
   // 同上——`!== undefined`，不是判真值。
   const badKey = Object.keys(b).find((k) => !(FOLDER_KEYS as readonly string[]).includes(k));
-  if (badKey !== undefined) return bad(badKey, `不是文件夹允许改的字段——白名单只有 ${FOLDER_KEYS.join(' / ')}，你传的是 "${badKey}"`);
+  if (badKey !== undefined) return bad(badKey, `不是文件夹允许改的字段——白名单只有 ${FOLDER_KEYS.join(' / ')}，你传的是「${badKey}」`);
 
   const out: FolderPatch = {};
   if ('name' in b) {

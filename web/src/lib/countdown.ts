@@ -73,7 +73,7 @@ export function nextYearly(month: number, day: number, now: Date): Date {
  *
  * **不设年份闸门**：农历是算出来的（天文算法 + 一张压缩月表），跟法定节假日
  * 那张「发布出来的表」不是一回事——那边有 `holidayYearKnown` 闸门，这边没有。
- * 换不出来（表真到头了）就返回 `null`，调用方按「日期坏了」处理。
+ * 换不出来（表真到头了）就返回 `null`，调用方按「这一条的日期不可用」处理。
  */
 export function nextLunarYearly(from: Date, now: Date): Date | null {
   const base = lunarOf(from);
@@ -86,7 +86,7 @@ export function nextLunarYearly(from: Date, now: Date): Date | null {
 
 /**
  * 一条纪念日此刻的状态。日期解析不了返回 `null`——调用方据此把这一条画成
- * 「日期坏了」，不是显示 NaN 天。
+ * 一条「怎么改对」的报错，不是显示 NaN 天。
  */
 export function countdownState(c: Countdown, now: Date): CountdownState | null {
   const day = parseDay(c.date);

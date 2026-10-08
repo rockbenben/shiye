@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { HabitStats } from './HabitStats.js';
+import { HabitStats, todayState } from './HabitStats.js';
 import { task } from '../test-utils.js';
 import type { Repeat, Task } from '../types.js';
 
@@ -27,11 +27,13 @@ describe('HabitStats', () => {
     expect(container.querySelector('.ink-hstat-card')).toBeNull();
   });
 
-  it('三个数字都在：连续 / 最长 / 本月', () => {
-    show([done('喝水', 17), done('喝水', 18), live('喝水')]);
+  it('三个数字都在：连续 / 最长 / 这个月', () => {
+    const { container } = show([done('喝水', 17), done('喝水', 18), live('喝水')]);
     expect(screen.getByText(/连续/)).toBeTruthy();
     expect(screen.getByText(/最长/)).toBeTruthy();
-    expect(screen.getByText(/本月/)).toBeTruthy();
+    // 那一栏里数字被 <b> 包着，getByText 只认元素自己的直接文本节点，够不到
+    // 被拆开的那句话——按整栏的 textContent 看。
+    expect(container.querySelector('.ink-hstat-nums')!.textContent).toMatch(/8月\s+2\s*\/\s*19/);
   });
 
   it('今天打没打卡单独标出来——底下那张表要数到「今天」那一格才看得出来', () => {
@@ -64,7 +66,7 @@ describe('HabitStats', () => {
 
   it('打卡表有可访问名——一堆方格对读屏软件是一片沉默', () => {
     show([done('喝水', 18), live('喝水')]);
-    expect(screen.getByLabelText('本月打卡表：1 / 19 天')).toBeTruthy();
+    expect(screen.getByLabelText('8月打卡表：1 / 19 天')).toBeTruthy();
   });
 
   /**
@@ -138,24 +140,24 @@ describe('HabitStats', () => {
     const bornToday = (p: Partial<Task>) => task({ ...p, createdAt: iso(2026, 8, 19) });
 
     it('每周一、五的习惯今天（周三）刚建 → 那一栏不渲染，不留一个「0 / 0」', () => {
-      show([bornToday({ id: 'w', title: '练背', habit: true, repeat: WEEK_MON_FRI, status: 'todo' })]);
-      expect(screen.queryByText(/本月/)).toBeNull();
+      const { container } = show([bornToday({ id: 'w', title: '练背', habit: true, repeat: WEEK_MON_FRI, status: 'todo' })]);
+      expect(container.querySelector('.ink-hstat-nums')!.textContent).not.toMatch(/8月\s+\d/);
     });
 
     it('读屏听到的也不是「0 / 0 天」，而是说清为什么没有', () => {
       show([bornToday({ id: 'w', title: '练背', habit: true, repeat: WEEK_MON_FRI, status: 'todo' })]);
-      expect(screen.getByLabelText('本月打卡表：这个月还没有打卡日')).toBeTruthy();
+      expect(screen.getByLabelText('8月打卡表：还没有打卡日')).toBeTruthy();
     });
 
     it('**对照：分母不是 0 就照常显示**——别把这一栏整个删了', () => {
-      show([done('喝水', 18), live('喝水')]);
-      expect(screen.getByText(/本月/)).toBeTruthy();
-      expect(screen.getByLabelText('本月打卡表：1 / 19 天')).toBeTruthy();
+      const { container } = show([done('喝水', 18), live('喝水')]);
+      expect(container.querySelector('.ink-hstat-nums')!.textContent).toMatch(/8月\s+1\s*\/\s*19/);
+      expect(screen.getByLabelText('8月打卡表：1 / 19 天')).toBeTruthy();
     });
 
     it('每天的习惯今天刚建 → 分母是 1，照常显示（不是所有「刚建」都藏）', () => {
-      show([bornToday({ id: 'd', title: '喝水', habit: true, repeat: DAILY, status: 'todo' })]);
-      expect(screen.getByText(/本月/)).toBeTruthy();
+      const { container } = show([bornToday({ id: 'd', title: '喝水', habit: true, repeat: DAILY, status: 'todo' })]);
+      expect(container.querySelector('.ink-hstat-nums')!.textContent).toMatch(/8月\s+\d\s*\/\s*1/);
     });
   });
 });
@@ -310,5 +312,187 @@ describe('HabitStats：每周那种习惯', () => {
     show([task({ id: 'a' })]);
     const note = screen.getByText(/还没有习惯/).textContent ?? '';
     for (const label of ['每天', '每周']) expect(note, `少了「${label}」`).toContain(label);
+  });
+});
+
+/**
+ * **「今天打卡」那颗按钮必须读月历格子同一份判据。**
+ *
+ * 沙箱实测抓到的一处自相矛盾：一条勾了「一三五」的健身，在周六打开这一屏，
+ * 月历里今天那格是 `ink-hstat-cell-off`（悬停写着「这天不用打卡」），旁边却是
+ * 一颗点得动的「今天打卡」。头一版那颗按钮只看「没打过 + 有 live 实例」，
+ * 没读 `checkinDays`——同一张卡上两句反话。
+ */
+describe('HabitStats：不该打的那天不给按钮', () => {
+  const withCheckIn = (tasks: Task[], now: Date) => {
+    const onCheckIn = vi.fn();
+    render(<HabitStats tasks={tasks} now={now} onOpen={vi.fn()} onCheckIn={onCheckIn} />);
+    return { onCheckIn };
+  };
+
+  it('今天不在 checkinDays 里：给「今天不用打卡」这句文字，不给按钮', () => {
+    // NOW 是 8/19 周三，这条勾的是一、五。
+    const MON_FRI: Repeat = { ...DAILY, every: 'week', weekdays: [1, 5] };
+    withCheckIn([
+      task({ id: 'live', title: '练背', habit: true, repeat: MON_FRI, status: 'todo' }),
+      task({ id: 'd17', title: '练背', habit: true, repeat: MON_FRI, status: 'done', completedAt: iso(2026, 8, 17) }),
+    ], NOW);
+    expect(screen.getByText('今天不用打卡')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '今天打卡' })).toBeNull();
+  });
+
+  it('本周已经达标：给「本周已达标」，不再催一次', () => {
+    // 8/21 是周五，在这条的打卡日里；一/二/三/四 四天都已经打过，目标四次。
+    const WEEK_1235: Repeat = { ...DAILY, every: 'week', weekdays: [1, 2, 3, 5] };
+    const Fri = local(2026, 8, 21, 12);
+    withCheckIn([
+      task({ id: 'live', title: '健身', habit: true, repeat: WEEK_1235, status: 'todo' }),
+      ...[17, 18, 19, 20].map((d) => task({
+        id: `gym-${d}`, title: '健身', habit: true, repeat: WEEK_1235, status: 'done', completedAt: iso(2026, 8, d),
+      })),
+    ], Fri);
+    expect(screen.getByText('本周已达标')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '今天打卡' })).toBeNull();
+  });
+
+  it('**对照：该打、没打、也没达标——那颗按钮必须还在**（别把它整个删了当修完）', () => {
+    const MON_FRI: Repeat = { ...DAILY, every: 'week', weekdays: [1, 3, 5] };
+    // NOW 是 8/19 周三，在打卡日里；本周一打过一次，目标三次，还差两次。
+    const { onCheckIn } = withCheckIn([
+      task({ id: 'live', title: '健身', habit: true, repeat: MON_FRI, status: 'todo' }),
+      task({ id: 'd17', title: '健身', habit: true, repeat: MON_FRI, status: 'done', completedAt: iso(2026, 8, 17) }),
+    ], NOW);
+    fireEvent.click(screen.getByRole('button', { name: '今天打卡' }));
+    expect(onCheckIn).toHaveBeenCalledWith('live');
+  });
+});
+
+/**
+ * 屏顶那句总账 + 那份「今天处在哪个状态」的判据。
+ *
+ * 这一屏原来什么都不说：两个习惯、今天一个待打卡一个不用打，屏幕上没有任何
+ * 一处回答「我今天还欠几件」——而侧栏给它配的是一个网格图标，它是被当报表进的
+ * 这一屏。
+ */
+describe('HabitStats：屏顶一句总账', () => {
+  it('几个待打卡、几个今天不用打，各数各的', () => {
+    // 喝水：每天、今天没打 → 待打卡。练背：勾一五，今天（8/19 周三）不是它的
+    // 日子 → 不用打。两句必须分开数，合成一句「2 个待打卡」是假话。
+    const MON_FRI: Repeat = { ...DAILY, every: 'week', weekdays: [1, 5] };
+    show([
+      done('喝水', 18), live('喝水'),
+      task({ id: 'w', title: '练背', habit: true, repeat: MON_FRI, status: 'todo' }),
+    ]);
+    const line = screen.getByRole('status').textContent ?? '';
+    expect(line).toContain('1 个待打卡');
+    expect(line).toContain('1 个今天不用打');
+  });
+
+  it('todayState 四档各归各的，顺序是 done → off → met → pending', () => {
+    const base = { checkinDays: null, week: null, doneToday: false, liveId: 'x' };
+    const Wed = local(2026, 8, 19, 12);
+    expect(todayState({ ...base, doneToday: true } as never, Wed)).toBe('done');
+    expect(todayState({ ...base, checkinDays: [1, 5] } as never, Wed)).toBe('off');
+    expect(todayState({ ...base, week: { done: 3, target: 3 } } as never, Wed)).toBe('met');
+    expect(todayState(base as never, Wed)).toBe('pending');
+    // 已经打过的人不再被判成「不用打」——打没打过是第一位的事实
+    expect(todayState({ ...base, doneToday: true, checkinDays: [1, 5] } as never, Wed)).toBe('done');
+  });
+});
+
+/**
+ * 月历能翻月。
+ *
+ * 月初进这一屏什么都看不见：这一屏的立意是「这个月坚持得怎么样」，而每月
+ * 头几天月历上就是几个空格，刚过去的那个月反而查不到——想查只能点「看这一年」，
+ * 在 365 格里自己找。
+ */
+/**
+ * 整宽那张表：一行一个习惯，右边一条最近 28 天的格子带。
+ * 立意在 `habitStats.ts` 的 `recent` 上——「这周谁断了」要横着一眼看完，
+ * 而月历那种五行七列的大件一多就变成一列长队。
+ */
+describe('HabitStats：整宽那一行与格子带', () => {
+  it('每条带 28 格，最后一格标着今天', () => {
+    const { container } = show([done('喝水', 18), live('喝水')]);
+    const cells = container.querySelectorAll('.ink-hstat-bcell');
+    expect(cells.length).toBe(28);
+    expect(cells[27].className).toContain('ink-hstat-bcell-today');
+    expect([...cells].filter((c) => c.className.includes('ink-hstat-bcell-today')).length, '「今天」只能有一格').toBe(1);
+  });
+
+  it('打过卡的那几格填上，读屏听到的是个数不是二十八个方格', () => {
+    const { container } = show([done('喝水', 17), done('喝水', 18), live('喝水')]);
+    const band = container.querySelector('.ink-hstat-band')!;
+    expect(band.querySelectorAll('.ink-hstat-bcell-done').length).toBe(2);
+    expect(band.getAttribute('aria-label')).toContain('打过 2 天');
+  });
+
+  it('两行的同一列是同一个日子——这条带全部的意义在这儿', () => {
+    const { container } = show([done('喝水', 18), live('喝水'), done('跑步', 18), live('跑步')]);
+    const rows = [...container.querySelectorAll('.ink-hstat-band')];
+    expect(rows.length).toBe(2);
+    const keys = (el: Element) => [...el.querySelectorAll('.ink-hstat-bcell')].map((c) => c.getAttribute('title')!.split(' ')[0]);
+    expect(keys(rows[1])).toEqual(keys(rows[0]));
+  });
+
+  it('月历收在详情里，点开那一行才摊开；点一行不动另一行', () => {
+    const { container } = show([done('喝水', 18), live('喝水'), done('跑步', 18), live('跑步')]);
+    const cards = () => [...container.querySelectorAll('.ink-hstat-card')];
+    expect(cards().every((c) => !c.className.includes('is-open'))).toBe(true);
+    fireEvent.click(screen.getByLabelText('展开「喝水」的月历'));
+    expect(cards()[0].className).toContain('is-open');
+    expect(cards()[1].className).not.toContain('is-open');
+    // 再点一下收回去。
+    fireEvent.click(screen.getByLabelText('收起「喝水」的月历'));
+    expect(cards()[0].className).not.toContain('is-open');
+  });
+
+  it('展开那颗跟标题是两个动作：一个在本屏看历史，一个跳去那张卡', () => {
+    const { onOpen } = show([done('喝水', 18), live('喝水')]);
+    fireEvent.click(screen.getByLabelText('展开「喝水」的月历'));
+    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('喝水'));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('HabitStats：翻月', () => {
+  /** 整宽那张表默认一行都没摊开，而翻月那颗管的正是摊开的那几个月历——
+   *  所以要先点开一行。这三条测的是「翻到哪个月」，不是「那颗在不在」，
+   *  补这一步没有放松任何断言。 */
+  const openAndBack = () => {
+    fireEvent.click(screen.getByLabelText('展开「喝水」的月历'));
+    fireEvent.click(screen.getByLabelText('上一个月'));
+  };
+
+  it('翻到上个月：表头那个月份跟着改，格子画的是上个月', () => {
+    show([done('喝水', 18), live('喝水')]);
+    openAndBack();
+    expect(screen.getByText('7月')).toBeTruthy();
+    // 上个月没有这个习惯的记录（夹具都在 8 月），但格子还得一张不落——
+    // 31 格 + 7 个星期标签
+    expect(document.querySelectorAll('.ink-hstat-cell').length).toBe(31);
+  });
+
+  it('**翻月不动「今天」**：连续天数、本周次数照真实的今天算', () => {
+    show([done('喝水', 18), live('喝水')]);
+    const before = screen.getByText(/连续/).textContent;
+    openAndBack();
+    expect(screen.getByText(/连续/).textContent).toBe(before);
+  });
+
+  it('未来不能翻：已经在当月时「下一个月」是死的', () => {
+    show([done('喝水', 18), live('喝水')]);
+    fireEvent.click(screen.getByLabelText('展开「喝水」的月历'));
+    const next = screen.getByLabelText('下一个月') as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+  });
+
+  it('一行都没摊开时那颗不出现——它翻的是看不见的月历', () => {
+    show([done('喝水', 18), live('喝水')]);
+    expect(screen.queryByLabelText('上一个月')).toBeNull();
+    fireEvent.click(screen.getByLabelText('展开「喝水」的月历'));
+    expect(screen.getByLabelText('上一个月')).toBeTruthy();
   });
 });

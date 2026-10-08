@@ -41,6 +41,14 @@ interface Props {
    *  跟 onReview 共用单飞锁——正在跑任一件时都会 409，按钮置灰。 */
   onBoard: () => void;
   /**
+   * 「现在点了也白点」的一句话，`null` = 能点。判据在 `lib/aiReady.ts`，跟收件箱
+   * 那颗「立即拆解」共用同一份。
+   *
+   * 这两颗原来只按「有没有活儿可干」置灰（`hasLive` / `hasAnything`）——配置没配
+   * 或连不上服务时它们照样亮着，点下去换一分半钟的等待和一句不知道怎么修的错。
+   */
+  aiBlocked: string | null;
+  /**
    * AI 这会儿正在跑。**拆解和回顾共用服务端那把单飞锁**（见 server/src/expand.ts
    * 顶部 `AgentKind` 的注释），所以这个值就是 `agent?.state === 'running'`，
    * 不分是哪一件——正在拆解时点回顾照样会被 409 掉，那就干脆先别让点。
@@ -69,7 +77,7 @@ export function openInsights(insights: Insight[]): Insight[] {
     .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0));
 }
 
-export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onReviewed, onGo, onReview, onBoard, reviewing }: Props): ReactNode {
+export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onReviewed, onGo, onReview, onBoard, reviewing, aiBlocked }: Props): ReactNode {
   const open = openInsights(insights);
   /**
    * **卡住的项目**——GTD 每周回顾专门要查的那一条：一个还挂着的项目，底下
@@ -106,7 +114,7 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
   const todo = weeklyReview(tasks, inbox, now);
 
   /**
-   * **一拖再拖的那几条**——改过 `POSTPONE_MIN` 次以上期、还挂着的。
+   * **一拖再拖的那几条**——推迟过 `POSTPONE_MIN` 次以上、还挂着的。
    *
    * 跟「卡住的项目」同形同档：本地算、不上群青、一颗「看过了」。判据（含
    * 「为什么门槛跟推荐面板共用一个常量、候选池却故意不共用」）全在
@@ -147,12 +155,20 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
    * 躺很久的、反复出现的同类、卡住的项目）全都以「有还没了结的任务」为前提。
    */
   const hasLive = tasks.some((t) => !isSettled(t));
+  /**
+   * 「总览」的门跟「回顾」**不一样**，这是刻意的：回顾要挑出挂着的事来提建议，
+   * 全是已完成就没意义；总览连做完的一起扫，所以只要表里有东西就有话说。
+   * 但它读的同样是这张表——**一条任务都没有时服务端直接拒**（`app.ts` 的
+   * `/api/board` 那道「没内容就不起那一趟」），所以这一颗也得灰着：屏幕上摆
+   * 一颗点了只会得到一句拒绝的按钮，比不摆更坏，而那句拒绝来得比这句话晚。
+   */
+  const hasAnything = tasks.length > 0;
   const runButton = (
     <Button
       size="small"
       icon={<EyeOutlined />}
       loading={reviewing}
-      disabled={reviewing || !hasLive}
+      disabled={reviewing || !hasLive || aiBlocked !== null}
       onClick={onReview}
     >
       让 AI 回顾一遍
@@ -165,7 +181,7 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
       size="small"
       icon={<EyeOutlined />}
       loading={reviewing}
-      disabled={reviewing}
+      disabled={reviewing || !hasAnything || aiBlocked !== null}
       onClick={onBoard}
     >
       AI 总览
@@ -176,7 +192,13 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
      同一个理由）；能点的时候说清「只提建议、不直接改」——这是他点之前最该
      知道的一件事；置灰的时候说清为什么灰，不留一颗没有解释的死按钮。 */
   const runHint = reviewing
-    ? 'AI 正在跑，一般要一两分钟……'
+    ? 'AI 正在跑，一般要一两分钟…'
+    // **配置这一档排在「有没有活儿」前面。** 两者都成立时，先说「去哪儿配上」
+    // 那条——它是这一屏唯一能真正解开这颗按钮的话，而「还没有需要回顾的任务」
+    // 在配置坏着的时候只是把原因往后挪一格。跟 `aiReady.ts` 里离线排第一同一条
+    // 理由：因果更硬的那条先说。
+    : aiBlocked
+      ? aiBlocked
     : hasLive
       // **不在这儿列它能改哪几样。** 上一版写的是「只提改期、拆细的建议」，
       // 而 `PROPOSABLE` 有十二个字段（标题/备注/截止/开始/提醒/子任务/标签/
@@ -191,7 +213,26 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
       // 「只」的着力点因此回到它本来该在的地方：**只提建议、不直接改**——那才是
       // 他按下去之前最该知道的一件事。
       ? '「回顾」只提建议、挂在对应的那张卡片上，等你点「接受」才算数——不会直接改任务。「总览」更轻，只给一段汇报文本、不写任何卡。'
-      : '现在一条还挂着的任务都没有，没什么可回顾的。点「AI 总览」可以扫一眼现状。';
+      // 零条任务时两颗都是灰的，那句话就不能再指向其中一颗——「点『AI 总览』
+      // 可以扫一眼现状」在别的状态下是实话，在这一屏上指的是一颗按不动的按钮。
+      //
+      // **这一支原来还接着半句「上面那行『添加任务』直接写一条」，那是假话。**
+      // 回顾屏顶上摆的是完整表单 `composerNode`（`App.tsx` 里注入的那个），而它
+      // 默认关着；`canQuickAdd('review')` 是 false——`QUICKADD_VIEWS`
+      // （`App.tsx` 里那份名单）只有 today/upcoming/all/source 加三个前缀，
+      // 回顾不在名单里，`QUICKADD_AT_TOP` 也没有它。**屏幕上没有那一行。**
+      //
+      // 判据是本仓库自己的正本：`App.tsx` 顶部那段注释明写「屏幕上说一句做不到
+      // 的话，比只报告『没有』更糟」。`EMPTY_NO_TASKS` 正是因为这条才刻意不指认
+      // 控件，`App.tsx` 里那个「认不出的去处」分支又守了一次同一件事。
+      // 所以这一支改成不指认任何控件，只给两条一定走得通的路。
+      //
+      // 「C」是「C」键开新任务表单（`ShortcutHelp.tsx` 的表里有这一行），回顾屏按它
+      // 仍然开得出表单——那条路走的是 `openCompose`，不经过视图，所以回顾在不在
+      // `QUICKADD_VIEWS` 里跟它无关。
+      : !hasAnything
+        ? '还没有任何任务——回顾和总览看的都是这张任务表，所以这两颗先灰着。按「C」或竖栏「任务」回到任务那一段，写一条就回来了。'
+        : '现在一条还挂着的任务都没有，没什么可回顾的。点「AI 总览」可以扫一眼现状。';
   const runBlock = (
     <p className="ink-review-nudge ink-review-run">
       {runButton}
@@ -262,7 +303,7 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
           因此偏向乐观。这一条不修（读 `trash/` 能补准，但那份数据在前端是按需
           拉的、可能滞后），改成把这句说出来：**宁可让人知道这个数不含什么，
           也不要让它看起来比实际准**（`lib/throughput.ts` 顶部那段）。 */}
-      <p className="ink-review-stalled-why">不含已经删掉的——那些进了回收站，这里数不到。</p>
+      <p className="ink-review-stalled-why">不含已经删掉的——那些进了垃圾箱，这里数不到。</p>
     </section>
   );
 
@@ -286,7 +327,7 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
 
   const stalledBlock = stalled.length === 0 ? null : (
     <section className="ink-review-stalled" aria-labelledby="ink-review-stalled-h">
-      <h2 className="ink-review-stalled-h" id="ink-review-stalled-h">卡住的项目 {stalled.length}</h2>
+      <h2 className="ink-review-stalled-h" id="ink-review-stalled-h">卡住的项目 {stalled.length} 个</h2>
       {/* 把「为什么它算卡住」说出来，不只是列一串标题——这几条在列表里跟别的
           待办长得一模一样，人点进去也未必看得出问题出在哪：卡片上写着
           「子任务 0/2」，那句话说的是「还没做完」，不是「没有下一步了」。 */}
@@ -330,7 +371,9 @@ export function ReviewView({ insights, tasks, inbox, now, onDismiss, onOpen, onR
    */
   const postponedBlock = postponed.length === 0 ? null : (
     <section className="ink-review-postponed" aria-labelledby="ink-review-postponed-h">
-      <h2 className="ink-review-stalled-h" id="ink-review-postponed-h">一拖再拖 {postponed.length}</h2>
+      {/* 计数带上量词，跟上面那份清单里「N 条…」同一形状：这一节的标题和清单
+          里那一行说的是同一件事，两套读法等于让人在一屏里换两次找数字的办法。 */}
+      <h2 className="ink-review-stalled-h" id="ink-review-postponed-h">一拖再拖 {postponed.length} 条</h2>
       {/* 说清「再推一次不是答案」——不然这一节看起来就是同一份「今天该做什么」
           清单的第三个版本，而它会跟推荐面板那组长得一模一样。 */}
       <p className="ink-review-stalled-why">

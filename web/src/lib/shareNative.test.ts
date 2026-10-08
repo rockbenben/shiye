@@ -150,8 +150,8 @@ describe('nativeSharePort——薄壳里在 jsdom 里验得了的那半', () => 
   // 守卫会不会把已有的那道遮死）。
   // **这句不是推理，是量过的**：给 registerPlugin 补上 `{ web: … }` 之后，
   // 判据只有 isPluginAvailable 时这条**红**（退出码 1）；把 `isNativePlatform() &&`
-  // 加回去、web 实现照样留着，它**绿**（退出码 0）。两发变异的记录在
-  // .superpowers/sdd/2026-08-24-share-target/task-3-report.md。
+  // 加回去、web 实现照样留着，它**绿**（退出码 0）。这两发变异的结论就是：
+  // `isPluginAvailable` 是唯一的判据，`isNativePlatform() &&` 那个条件是多余的。
   //
   // 正半（真机上恒 true）在 jsdom 里装不出来（没有 androidBridge、没有
   // PluginHeaders），只能真机验，android/冒烟清单.md 第 10 步。

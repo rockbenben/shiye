@@ -3,6 +3,7 @@ import crossSpawn from 'cross-spawn';
 import type { Bus } from './events.js';
 import { agentCwd, agentDataDir, aiSeesSameData, dataDir, readLastOutboxError, readSettings, takeBoardReport } from './store.js';
 import { configProblem, clockLine, runBoardViaApi, runViaApi, scopeLine, type AgentScope, type Fetcher, type ReviewScope } from './aiApi.js';
+import { activeAi } from './aiEndpoints.js';
 
 export type { AgentScope, ReviewScope };
 
@@ -23,9 +24,9 @@ export interface AgentStatus {
   /** 只有 state === 'scheduled' 时才有意义。 */
   at?: string;
   /**
-   * 这条状态是三件事里的哪一件跑出来的。前端按它选横幅标题——「拆解完成」
-   * 「回顾完成」「总览」是三个不同的结果，标题写死成「拆解完成」会让回顾和
-   * 总览顶着错名字；board 的 ok 还靠它决定「别在 6 秒后自动消失」（总览的
+   * 这条状态是四件事里的哪一件跑出来的。前端按它选横幅标题——「拆解完成」
+   * 「回顾完成」「总览」「拆细完成」是四个不同的结果，标题写死成「拆解完成」会让回顾、
+   * 总览和拆细顶着错名字；board 的 ok 还靠它决定「别在 6 秒后自动消失」（总览的
    * 汇报文本本身就是产物，不是「去看板看新卡片」的信号）。
    *
    * scheduled/idle 是 autoExpand 的排期信号、不挂 kind；mergeOutbox 在启动时
@@ -52,13 +53,14 @@ export function emitAgentStatus(bus: Bus | undefined, status: AgentStatus): void
 export type AgentKind = 'expand' | 'review' | 'board' | 'breakdown';
 
 /**
- * 服务端只指路，不抄规则。规则的正本在 `workflows/expand.md` / `workflows/review.md`
- * （field 层的细则又转指 `AGENTS.md`）——两边都在提示词里写一遍，迟早有一边改了
- * 另一边忘了改。
+ * 服务端只指路，不抄规则。规则的正本在 `workflows/` 下那四份（`expand.md` /
+ * `review.md` / `board.md` / `breakdown.md`，field 层的细则又转指 `AGENTS.md`）——
+ * 两边都在提示词里写一遍，迟早有一边改了另一边忘了改。
  *
- * 这两句必须跟 `.claude/commands/` 下那两条斜杠命令说的是同一件事：界面上那两颗
- * 按钮，和他自己在终端里敲 `/expand`、`/review`，该走同一条路——不然「按钮跑出来
- * 的」和「手敲跑出来的」是两个结果，而界面上没有任何地方会提示这种分叉。
+ * 这四句必须跟 `.claude/commands/` 下那四条斜杠命令说的是同一件事：界面上那四颗
+ * 按钮，和他自己在终端里敲 `/expand`、`/review`、`/board`、`/breakdown`，该走同
+ * 一条路——不然「按钮跑出来的」和「手敲跑出来的」是两个结果，而界面上没有任何
+ * 地方会提示这种分叉。
  */
 /**
  * 服务叫起 AI 时发的那几句话，**这里是正本**。
@@ -258,7 +260,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
 
   /**
    * 设置里选了「调接口」时走这条。**只换「谁去想」，别的全不变**：单飞锁、
-   * 十分钟超时、agent-status 的四种状态、outbox 文件的校验与合并，跟 CLI
+   * 十分钟超时、agent-status 的六种状态、outbox 文件的校验与合并，跟 CLI
    * 那条路共用同一套，见 `aiApi.ts` 顶上的分工那节。
    *
    * **写出 outbox 文件之后什么状态都不发**，这跟 CLI 那条路的收尾是同一条
@@ -273,7 +275,9 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
    */
   function startApi(kind: AgentKind, scope?: AgentScope): { ok: true } | { ok: false; error: string } {
     const s = readSettings();
-    const cfg = { baseUrl: s.aiBaseUrl, apiKey: s.aiKey, model: s.aiModel };
+    // 当前选中那条记录解析成三样（地址、它的密钥、它的模型名）。没选中就是全空，
+    // 下面 `configProblem` 会如实说「接口地址还没填」。
+    const cfg = activeAi(s);
 
     // 配置有毛病就明确说是哪一格、毛病在哪。不这样的话请求会带着空 model
     // 或者一个含中文的请求头打出去，拿回一句各家措辞都不同的 400、或者 undici
@@ -386,7 +390,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
       // 'inherit' 把子进程的输出直接接到这个服务自己的控制台（启动器窗口）上。
       proc = spawnFn(invocation.command, invocation.args, { cwd: agentCwd(), stdio: 'inherit' });
     } catch (e) {
-      const message = `没能启动 AI：${(e as Error).message}`;
+      const message = `没能启动 AI：${(e as Error).message}——命令行工具路径对不对、登录着没有，都在设置「AI 拆解」那页`;
       emit({ state: 'failed', message });
       return { ok: false, error: message };
     }
@@ -434,7 +438,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
       child = null;
 
       if (code !== 0) {
-        emit({ state: 'failed', message: `AI 进程退出码 ${code}` });
+        emit({ state: 'failed', message: `AI 进程退出码 ${code}——多半是命令行工具的登录或额度问题；也可以换「调接口」那条路` });
       } else if (kind === 'board') {
         // board 的汇报不走 outbox（产物是给人看的一段文本，不是任务/建议），
         // CLI 的 stdio 又接在控制台上、服务收不到模型的回复——AI 按

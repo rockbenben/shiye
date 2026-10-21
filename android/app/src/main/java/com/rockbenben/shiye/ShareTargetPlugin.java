@@ -20,28 +20,29 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * scripts/share-target-wired.test.ts 守着，含「这个文件里一个 if 都没有」那条。
  *
  * **冷启动和热启动为什么只需要覆盖这一个回调**（读的是
- * node_modules/@capacitor/android 的源码，不是记得；行号当场数过）：
+ * node_modules/@capacitor/android 的源码，不是记得；**写符号名不写行号**：
+ * 行号跟着 @capacitor/android 的版本走，升级一次就全飘）：
  * - 热启动：manifest 里 launchMode="singleTask" ⇒ 安卓复用现有 Activity ⇒
- *   BridgeActivity.onNewIntent(197-206 行) ⇒ Bridge.onNewIntent(1300-1307 行)
- *   逐个插件调 handleOnNewIntent(1301-1303 行)。
+ *   `BridgeActivity.onNewIntent()` ⇒ `Bridge.onNewIntent()` 逐个插件调
+ *   `plugin.getInstance().handleOnNewIntent()`。
  * - 冷启动：BridgeActivity.load() 建完 bridge 之后，**最后一句就是
- *   `this.onNewIntent(getIntent())`**（BridgeActivity.java:51）⇒ 同一个回调。
+ *   `this.onNewIntent(getIntent())`**（`BridgeActivity.load()` 的最后一句）⇒
+ *   同一个回调。
  * ⚠️ **所以千万别再在 Plugin.load() 里发一次**：那样冷启动会发两遍，而
  * 「同一次分享只存一条」就得靠去重——那是判断，只能在网页层，等于凭空造出
  * 一个问题还把它塞进测不了的这一半。
  *
  * **不判空**：BridgeActivity.onNewIntent 里已经有
- * `if (this.bridge == null || intent == null) return;`（201 行），
+ * `if (this.bridge == null || intent == null) return;` 那句，
  * 这里永远拿不到 null。多判一次就是把一个不会发生的分支写进测不了的代码。
  *
  * **notifyListeners 第三个参数 true = retainUntilConsumed**：冷启动时这个
  * 回调跑在 WebView 加载 JS **之前**，那一刻一个监听者都没有。
- * Plugin.java:661-683 在没有监听者时（:664）把 data 追加进
- * retainedEventArguments（:666-675），false 的话那一支直接 return（:676）、
- * 事件就没了。补发在 sendRetainedArgumentsForEvent（:712-724）：**先
- * remove（:719）再遍历补发（:721-723），所以只消费一次，WebView 重载不会重放**；
- * 它唯一的调用点是 addEventListener（:627-640）里 listeners 为 null/空的那一支
- * （:636），也就是**第一个**监听者注册的那一刻。
+ * `Plugin.notifyListeners(eventName, data, true)` 在没有监听者时把 data 追加进
+ * retainedEventArguments，false 的话那一支直接 return、事件就没了。补发在
+ * `sendRetainedArgumentsForEvent()`：**先 remove 再遍历补发，所以只消费一次，
+ * WebView 重载不会重放**；它唯一的调用点是 `addEventListener()` 里 listeners
+ * 为 null/空的那一支，也就是**第一个**监听者注册的那一刻。
  * ⚠️ 以上全部来自读源码，**不是真机验过的**——真机那半见
  * android/冒烟清单.md 第 10b 步。
  *
@@ -54,7 +55,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * 那一刻才炸。MainActivity 本来就是 Java，挨着放，零构建改动。
  * 设计正本要的是「自写最小插件、原生那半零判断」，语言不是那句话的内容。
  *
- * 键为 null 时 JSObject.put(String,String)（JSObject.java:154-159）直接转
+ * 键为 null 时 `JSObject.put(String,String)` 直接转
  * org.json.JSONObject.put(String,Object)，**那个键被移除**，所以网页那边收到的
  * 是「键缺席」——SharePayload 四个字段全可选就是这么来的。
  */

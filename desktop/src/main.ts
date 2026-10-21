@@ -293,7 +293,7 @@ function createWindow(healthy: boolean, openHidden: boolean): void {
   // 紧跟着 createTray / subscribeReminders，通知点击要靠 mainWindow 已经在那儿
   // 才派得出 'desktop-open-task'；藏在托盘里的窗口和露出来的窗口是同一条路。
   mainWindow = new BrowserWindow({
-    // **窗口位置/大小记忆**（Electron 45 新增的 `windowStatePersistence`）：
+    // **窗口位置/大小记忆**（`windowStatePersistence`，Electron 44 起就有的）：
     // 用户把窗口挪到另一块屏、或者拉大拉小之后，下次开应用还在原处。
     // 这对「一个常驻托盘、每天要开很多次」的工具是实打实的小体贴——每次都被
     // 甩回屏幕正中是件很烦人的事。

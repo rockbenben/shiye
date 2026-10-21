@@ -267,7 +267,7 @@ win:
     #     RMDir /r $INSTDIR              ; 退出后再删一遍
     #
     # **没有「已经解压过就复用」这回事**——`unpackDirName` 只决定那个临时目录
-    # 叫什么名字，不决定复不复用（NsisTarget.js:246 只把它填进 UNPACK_DIR_NAME）。
+    # 叫什么名字，不决定复不复用（`NsisTarget.js` 里只把它填进 UNPACK_DIR_NAME）。
     # 于是每一次双击都是：删 375 MB → 重解压 1954 个文件 → 跑 → 再删 375 MB。
     # 本机实测：点下去到窗口出来 **48 秒**，同一份 win-unpacked 直接跑是 **0.9 秒**。
     # 更糟的是模板顶上那句 `SetSilent silent`（没配 splashImage 时就是它），这

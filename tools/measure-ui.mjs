@@ -1,5 +1,5 @@
 // 无头 Chrome + CDP 量测夹具。零依赖：Node 22+ 自带 WebSocket。
-// 用法：node shot.mjs <url> <outDir> <w1xh1> <w2xh2> ...
+// 用法：node measure-ui.mjs <url> <outDir> <w1xh1> <w2xh2> ...
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 const [, , url, outDir, ...sizes] = process.argv;

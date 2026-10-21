@@ -39,7 +39,8 @@ export interface SubscribeOptions {
 
 /**
  * 手写而不是用 `EventSource`：Node 的全局 `EventSource` 到现在（写这段代码时
- * 用 `node -p process.version` 核过是 v24）还锁在 `--experimental-eventsource`
+ * 用 `node -p process.version` 核过是 v24，2026-10-21 又在 v26.12.0 上核过一遍、
+ * 结论一样）还锁在 `--experimental-eventsource`
  * 标志后面，没有它 `typeof EventSource === 'undefined'`。写这段时的沙盒环境
  * 起不了真的 Electron GUI（`node_modules/electron/dist` 没下载），没法实测
  * Electron 的主进程到底带没带这个标志、`NODE_OPTIONS` 那条路在打包后的

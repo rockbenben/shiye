@@ -135,7 +135,8 @@ export async function startServer(o: StartOptions): Promise<ChildHandle | null> 
       ELECTRON_RUN_AS_NODE: '1',
     },
     // 默认的 'pipe' 没人读的话，子进程写满缓冲区就会阻塞——server/src/expand.ts
-    // 82-87 行记录过同一件事：孙进程 claude 用 stdio:'inherit' spawn，写的东西
+    // 里 spawn 那个 AI CLI 的地方记录过同一件事：孙进程 claude 用
+    // stdio:'inherit' spawn，写的东西
     // 直接进了这条没人排空的管道，十分钟后被超时杀掉。'inherit' 跟 expand.ts
     // 用同一个先例：打包后 GUI 进程没有控制台，写到无效句柄不阻塞；开发模式下
     // 还能在终端看到服务自己的输出。

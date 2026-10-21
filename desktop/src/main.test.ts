@@ -429,7 +429,7 @@ describe('main.ts 真行为：应用已经在跑时收到的 second-instance', (
     expect(script).toContain("'desktop-open-task'");
   });
 
-  // Electron 45 新增的窗口状态记忆。**必须有唯一的 `name` 才生效**（官方原话：
+  // Electron 44 起就有的窗口状态记忆。**必须有唯一的 `name` 才生效**（官方原话：
   // 「Has no effect if window `name` is not provided」）——只写
   // windowStatePersistence 而没有 name，那一项是白写的。
   //

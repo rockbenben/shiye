@@ -82,7 +82,8 @@ describe('startServer：起一个新的', () => {
   });
 
   // 默认的 'pipe' 没人读的话，子进程写满缓冲区就会阻塞——server/src/expand.ts
-  // 82-87 行记录过同一件事：孙进程 claude 直接往这条没人排空的管道里写，
+  // 里 spawn 那个 AI CLI 的地方记录过同一件事：孙进程 claude 直接往这条
+  // 没人排空的管道里写，
   // 十分钟后被超时杀掉。ChildHandle 不暴露 child，调用方压根读不到这条管道，
   // 唯一安全的选择是 'inherit'（跟 expand.ts 同一个先例）。
   it("stdio 是 'inherit'，不是默认的 'pipe'——没人读的管道会把服务写阻塞、十分钟后超时", async () => {

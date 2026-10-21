@@ -1985,8 +1985,8 @@ export function App() {
     },
   };
 
-  // 七个 TaskGrid（search/upcoming/kanban/quadrant/all/done/scoped）+
-  // CalendarView 共用的接线。分开写的话，以后改一处回调要记得改每一处——
+  // 所有走 TaskGrid 的去处、加上 CalendarView，共用的接线。分开写的话，以后
+  // 改一处回调要记得改每一处——
   // 而漏掉的那一处不会有任何东西报错，只会在某一个视图上静默失灵，这也是
   // 为什么批量操作的 selection/onSelectionChange/editRequestId/
   // onEditRequestHandled 这四个字段也放在这一份共用对象里，不是每个视图
@@ -2056,7 +2056,9 @@ export function App() {
   const preRead = readHint(tasksLoaded, tasksFailed);
   const noTasksNote = preRead ?? EMPTY_NO_TASKS;
 
-  /** 上面那一份，加上只有网格才有的四个（选中、'E' 键的落点）。 */
+  /** 上面那一份，加上只有网格才有的那些——批量选中的四个字段
+   *  （selection/onSelectionChange/editRequestId/onEditRequestHandled），还有
+   *  点开详情那三个（onOpenDetail/openDetailId/linger）。 */
   const gridWiring = {
     ...cardWiring,
     // 刚勾完的那几条先别移走，见 startLinger。挂在 gridWiring 上而不是逐个

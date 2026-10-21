@@ -1450,7 +1450,8 @@ describe('App：看板 / 四象限两个视图接进导航', () => {
       // section 仍然是 .ink-cells-2x2 的后代（只是少了中间那层 .ink-cells），
       // 下面那些查询照样命中、这条测试照样绿——所以必须单独断言 .ink-cells 在。
       // 定向复审实测：拿掉四象限的 layout，54 条里只有「都做完/搁置了」那条
-      // 巧合红，这条正常路径全绿。看板那边补过同款断言（:280），四象限漏了。
+      // 巧合红，这条正常路径全绿。看板那边补过同款断言（「切到看板，四列都在…」
+      // 那条），四象限漏了。
       expect(panel.querySelector('.ink-cells')).not.toBeNull();
       const handle = hoverAndGetHandle(panel);
       // QUADRANT_KEYS 顺序：imp-urg / imp-later / min-urg / min-later——这条
@@ -1883,7 +1884,7 @@ describe('App：日历接进导航', () => {
       });
       expect(within(grid as HTMLElement).getByText('今天要做的事')).toBeTruthy();
       // 修复轮 1 · C-1（跟看板/四象限同一个理由、同一个形状）：`TaskGrid.tsx`
-      // 273 行的容器 class 是按 `density === 'row'` 二选一（`.ink-row-list`/
+      // 里那个容器 class 是按 `density === 'row'` 二选一（`.ink-row-list`/
       // `.ink-card-grid`），不是同一个容器换里面渲染的内容——`density="row"`
       // 被删掉之后容器整个变成 `.ink-card-grid`，上面那个
       // `waitFor(() => panel.querySelector('.ink-row-list'))` 会直接超时，
@@ -1916,7 +1917,8 @@ describe('App：日历接进导航', () => {
   // CalendarView.tsx 里 `editing.has(t.id) ||` 那半句，62/62 照样全绿。这条
   // 补真正的契约：正在编辑的卡被另一个客户端把 due 改到别的日子，当天列表
   // 重算不该把编辑框连同草稿一起摘掉——跟 Task 1 刚为四象限修的是同一类
-  // 数据丢失（377 行那条）。写法照抄那一条：改 currentTasks → SSE
+  // 数据丢失（四象限那条「草稿还在」的用例）。写法照抄那一条：改
+  // currentTasks → SSE
   // data-changed('tasks') → 等一个中性信号 → 断言草稿还在，不能在更新落地
   // 之前就断言（那样测不出问题，那条测试上面有整段注释讲这个坑）。
   it('当天列表：正在编辑的卡被（另一个客户端）把 due 改到别的日子，卡还在、草稿还在——不然编辑框会连草稿一起从当天列表消失', async () => {
@@ -1957,7 +1959,7 @@ describe('App：日历接进导航', () => {
 
       // 中性信号：等更新真的落地，不能直接断言输入框还在——act() 一返回
       // 那一刻 reload() 多半还没跑完，此时输入框当然还在、值当然没变，会
-      // 在更新真的发生之前就通过，测不出问题（跟 377 行那条同一个坑）。用
+      // 在更新真的发生之前就通过，测不出问题（跟四象限那条同一个坑）。用
       // 「今天格子里这张卡的截断标题」当中性信号：due 真的挪走了，8/16
       // 这一格不会再有它——这件事跟正在验证的「草稿还在」完全无关，不会
       // 跟被测的那半段代码自我印证。
@@ -1987,7 +1989,8 @@ describe('App：日历接进导航', () => {
   // final-review.md「日历/今天/按来源三处没接选中」：日历这一处的当天列表
   // 就是一个 TaskGrid（跟全部/看板/四象限……同一个组件），`gridWiring` 也
   // 确实把 selection/onSelectionChange/editRequestId/onEditRequestHandled
-  // 四个字段传给了 CalendarView（App.tsx 493 行前后），只是以前 CalendarView
+  // 四个字段传给了 CalendarView（App.tsx 里那份 `gridWiring`，CalendarView
+  // 的 `Props extends GridWiring`），只是以前 CalendarView
   // 自己的 `Props` 没声明它们，被 TypeScript 的 spread 规则静默丢掉——卡片
   // 长得跟别处一模一样但点不了。这条测试守住「现在接上了」：Ctrl 点当天
   // 列表里的卡片，选中标记要出现，跟全部/看板那些视图行为一致。
@@ -2119,8 +2122,9 @@ describe('App：日历接进导航', () => {
         fcDragEvent(eventEl, srcIdx, targetIdx);
 
         // 不用 toHaveBeenCalledTimes(1)：`api.patchTask` 这个 mock 的调用
-        // 历史是整个文件共用的、beforeEach 不清空（只有 3078 行那个专门的
-        // describe 块自己清），跑到这条测试时已经带着前面用例攒下的调用
+        // 历史是整个文件共用的、beforeEach 不清空（只有「批量操作接线」那个
+        // describe 自己带一个 beforeEach 清），跑到这条测试时已经带着前面用例
+        // 攒下的调用
         // 记录——原来那条测试用的是 toHaveBeenCalledWith（只要历史里存在
         // 一条匹配的调用就算过，不管总数），这里延续同一个约定，不引入
         // 对总调用数的假设。
@@ -2903,7 +2907,7 @@ describe('App：新建任务时 TaskDraft 的字段不能被 App.tsx 手挑漏�
   // 查询全部限定在 composer 卡片这个小子树里（.ink-task-composer），不用
   // 不加范围的 screen.getByRole——App 常驻挂载今天/按来源/收件箱/回顾/垃圾箱
   // 好几个视图，未限定范围的可访问性查询要对全树候选元素逐个算可访问名，
-  // 见本文件 108 行 navButton 上面那段注释同样的教训。
+  // 见本文件 navButton 那个 helper 上面那段注释同样的教训。
   //
   // listId 是 Task 3 补的第三个字段——同一条根因，同一种测法：组件级的
   // TaskComposer.test.tsx 只断言到被 mock 的 onCreate prop 收到了 listId，
@@ -3762,7 +3766,7 @@ describe('App：密度开关（task-2-brief）——只在「可切」的几个�
     // `Date.now()` 是同一件事的另一个拼法。
     //
     // 只 fake `Date`：整套 fake timers 会饿死 `waitFor`/`findByRole` 的轮询
-    // 和 hashchange，这个仓库踩过（见 619 行上面那段注释）。
+    // 和 hashchange，这个仓库踩过（见「日历接进导航」那组里 fake timers 那段注释）。
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 7, 16, 9, 0, 0));
 

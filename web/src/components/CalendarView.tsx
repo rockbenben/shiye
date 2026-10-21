@@ -360,12 +360,12 @@ export function CalendarView({ tasks, countdowns, prefs, onPrefs, onComposeOn, o
     return () => d.destroy();
   }, [prefs.showSchedule]);
 
-  // 三档里正文是哪个组件：月是 CalendarGrid 自己的 42 格网格（不用 children，
+  // 各档里正文是哪个组件：月是 CalendarGrid 自己的 42 格网格（不用 children，
   // 见 CalendarGrid.tsx 的注释），周/日公用同一个 CalendarFull（task-6：
   // 手写的 CalendarHours 退役，周/日换成 FullCalendar 的 timeGridWeek/
   // timeGridDay——它自己按 `days.length` 认列数，不认 `CalMode`，见
   // CalendarFull.tsx 顶部注释）。逐档列出、不写两路三元，最后一支交给
-  // assertExhaustiveMode——新增第四档漏改这里会直接编译不过，见 calendar.ts
+  // assertExhaustiveMode——新增一档漏改这里会直接编译不过，见 calendar.ts
   // 里这个函数的文档注释。「周/日点小时格该干什么」这里选的是：跟月格点
   // 某一天一致，点表头/全天带/小时格/「+N」都选中那一天（`CalendarFull` 的
   // `onSelectDay`）——跟 `CalendarGrid` 的 `onSelectDay` 是同一个 setter，
@@ -566,10 +566,11 @@ export function CalendarView({ tasks, countdowns, prefs, onPrefs, onComposeOn, o
 
       {/* 「在这天新建」（仿滴答清单：在日历上点一天就能往那天加一条）。
           在这之前，日历上看出「周四空着」之后想往那天加一件事，得离开日历、
-          去顶上开「新任务」、再自己把日期挑成周四——而那个日期你刚刚就是在
+          离开日历去加一行任务、再自己把日期挑成周四——而那个日期你刚刚就是在
           日历上点出来的。
           **只是把日期带过去，不另开一个表单**：建任务这件事全应用只有一个
-          入口（顶上那个「新任务」），在这儿再摆一份输入框等于第二份表单，
+          入口（加任务那一行右端那颗 ⌄，以及 `C` 键／命令面板里那条），
+          在这儿再摆一份输入框等于第二份表单，
           两份迟早在字段上长歪。 */}
       {selectedKey && onComposeOn && (() => {
         // 刚点过某个小时格就报那个整点；只点了某天（月格、或者周视图的表头）

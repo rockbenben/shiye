@@ -81,7 +81,7 @@ export const theme: ThemeConfig = {
      * 算出来的数，65% 那一档根本算不出这个值。
      *
      * 这是上一轮修 `--dim` 时漏掉的一整条通道：那次量的是默认态的几屏，而这
-     * 7 处 `type="secondary"` 全在设置弹层里——一个要点开才看得见的瞬时态。
+     * 那些 `type="secondary"` 全在设置弹层里——一个要点开才看得见的瞬时态。
      *
      * `colorTextSecondary` 一并压：antd 的 Menu 次要项、`Descriptions` 的 label
      * 那几处读的是它。它默认压线过（≈4.6），压下来是防着谁把它再调浅。

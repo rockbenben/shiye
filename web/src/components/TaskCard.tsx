@@ -780,8 +780,8 @@ export function TaskCardImpl({
       // 时才挂这个处理器——不给的话今天的行为一个字不变，见 CardProps.select
       // 的注释。
       onClick={select ? (e) => {
-        // 编辑态整张卡是个表单，别在上面选中——跟 onPointerDown 顶部同一条
-        // 判断（197 行）。
+        // 编辑态整张卡是个表单，别在上面选中——跟 onPointerDown 顶部那道
+        // `if (draft) return;` 同一条判断。
         if (draft) return;
         // 点在按钮/链接/输入框（含勾选框自己）上不算——那些地方点一下是要
         // 点它们，不该顺手选中整张卡。勾选框走的是它自己独立的 onChange

@@ -119,8 +119,8 @@ export function keyAction(e: KeyLike): KeyAction | null {
  * 不重开第二份选择器**——见 task-2-brief「Step 1: 先读」。
  *
  * contenteditable 用属性选择器 `[contenteditable]:not([contenteditable="false"])`
- * 不用 `target.isContentEditable`：jsdom 29 没实现这个 DOM 属性（实测），用它
- * 会让测试里现造的 contenteditable 节点永远判 false。
+ * 不用 `target.isContentEditable`：jsdom 29、30 都没实现这个 DOM 属性（都实测
+ * 过），用它会让测试里现造的 contenteditable 节点永远判 false。
  */
 export function isInteractiveTarget(target: EventTarget | null, extra = ''): boolean {
   // `select` 也算「在打字」：原生下拉框展开时按字母是首字母定位（type-ahead），

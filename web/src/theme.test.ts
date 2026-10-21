@@ -92,7 +92,7 @@ describe('调色板：theme.ts 和 theme.css 是同一批值', () => {
  * 标题（12px）只有 2.77:1。
  *
  * 上一轮修 ink.dim 时漏掉了这一整条通道，因为那次量的是默认态的几屏，而这
- * 7 处 type="secondary" 全在设置弹层里——一个要点开才看得见的瞬时态。
+ * 那些 type="secondary" 全在设置弹层里——一个要点开才看得见的瞬时态。
  *
  * 走 getDesignToken 真实派生一遍，测的是 antd 实际会用来渲染的那个值，不是
  * 我们以为自己设了什么。
@@ -107,7 +107,7 @@ describe('antd 的次要文字色：派生出来的那个值也过 AA', () => {
    * `color: token.colorTextDescription`。
    *
    * 两个默认值也不一样：secondary 是 65% 墨（≈4.6，勉强过），description 是
-   * 45%（2.71，不过）。所以只压 `colorTextSecondary` 是治不了那 7 处的——
+   * 45%（2.71，不过）。所以只压 `colorTextSecondary` 是治不了那几处的——
    * 这条注释存在的意义就是别让下一个人白改一遍。
    */
   it('colorTextDescription 过 4.5——Typography type="secondary" 真正读的是它', () => {

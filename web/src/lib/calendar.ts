@@ -104,22 +104,23 @@ export const CAL_MODE_KEY: Record<CalMode, string> = {
   day: 'D', week: 'W', month: 'M', year: 'Y', agenda: 'A',
 };
 
-/** 穷举检查：给 `CalMode` 收尾用。任何要对三档分别产出不同结果的地方（标题
+/** 穷举检查：给 `CalMode` 收尾用。任何要对**各档**分别产出不同结果的地方（标题
  *  文案、哪个组件当正文……），写成 `if (mode === 'month') {…} else if (mode
- *  === 'week') {…} else if (mode === 'day') {…} else { return
- *  assertExhaustiveMode(mode); }`——最后这一支正常情况下走不到，`mode` 在
- *  这里的类型已经被收窄成 `never`。新增第四档 `CalMode` 字面量之后，任何
+ *  === 'week') {…} … else { return assertExhaustiveMode(mode); }` 这种形状——
+ *  每一档都单独列，最后这一支正常情况下走不到，`mode` 在
+ *  这里的类型已经被收窄成 `never`。**新增一档 `CalMode` 字面量之后**，任何
  *  忘了加对应分支的地方，最后这一支的 `mode` 类型不再是 `never`，
  *  `assertExhaustiveMode(mode)` 这一行会直接编译报错——不用等到运行时或
  *  测试才发现「漏了一档」。跟两路三元（`mode === 'month' ? A : B`）不一样：
- *  三元不会因为漏了第三档而报错，只会把新档静默并进 B，这正是 task-3-brief
+ *  三元不会因为漏了**一档**而报错，只会把新档静默并进 B，这正是 task-3-brief
  *  点名要躲开的坑。 */
 export function assertExhaustiveMode(mode: never): never {
   throw new Error(`CalMode 没有穷举完：${String(mode)}`);
 }
 
 /** 一个格子最多摆几行标题/几条任务块，摆不下的收进「还有 N 条」/「+N」。
- *  月格（`CalendarGrid.tsx`）和小时格（`CalendarHours.tsx`）共用这一个数——
+ *  月格（`CalendarGrid.tsx`）和小时格（现在是 `CalendarFull.tsx`，手写的
+ *  `CalendarHours` 已退役）共用这一个数——
  *  以前这个常量只在 `CalendarGrid.tsx` 里私有定义，小时格照抄一份的话就是
  *  总账第 119 条「同一个算式被复制了一份到另一个组件、测试没跟过去」那个
  *  坑的下一次发作，所以提到这个数据层，两边都从这里 import。 */
@@ -260,12 +261,12 @@ export function isoWeek(d: Date): number {
 export function calendarDays(tasks: Task[], anchor: Date, mode: CalMode, opts: CalendarOpts = {}): CalDay[] {
   const monthStart = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
   const anchorMonth = monthStart.getMonth();
-  // 三档各自的起点/天数——特意不写成两路三元（`mode === 'month' ? A : B`），
-  // 那种写法会把新加的 'day' 悄悄并进 else 分支（当成周视图）。三档 if/else if
+  // 各档各自的起点/天数——特意不写成两路三元（`mode === 'month' ? A : B`），
+  // 那种写法会把新加的 'day' 悄悄并进 else 分支（当成周视图）。各档 if/else if
   // 逐个列出，最后一支交给 assertExhaustiveMode——Task 3 修复轮 1 · I-2 指出
-  // 这里之前虽然逐档列出了，但落到最后那个普通 `else`，新增第四档照样会
+  // 这里之前虽然逐档列出了，但落到最后那个普通 `else`，新增一档照样会
   // 静默落进「当 1 天」这一支，编译器不会拦；这个函数决定「显示哪些天」，
-  // 是三档穷举里权重最高的两处之一（另一处是下面 shiftAnchor），穷举保护
+  // 是各档穷举里权重最高的两处之一（另一处是下面 shiftAnchor），穷举保护
   // 只挂在 headingText/calendarBody 那两个「文案/正文」的地方却漏了这两个
   // 「数据」的地方，等于把界面上最容易看见的两处焊死了，最容易出问题的
   // 两处却没焊——这条改完之后才是真的全仓统一。
@@ -405,10 +406,11 @@ export function calendarDays(tasks: Task[], anchor: Date, mode: CalMode, opts: C
   return days;
 }
 
-/** 上一页/下一页的锚点：month 加减一个月，week 加减七天，day 加减一天。
- *  三档 if 逐个列出、最后一支交给 assertExhaustiveMode——Task 3 修复轮 1 ·
+/** 上一页/下一页的锚点：month 加减一个月，week 加减七天，day 加减一天，
+ *  year 加减一年，agenda 跟月同一步长。
+ *  各档 if 逐个列出、最后一支交给 assertExhaustiveMode——Task 3 修复轮 1 ·
  *  I-2：改之前这里最后是「落穿到月」的普通 else（`month` 分支写在最后、
- *  没有专属的 `if (mode === 'month')`），新增第四档会静默按月翻页，这条
+ *  没有专属的 `if (mode === 'month')`），新增一档会静默按月翻页，这条
  *  函数决定翻页翻多远，出错比标题文案错更容易造成实际的数据操作误会
  *  （翻到了不是自己以为的那一天/那一周/那一月）。 */
 export function shiftAnchor(anchor: Date, mode: CalMode, delta: -1 | 1): Date {

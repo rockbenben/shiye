@@ -12,15 +12,16 @@ interface Props {
   selectedKey: string | null;
   onSelectDay: (key: string) => void;
   onShift: (delta: -1 | 1) => void;
-  /** 回到今天所在的那一页。三档共用一个动作，不用按 mode 分——锚点设回
+  /** 回到今天所在的那一页。各档共用一个动作，不用按 mode 分——锚点设回
    *  `now`，该显示哪一页由 `mode` 自己算（`CalendarView` 里 days 是从
    *  anchor + mode 派生的）。翻走之后唯一的退路以前是切到别的视图再切回来
    *  （calendar 不在 keepMounted 名单里，重挂时 anchor 会重置成 now），
    *  那条路径没有任何可见的入口。 */
   onToday: () => void;
   onModeChange: (m: CalMode) => void;
-  /** 周/日视图的正文（`CalendarHours`）——这个组件只管三档共用的导航行
-   *  （翻页/三个模式按钮/标题）和月视图自己的 42 格网格，不认识
+  /** 周/日视图的正文（现在是 `CalendarFull`，手写的 `CalendarHours` 已退役）
+   *  ——这个组件只管各档共用的导航行（翻页/模式选择/标题）和月视图自己的
+   *  42 格网格，不认识
    *  `CalendarHours`，也不需要认识：认了就得跟着接 `onDropOnSlot`/
    *  `onSelectDay` 这两个跟月格毫不相干的 prop（`onSelectDay` 这个名字
    *  跟月格自己那个 `onSelectDay` prop 重名，但各是各的——月格的挂在
@@ -30,7 +31,7 @@ interface Props {
    *  （`CalendarHours` 自己按 `days.length` 认列数，不认 `CalMode`），
    *  调用方（`CalendarView`）算好了直接整块传进来，见下面渲染那句
    *  `mode === 'month' ? … : children`——这半是安全的两路三元：不是把
-   *  三档人为拆成两支，是「月有自己的正文，另外两档公用调用方给的正文」
+   *  各档人为拆成两支，是「月有自己的正文，另外几档公用调用方给的正文」
    *  这件事本身就只有两种可能，`CalendarView` 那边算 `children` 用的才是
    *  真正需要穷举三档的地方（见 assertExhaustiveMode）。 */
   children?: ReactNode;

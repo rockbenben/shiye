@@ -15,6 +15,13 @@ import { join } from 'node:path';
  *
  * 改成写符号名（`store.ts 的 aiSeesSameData()`、`app.ts 里 beat 那个 setInterval`）
  * ——符号被改名时 grep 得到，被删掉时也找得到，而行号两样都做不到。
+ *
+ * ⚠️ **这条守卫只看得见「文件名 + 冒号 + 数字」那一种形状。**「第 190 行」、
+ * 「App.tsx 493 行前后」这类中文写法它看不见——而后者一样会飘（实测：App.tsx
+ * 从五百来行长到四千多行之后，那条「493 行前后」指着的地方早换了代码）。
+ * 那几种靠人扫：2026-10-21 那次全量审计就是逐条挑出来的，判据是**这个行号
+ * 指的是不是本仓库里现在还存在的文件**——指向已删、已退役的文件（手写的
+ * `CalendarHours.tsx` 那类）算历史引文，不动。
  */
 
 // **`release` 必须在里面。** `desktop/release/` 是 electron-builder 的产物、
@@ -50,7 +57,12 @@ describe('注释里不写行号引用——行号会飘，符号名不会', () =
     // `desktop/electron-builder.yml` 里当时正躺着一条 `server/src/index.ts:16`，
     // 守卫全绿。工具脚本、配置和 md 里的行号一样会飘，一样会把人指错地方。
     // `desktop` 已经涵盖 `desktop/src`，两个都列会把桌面端源码扫两遍、报两遍。
-    for (const dir of ['web/src', 'server/src', 'tools', 'scripts', 'desktop', 'android']) {
+    //
+    // **根目录那三份 md 也算在「全仓库」里**（README / AGENTS / CONTRIBUTING），
+    // 加上 `workflows/`（那四份工作流正本是给 AI 看的）、`.claude/` 和 `brand/`。
+    // ⚠️ **`.github/` 不在名单里**：release.yml 里那两条 `src/github.ts:688` 指的是
+    // 上游 action 自己的源码（SHA 钉死了），不是这个仓库的文件——扫进来会假红。
+    for (const dir of ['web/src', 'server/src', 'tools', 'scripts', 'desktop', 'android', 'workflows', '.claude', 'brand']) {
       if (!existsSync(dir)) continue;
       for (const file of walk(dir)) {
         // 跳过自己：这个文件的用例名和注释里就写着 `xxx.ts:123` 当例子。
@@ -59,6 +71,13 @@ describe('注释里不写行号引用——行号会飘，符号名不会', () =
           for (const m of line.match(re) ?? []) bad.push(`${file}:${i + 1}  ${m}`);
         });
       }
+    }
+    // 根目录那三份：目录名写不出来，只能按文件名列。
+    for (const name of ['README.md', 'AGENTS.md', 'CONTRIBUTING.md']) {
+      if (!existsSync(name)) continue;
+      readFileSync(name, 'utf8').split(/\r?\n/).forEach((line, i) => {
+        for (const m of line.match(re) ?? []) bad.push(`${name}:${i + 1}  ${m}`);
+      });
     }
     expect(bad, `这几处写了行号，改成符号名：\n${bad.join('\n')}`).toEqual([]);
   });

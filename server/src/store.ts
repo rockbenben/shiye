@@ -253,7 +253,9 @@ export const writeTrash = (v: TrashItem[]): void => syncAll(paths().trash, v);
  *
  * 而且那半的代价比这半大得多：打包版的 `dataDir` 是从 `userData` 推出来的
  * （`desktop/src/paths.ts` 的 `resolvePaths()`），所以跟着改的不只是设置，是**整份
- * 任务数据**。`main.ts` 里的 `migrateLegacyUserData()` 就是为此补的一次搬家。
+ * 任务数据**。**而这里没有跟着代码走的搬家**——桌面端明确不做「把旧目录的数据搬
+ * 过来」那一步（`desktop/src/main.ts` 里那段「这里刻意没有…」写了四条理由），
+ * 下一段接着说为什么。
  *
  * 名字的来历：先是 `'035-todo'`（照抄仓库目录名），「待办 → 办事师爷」那次跟着
  * 改成 `'035-shiye'`，然后拿掉了 `035-` 这个序号前缀——那是 365 计划的编号，

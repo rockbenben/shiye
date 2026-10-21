@@ -131,9 +131,16 @@ describe('watchData', () => {
     // **`realpathSync.native` 不能省。** `os.tmpdir()` 在 Windows 上给的是 8.3
     // 短路径（本机是 `C:\Users\ADMINI~1\…`，GitHub runner 上同理），而
     // `ReadDirectoryChangesW` 回报的是长路径——libuv 拿两者做前缀比对，对不上
-    // 就是 `src\win\fs-event.c` 第 72 行那条 `assert(!_wcsnicmp(filename, dir,
-    // dirlen))`，**进程当场 abort**：没有 JS 异常、没有退出码，`watcher.on('error')`
-    // 也接不到（那是 JS 层的事件，不是 native 崩溃）。
+    // 就是那条 `assert(!_wcsnicmp(filename, dir, dirlen))`（libuv 的
+    // `deps/uv/src/win/fs-event.c`），**进程当场 abort**：没有 JS 异常、没有退出码，
+    // `watcher.on('error')` 也接不到（那是 JS 层的事件，不是 native 崩溃）。
+    //
+    // ⚠️ **Node 26 把那条断言改了**（2026-10-21 核过 v26.12.0 的源码）：同一个
+    // 文件里 `uv__relative_path()` 不再 assert，对不上就**返回 -1**，调用方回落成
+    // 「用 ReadDirectoryChangesW 给的那个名字」（上游注释原话：short name vs long
+    // name mismatch）。所以「进程当场 abort」是 **Node ≤ 24 的行为**——26 上不崩了，
+    // 但短路径照样是坑（报出来的是短名）。**这行 `realpathSync.native` 照留**：
+    // 长路径前缀比对必然成立，报出来的名字也是长的，两个版本都占。
     //
     // CI 为这条连红五次，每次都是 `[vitest-pool]: Worker exited unexpectedly` +
     // 168/169 个文件通过 + 零失败用例。本机同样是短路径却不崩，所以这个洞在这台

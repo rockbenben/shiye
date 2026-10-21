@@ -15,7 +15,7 @@
  * Vite 把 `node:url` externalize 成浏览器里的空壳，于是打包出来的网页**一加载
  * 就抛 `TypeError: fileURLToPath is not a function`，React 根本没 mount——整页
  * 白屏**。而 `npm test` 跑在 node 里（那个函数真实存在）、typecheck 和 build
- * 都不执行这一行，四千多条测试全绿。
+ * 都不执行这一行，全套测试全绿。
  *
  * **所以规矩是：凡是网页也要用的东西，放这儿；碰 `node:` 的放 `store.ts`。**
  * 这条规矩由 `webBundle.guard.test.ts` 机械盯着——它从 `web/src` 出发沿值导入
@@ -247,10 +247,13 @@ export interface Task {
    *   四象限排除、到期那天进「今天」。
    * - **滴答的「时间段」**（《任务详情与编辑》）是**开始时刻 +
    *   结束时刻**，画成日历上一个有高度的块，还能单独设「结束时」提醒。它
-   *   **不隐藏任何东西**。这个应用没有结束时刻，日历落格也只看 `due`
-   *   （`web/src/lib/calendar.ts`），`.ics` 导出同样不带它（`server/src/ics.ts`）
-   *   ——那个功能这里根本不存在。把两者认成一件事，等于拿一个没实现的功能
-   *   给一个实现了的行为背书。
+   *   **不隐藏任何东西**。本应用里对应的是 `startAt` + `endAt` 这一对——`endAt`
+   *   那个字段的说明在下面。日历按**时间段的起点**落格（`hasTimeBlock()` 成立
+   *   时走 `startAt`，否则照旧看 `due`，判据是 `web/src/lib/calendar.ts` 的
+   *   `calendarAnchor()`）；`.ics` 导出里 DTSTART 仍然锚在 `due`，但 `endAt`
+   *   晚于 `due` 时会补一个 DTEND（`server/src/ics.ts`）。**「单独设结束时提醒」
+   *   那一半没有**：服务端不会因为 `endAt` 多发一条提醒——所以把滴答的「时间段」
+   *   整个当成同一个东西仍然不成立，差的正是这一半。
    *
    * **跟 `due` 是两件事**：`due` 决定过不过期、进不进「今天」（对应 "End No
    * Later Than"）；`startAt` 决定「在这之前别烦我」。

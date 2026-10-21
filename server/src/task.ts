@@ -5,8 +5,10 @@ import type { FocusSession, Reminder, Repeat, Status, Subtask, Task, TaskContext
 import { HABIT_EVERY, REPEAT_KINDS } from './model.js';
 
 /**
- * 合法的 status 取值。**服务端内部只此一份**——`app.ts` 的 HTTP 路由和
- * `outbox.ts` 的合并逻辑都从这儿导入，不许各自再抄一份。
+ * 合法的 status 取值。**服务端内部只此一份**——直接 import 它的是 `import.ts`、
+ * `list.ts`、`migrate.ts`；`app.ts` 的 HTTP 路由和 `outbox.ts` 的合并逻辑不直接
+ * 碰这个数组，走的是同文件的 `checkTaskPatch()`（校验在它内部拿 `STATUSES` 判）。
+ * 不许各自再抄一份。
  *
  * `web/src/lib/taskView.ts` 里还有一份看起来一样的数组：那是没法消灭的重复，
  * server 和 web 是两个独立的包，web 引不到这边的代码，只能靠

@@ -28,7 +28,8 @@ import { fileURLToPath } from 'node:url';
 //     @capacitor/cli 都没有这个字段，天然落选，不需要维护排除名单。
 //
 // 断言落在这两个**进版本库的**生成文件上：assets/capacitor.plugins.json 是
-// android/.gitignore 第 99 行忽略掉的（每次 sync 现生成），拿它当断言对象会在
+// android/.gitignore 里那条 `app/src/main/assets/capacitor.plugins.json`
+// 忽略掉的（每次 sync 现生成），拿它当断言对象会在
 // 「刚 clone、还没 sync」时假红。这两个 gradle 文件是同一次 sync 的同一份插件清单
 // 生成的，是可提交、可断言的那一半。
 //
@@ -57,8 +58,8 @@ const plugins = [...declared]
   .filter((name) => readJson('node_modules', name, 'package.json').capacitor?.android)
   .sort();
 
-// gradle 工程名照抄 CLI 的规则（@capacitor/cli/dist/android/update.js 44–46 行的
-// getGradlePackageName），不自己另写一套拼法。
+// gradle 工程名照抄 CLI 的规则（@capacitor/cli 的 `getGradlePackageName()`），
+// 不自己另写一套拼法。
 const gradleProject = (id: string) => `:${id.replace('@', '').replace('/', '-')}`;
 
 // 一条元断言：上面那串过滤要是哪天算空了（改名、换布局），下面的 it.each 会一条都

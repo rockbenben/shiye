@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 // Windows 拿着一个它不认识的 AUMID，把 toast 直接吞掉；开发机上多半照常弹
 // （开发模式走的是另一条路），只有装过 NSIS 版的那台机器上「到点提醒我」静默失效。
 // 改包名（com.qingwhat.todo → com.rockbenben.shiye 那次）正是会把两份撞散的事件，
-// 而当时两处一个在 .yml、一个在 .ts，改漏一个 tsc 和全部 2317 条测试都不会吭声。
+// 而当时两处一个在 .yml、一个在 .ts，改漏一个 tsc 和全部测试都不会吭声。
 //
 // **只守这一条。** 安卓那边的 applicationId / package_name / custom_url_scheme
 // 跟 Electron 的 appId 恰好是同一个字符串，但那是两个平台各自的身份，没有
@@ -27,11 +27,12 @@ const read = (...parts: string[]) => readFileSync(join(repoRoot, ...parts), 'utf
 // 「注释里含有断言要找的串」，这是同一个形状，不再踩第二遍。
 //
 // 抽成函数而不是每处抄一遍那两条 `.replace`：这个文件是「身份字面量对」的登记处，
-// 现在两对、以后还会加，抄第三遍的那次必然会漏掉其中一半（漏掉块注释那条的话，
+// 现在十来对、以后还会加，抄第三遍的那次必然会漏掉其中一半（漏掉块注释那条的话，
 // 断言就会去匹配文档注释里的示例字符串，照样绿）。
 // 行注释那条的 `(^|[^:])` 不能省：不带它的话 `//` 会在 `http://localhost` 中间
 // 命中，把那一行的后半截当成注释删掉。实测 main.ts 里有两行真的被这么截过——
-// `const URL = \`http://localhost:${PORT}\`;`（L18）和 `${PROTOCOL}://`（L365）。
+// `const URL = \`http://localhost:${PORT}\`;`（`main.ts` 里那个 `const URL` 那行）
+// 和 `${PROTOCOL}://`（`main.ts` 里那行「注册协议 ${PROTOCOL}:// 失败」的报错）。
 // 现在还没造成假绿，纯粹是运气：下面三条断言要找的串恰好都在别的行上。哪天有人
 // 在含 `://` 的那一行上加一条断言、或者把字面量挪过去，这个守卫就会**静默变哑**
 // ——而它存在的全部意义就是在改名漏改时叫一声。

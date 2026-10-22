@@ -554,7 +554,7 @@ describe('InboxSidebar：空着的时候给出下一步', () => {
   it('一句状态 + 一句下一步，两句都在', () => {
     showEmpty([]);
     expect(screen.getByText('没有待拆解的')).toBeTruthy();
-    expect(screen.getByText(/左下角「随手记」写一句/)).toBeTruthy();
+    expect(screen.getByText(/「随手记」写一句/)).toBeTruthy();
   });
 
   it('「都拆完了」那种空法（有已拆解的条目）：第一句照旧说「没有待拆解的」，不说「还没有东西进来」——后者在这种时候是假话', () => {

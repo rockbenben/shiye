@@ -118,6 +118,21 @@ const IMPORT_LABELS: Record<string, string> = {
 };
 const REQUIRED_KEYS = Object.keys(IMPORT_LABELS);
 
+/**
+ * `data/` 下那八张表（不含设置）的中文名，**一份**。
+ *
+ * 「数据与服务」那段话和导入确认框里那两句原来各写了一份：那段写着「跨任务观察」
+ * 「倒数纪念日」，确认框（`IMPORT_LABELS`）写着「观察」「纪念日」——同一个面板里
+ * 同一批表两个叫法，而用户在界面上只见过「回顾」「纪念日」。数字也是各写各的
+ * （「八样」「九样」「九张表」三处）。
+ *
+ * 现在这段话和确认框都从这里派生：加一张表或者换个叫法，两处一起跟着变，
+ * 不用记得回来改第三处。
+ */
+const TABLE_LABELS = Object.entries(IMPORT_LABELS)
+  .filter(([k]) => k !== 'settings')
+  .map(([, label]) => label);
+
 export function SettingsModal({ open, value, onClose, onSave, navOptions, navModes, onNavModes, lists }: Props) {
   const { message } = AntApp.useApp();
   // 草稿跟着 value 可空——**没读到设置就没有草稿**，也就没有任何东西可以被
@@ -304,7 +319,7 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
       return (
         <>
           <p className="ink-set-lead">
-            侧栏上那几个去处。「有内容时显示」只有导航上会挂数字的那几项才选得了——没有那个数字就答不出「有没有内容」。<b>正在看的那一项不会被藏起来</b>，切走之后才生效。
+            侧栏上那几个去处。「有内容时显示」= 这一项空着的时候就不出现在导航上，只在这一项<b>能判断出空不空</b>时才给——「已完成」「垃圾箱」虽然不挂数字，但这一项答得出它们空不空，所以照样能选。<b>正在看的那一项不会被藏起来</b>，切走之后才生效。
           </p>
           {navList(NAV_GROUPS.filter((g) => !RAIL_GROUPS.includes(g)))}
         </>
@@ -343,8 +358,8 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
             }}
           />
           <Typography.Paragraph type="secondary" style={{ marginTop: 8, fontSize: 12 }}>
-            把 data/ 下的八样——任务、收件箱、清单、文件夹、AI 建议、跨任务观察、倒数纪念日、垃圾箱——连同这里的设置，一起打进一个 JSON 文件下载。
-            data/ 下现在没有 .bak 这层保险了（历史版本交给同步服务），这份导出就是自己给自己多买一层。导入是把这九样整表换回去——选一份导出文件，确认框里先看数。这份文件里的 AI 密钥是明文（换机才带得动），别把它发到聊天里。
+            把 data/ 下的 {TABLE_LABELS.length} 张表——{TABLE_LABELS.join('、')}——连同这里的设置，一起打进一个 JSON 文件下载。
+            data/ 下现在没有 .bak 这层保险了（历史版本交给同步服务），这份导出就是自己给自己多买一层。导入是把这 {REQUIRED_KEYS.length} 张表整表换回去——选一份导出文件，确认框里先看数。这份文件里的 AI 密钥是明文（换机才带得动），别把它发到聊天里。
           </Typography.Paragraph>
 
           {/* 确认框用**受控 Modal** 而不是 `Modal.confirm`：静态方法在组件树
@@ -381,7 +396,7 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
               <>
                 <p style={{ marginBottom: 8 }}>{importCountsLine(importPreview)}</p>
                 <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
-                  ① 当前九张表会被整表替换。<br />
+                  ① 当前 {REQUIRED_KEYS.length} 张表会被整表替换。<br />
                   ② 附件文件不会被恢复——换到新机器时旧任务的附件会缺。<br />
                   ③ 替换前会把现在这份存成回滚备份，带错了备份可以再把它导回去。
                 </Typography.Paragraph>
@@ -396,7 +411,7 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
       return (
         <>
           <Typography.Paragraph type="secondary" style={{ marginTop: 0, fontSize: 12 }}>
-            数据存在这个文件夹的 data/ 下（inbox/、tasks/、proposals/ 三个目录，一条记录一个文件）。AI 不直接改这些文件，只写 outbox-*.json，服务发现后自动合并进去再删掉它——所以 data/ 下偶尔会看到一闪而过的 outbox-*.json，是正常现象。这里的设置（webhook 地址、系统通知开关…）不在 data/ 里，存在这台机器本地，不会跟着 data/ 一起同步到别的设备——手机上关掉系统通知，电脑上的不会跟着没。这个页面会跟着改动自己刷新。
+            数据存在这个文件夹的 data/ 下，一条记录一个文件。AI 不直接改这些文件，只写 outbox-*.json，服务发现后自动合并进去再删掉它——所以 data/ 下偶尔会看到一闪而过的 outbox-*.json，是正常现象。这里的设置（webhook 地址、系统通知开关…）不在 data/ 里，存在这台机器本地，不会跟着 data/ 一起同步到别的设备——手机上关掉系统通知，电脑上的不会跟着没。这个页面会跟着改动自己刷新。
           </Typography.Paragraph>
 
           {/* 回顾**已经有按钮了**（回顾那一屏底部那颗「让 AI 回顾一遍」）。这一块

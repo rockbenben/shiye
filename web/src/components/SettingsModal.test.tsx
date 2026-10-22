@@ -1172,3 +1172,52 @@ describe('设置 → AI 拆解：厂商那一排与小分组', () => {
     expect(accName(keyBox()), '密钥框没名字').toBe('密钥');
   });
 });
+
+/**
+ * **设置面板里的几段说明不许和控件/事实对不上。**
+ *
+ * 这一组盯三件事，都是同一个仓库反复栽过的形状——「界面说的跟实际不符」：
+ *
+ * ① 「智能清单」那页说「『有内容时显示』只有导航上会挂数字的那几项才选得了」，
+ *    可它下面的「已完成」「垃圾箱」**并不挂数字、却都有这一档**——判据早就从
+ *    「有没有 count」改成「有没有 hasContent」（`lib/navVisibility.ts` 的
+ *    `canAuto`），说明文字还停在老规矩，用户按它推断只会以为是自己看错了。
+ *
+ * ② 「关于」那页原来写着「data/ 下（inbox/、tasks/、proposals/ **三个目录**）」——
+ *    那是只有三张表的时候的事，现在是八张；同一面板的「数据与服务」页自己写的
+ *    是八样。两页对同一件事两种说法。
+ *
+ * ③ 「数据与服务」那段话里那批表的名字和数量、还有导入确认框里的「九张表」，
+ *    现在都从同一份清单（`IMPORT_LABELS`）派生——所以这段断言钉的是「它们
+ *    说的是同一批表」，而不是把某几个字面量抄一遍。
+ */
+describe('SettingsModal：说明文字得跟控件和事实对得上', () => {
+  const show = () => render(
+    <AntApp>
+      <SettingsModal {...NAV} open value={settings} onClose={noop} onSave={async () => {}} />
+    </AntApp>,
+  );
+
+  it('「智能清单」那页说清了谁能选「有内容时显示」——不再说只有挂数字的才选得了', () => {
+    show();
+    goto('智能清单');
+    expect(screen.getByText(/能判断出空不空/)).toBeTruthy();
+    // 底下确实有「已完成」「垃圾箱」这两项，而它们**不挂数字**——说明文字跟控件
+    // 对不上时，用户只会怀疑自己看错了。
+    expect(screen.queryByText(/只有导航上会挂数字的那几项才选得了/)).toBeNull();
+  });
+
+  it('「关于」那页不再说「三个目录」——data/ 下是八张表', () => {
+    show();
+    goto('关于');
+    expect(screen.queryByText(/三个目录/)).toBeNull();
+    expect(screen.getByText(/一条记录一个文件/)).toBeTruthy();
+  });
+
+  it('「数据与服务」那页说的是八张表、导入换的是九张表——两处对同一批表', () => {
+    show();
+    goto('数据与服务');
+    expect(screen.getByText(/把 data\/ 下的 8 张表/)).toBeTruthy();
+    expect(screen.getByText(/导入是把这 9 张表整表换回去/)).toBeTruthy();
+  });
+});

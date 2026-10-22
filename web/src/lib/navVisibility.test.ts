@@ -2,7 +2,7 @@
 // getNavModes/setNavModes 直接用同步的 localStorage——跟 density.test.ts /
 // grouping.test.ts 同一个理由，用 pragma 把这份文件切到 jsdom。
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { canAuto, ensureNavDefaults, getNavModes, hasContentOf, setNavModes, visibleViews, type NavModes } from './navVisibility.js';
+import { canAuto, ensureNavDefaults, getNavModes, hasContentOf, initialNavModes, setNavModes, visibleViews, FRESH_NAV_MODES, type NavModes } from './navVisibility.js';
 import { findSpec, type ViewCountSource, type ViewDef } from './views.js';
 import { task } from '../test-utils.js';
 import type { TrashItem } from '../types.js';
@@ -21,8 +21,9 @@ describe('visibleViews', () => {
   // **这一组测的是机制（hide / auto / 当前项永远留下），不是默认值**——默认
   // 档是什么由 `FRESH_NAV_MODES` 和「这台机器见没见过它」决定，另有一组在下面
   // 单独盯着。所以这里先落上那个记号，让 `visibleViews` 走「已经在用的人」那条
-  // 路，`defs` 里的 trash 就是一条普通的、默认显示的入口。
-  beforeEach(() => { localStorage.clear(); ensureNavDefaults(); });
+  // 路（老格式的 `'1'` = 老默认 = 全显示），`defs` 里的 trash 就是一条普通的、
+  // 默认显示的入口。
+  beforeEach(() => { localStorage.clear(); localStorage.setItem('navDefaultsV1', '1'); });
 
   it('没设过就是全显示——**对已经在用的人**来说，默认档就是老的行为', () => {
     expect(visibleViews(defs, {}, 'today', SRC).map((v) => v.key)).toEqual(['today', 'quadrant', 'trash']);
@@ -72,9 +73,9 @@ describe('getNavModes / setNavModes', () => {
     expect(getNavModes()).toEqual({ quadrant: 'hide', today: 'auto' });
   });
 
-  it("'show' 不落盘——它是默认值，记下来只让这份表越长越大", () => {
+  it("**「显示」也存**——它是唯一能把收窄默认盖回去的那一档，不存就等于他挑过的那一档会被默认接管回去", () => {
     setNavModes({ quadrant: 'show', trash: 'hide' });
-    expect(getNavModes()).toEqual({ trash: 'hide' });
+    expect(getNavModes()).toEqual({ quadrant: 'show', trash: 'hide' });
   });
 
   it('坏 JSON、不认识的值都当没设过，不炸', () => {
@@ -137,10 +138,27 @@ describe('导航收窄:全新机器 vs 已经在用的人', () => {
     expect(visibleViews(defs, {}, 'today', src).map((v) => v.key)).toEqual([]);
   });
 
-  it('**落过记号之后按老默认来**——已经在用的人开机第一眼看到的东西不该因为我们改了默认值而变', () => {
-    ensureNavDefaults();
-    expect(localStorage.getItem('navDefaultsV1')).not.toBeNull();
+  /**
+   * **收窄默认只活一次 = 应用自己改了自己的样子。**
+   *
+   * 原来记号只落一句「见过了」，下一次打开 `freshDefaultsUsed()` 就是 true，
+   * 收窄默认回到全显示。于是同一台机器上：第一次打开六项导航，第二次打开
+   * 八项——**他什么都没动过**，「已完成」和「垃圾箱」两个永远空的入口
+   * 自己长出来了。
+   *
+   * 现在记下的是「这台机器采用的那套默认」本身，于是打开多少次都是同一套。
+   */
+  it('**采用过的那套默认，下一次打开还是这一套**——导航不该自己变', () => {
+    expect(initialNavModes()).toEqual(FRESH_NAV_MODES);
+    // 第二次打开：记号在了，但记下来的是**采用的那套**，不是「见过没有」。
+    expect(initialNavModes()).toEqual(FRESH_NAV_MODES);
+    expect(visibleViews(defs, initialNavModes(), 'today', src).map((v) => v.key)).toEqual([]);
+  });
+
+  it('**老记号（老版本写下的那个）的老机器：按老默认来**——已经在用的人开机第一眼看到的东西不该因为我们改了默认值而变', () => {
+    localStorage.setItem('navDefaultsV1', '1');
     expect(visibleViews(defs, {}, 'today', src).map((v) => v.key)).toEqual(['trash']);
+    expect(initialNavModes()).toEqual({});
   });
 
   it('**他显式选过显示，就一直显示**——存了就不被默认值盖回去', () => {

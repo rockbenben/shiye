@@ -7730,6 +7730,44 @@ describe('App：AI 拆解结果那条提示', () => {
     expect(screen.queryByText('AI 拆解完成')).not.toBeNull();
   });
 
+  /**
+   * **失败提示不许被排期状态顶掉。**
+   *
+   * 实测抓到的事件序列（服务端 /api/events 上原样抓的）：
+   * `running → failed → scheduled`。
+   *
+   * 手动点「立即拆解」失败时，服务端先发 `failed`（带一句「AI 命令行工具
+   * 没找到，确认 … 在 PATH 里；或者去设置 → AI 拆解，改成「调接口」」），
+   * 紧接着自动排期又发一条 `scheduled`。原来这两样塞在**同一个** `agent`
+   * 字段里，后到的把先到的顶掉——红字横幅一眨眼就没了，屏幕上只剩一条跟
+   * 点之前一模一样的倒计时。**用户点了「立即拆解」，屏幕上什么都没说。**
+   *
+   * 排期跟结果是两件事，各存各的（App.tsx 的 `agent` / `agentResult`）。
+   */
+  it('拆解失败之后又来一条排期状态，失败提示留在屏幕上', async () => {
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { handlers.onAgentStatus?.({ state: 'failed', kind: 'expand', message: 'AI 命令行工具没找到' }); });
+    expect(screen.queryByText('AI 拆解失败'), '失败提示压根没出来').not.toBeNull();
+
+    // 服务端紧接着发的那条排期状态（自动拆解又排上了）。
+    act(() => { handlers.onAgentStatus?.({ state: 'scheduled', at: new Date(Date.now() + 60_000).toISOString() }); });
+    expect(screen.queryByText('AI 拆解失败'), '失败提示被排期状态顶掉了').not.toBeNull();
+    expect(screen.queryByText('AI 命令行工具没找到'), '失败原因也不见了').not.toBeNull();
+  });
+
+  it('新一轮跑起来的时候，上一条结果收走——那是真出了新消息', async () => {
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => { handlers.onAgentStatus?.({ state: 'failed', kind: 'expand', message: 'AI 命令行工具没找到' }); });
+    expect(screen.queryByText('AI 拆解失败')).not.toBeNull();
+
+    act(() => { handlers.onAgentStatus?.({ state: 'running', kind: 'expand' }); });
+    expect(screen.queryByText('AI 拆解失败'), '新的一轮开始了，旧结果还赖着').toBeNull();
+  });
+
   it('总览汇报里的换行保留下来——纯文本的 \\n 不能被压成一行', async () => {
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
     await act(async () => { await Promise.resolve(); });
@@ -7839,5 +7877,34 @@ describe('任务还没读到的那一段，不能替用户说「没有任务」'
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
     // 两处同时说这句话（「今天」那一屏和它旁边的收件箱栏），所以按 findAll 收。
     expect(await screen.findAllByText(/还没有任何任务。上面那行「添加任务」/)).toBeTruthy();
+  });
+});
+
+/**
+ * **「未归类」这一屏的组头不许写「全部」。**
+ *
+ * 这一屏的页面标题是「未归类」、侧栏那个徽标也写着「未归类 N」，而组头写的是
+ * 「全部 N」——同一个词在一屏里指两样东西：侧栏的「全部」是所有未了结的任务，
+ * 这里这组只是其中没归进清单的那些。用户对着三个数字对不上（侧栏说「全部 12」，
+ * 这里这组写「全部 11」），只会以为自己看错了。
+ */
+describe('App：「未归类」那一屏的组头', () => {
+  it('组头写「未归类」，不写「全部」——侧栏那个「全部」是另一批任务', async () => {
+    currentLists = [list({ id: 'L1', name: '工作' })];
+    currentTasks = [
+      task({ id: 'a', title: '没归类的', listId: null, due: null, reminders: [] }),
+      task({ id: 'b', title: '归了类的', listId: 'L1', due: null, reminders: [] }),
+    ];
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await waitFor(() => expect(navButton(/未归类/)).toBeDefined());
+    fireEvent.click(navButton(/未归类/));
+    await screen.findByRole('heading', { level: 1, name: '未归类' });
+    const panel = () => document.querySelector('.ink-view-panel-nolist') as HTMLElement;
+    await waitFor(() => expect(within(panel()).getByText('没归类的')).toBeDefined());
+    const heads = [...panel().querySelectorAll('.ink-grid-heading')].map((h) => h.textContent ?? '');
+    // **用 includes 不用 startsWith**：组头文字前面挂着一个折叠的小三角「▾」，
+    // 拿 startsWith 去比，两条断言会同时落空——第一条假红、第二条假绿。
+    expect(heads.some((h) => h.includes('未归类')), '组头该写「未归类」').toBe(true);
+    expect(heads.some((h) => h.includes('全部')), '组头不该写「全部」——侧栏那个「全部」是另一批').toBe(false);
   });
 });

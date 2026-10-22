@@ -362,6 +362,29 @@ export function App() {
   // 只留最新一条：跑起来时置灰按钮、失败时弹红色横幅，都只看「最后一次」，
   // 不需要一份历史记录。
   const [agent, setAgent] = useState<AgentStatus | null>(null);
+  /**
+   * **「眼下的排期」和「上一次的结果」是两件事，各存一份。**
+   *
+   * 原来只有 `agent` 一个字段，后到的状态把先到的顶掉——而**顶掉的那一条
+   * 往往正是唯一有用的那条**。手动点「立即拆解」失败时，服务端先发
+   * `failed`（带一句「AI 命令行工具没找到，确认 … 在 PATH 里；或者去设置 →
+   * AI 拆解，改成「调接口」」），紧接着自动排期又发一条 `scheduled`——
+   * `scheduled` 一到，红字横幅就没了，屏幕上只剩一条跟点之前**一模一样**的
+   * 倒计时。
+   *
+   * 实测抓到的事件序列（服务端 /api/events 上原样抓的）：
+   * `running → failed → scheduled`。也就是**用户点了「立即拆解」，屏幕上
+   * 什么都没说**——他既不知道失败了，也不知道该去哪儿修。60 秒后自动重试
+   * 再失败一次，那次错误才留得住（那时条目已经在 attempted 里，不再重新排期）。
+   *
+   * 这正是这个仓库反复栽过的那一类的孪生兄弟：「写成功了，界面看上去却什么
+   * 也没发生」的孪生兄弟是「**跑失败了**，界面看上去却什么也没发生」。
+   *
+   * 拆成两份之后：排期只动 `agent`，结果只动 `agentResult`，谁也顶不掉谁。
+   * 一轮新的运行开始（`running`）才把上一条结果收走——那是真有了新消息，
+   * 旧的可以走。
+   */
+  const [agentResult, setAgentResult] = useState<AgentStatus | null>(null);
   // 「过期」是跟当下比出来的。不定时推进这个值，页面开一整天，
   // 中午过期的那张卡到晚上还是不红。
   const [now, setNow] = useState(() => new Date());
@@ -772,7 +795,17 @@ export function App() {
       }),
       // 'idle' 不代表任何结果，只是「排期没了、没别的状态接着说话」——收起来，
       // 等价于回到没有 agent 状态时的样子，见 server/src/autoExpand.ts 的 cancel()。
-      onAgentStatus: (s) => setAgent(s.state === 'idle' ? null : s),
+      // **它也不动上一条结果**：结果跟排期是两份事（见上面 `agentResult` 那段）。
+      onAgentStatus: (s) => {
+        if (s.state === 'idle') { setAgent(null); return; }
+        // 跑起来了：眼下的动静换成 running，上一条结果收走（真出了新消息）。
+        if (s.state === 'running') { setAgent(s); setAgentResult(null); return; }
+        // 排上了：只动排期，**不碰结果**——顶掉结果的就是它。
+        if (s.state === 'scheduled') { setAgent(s); return; }
+        // failed / skipped / ok：是结果，不是眼下的动静。
+        setAgent(null);
+        setAgentResult(s);
+      },
       // SSE 连上了本身就是「联网了」的信号，顺手刷新一次离线记号——不用等
       // 到下面 60 秒的 tick 才翻回「在线」。
       onOpen: () => { void reload(); refreshOffline(); },
@@ -2789,7 +2822,11 @@ export function App() {
      * 和刚勾完的那几条要留住，判据跟别处一模一样。
      */
     nolist: () => withFilterBar(
-      (editing) => allSections(tasks.filter((t) => t.listId === null || editing.has(t.id)), now, editing),
+      // **组头不能叫「全部」。** 这一屏叫「未归类」、侧栏那个徽标也写着「未归类 N」，
+      // 而组头写着「全部 N」——同一个词在一屏里指两样东西（侧栏的「全部」是 12 条，
+      // 这里这组是 11 条），用户对着三个数字对不上。组头跟着页面标题走。
+      (editing) => allSections(tasks.filter((t) => t.listId === null || editing.has(t.id)), now, editing)
+        .map((s) => ({ ...s, title: '未归类' })),
       (sections, emptyFiltered) => (
         <TaskGrid
           {...gridWiring}
@@ -3155,8 +3192,8 @@ export function App() {
    * 回来接着走。Sonner、react-hot-toast 这类 toast 库对「hover 时暂停」用的
    * 是同一个思路，这里把触发条件换成页面可见性。
    */
-  const agentState = agent?.state;
-  const agentKind = agent?.kind;
+  const agentState = agentResult?.state;
+  const agentKind = agentResult?.kind;
   useEffect(() => {
     if (agentState !== 'ok' && agentState !== 'skipped') return undefined;
     // **board 的 ok 不自动消失。** 拆解/回顾的 ok 是「办完了，去看板/卡片上
@@ -3174,7 +3211,7 @@ export function App() {
     const start = () => {
       if (timer !== undefined || left <= 0) return;
       since = Date.now();
-      timer = setTimeout(() => setAgent(null), left);
+      timer = setTimeout(() => setAgentResult(null), left);
     };
     const onVis = () => (document.visibilityState === 'visible' ? start() : stop());
     if (document.visibilityState === 'visible') start();
@@ -3819,17 +3856,6 @@ export function App() {
             />
           )}
 
-          {/* 排上了一次自动拆解：倒计时 + 「立即拆解」/「这次不拆」。跟下面的
-              失败/完成横幅不共用——那几个是「结果」，这个是「即将发生的事」，
-              文案和动作都不一样，硬塞进同一个 Alert 只会让 JSX 更难读。 */}
-          {agent?.state === 'scheduled' && agent.at && (
-            <ScheduledBanner
-              at={agent.at}
-              onRunNow={() => guard(() => api.expand())}
-              onSkip={() => guard(() => api.expandSkip())}
-            />
-          )}
-
           {/* 拆解失败必须显眼——这个仓库已经栽过好几次静默失败：条目静静躺在收件箱里，
               用户以为在处理。跟到期提醒共用同一套 Alert 横幅，不另起一套机制。
               'skipped'（outbox 里的条目全都已经处理过、或者本来就没有要拆的、
@@ -3839,9 +3865,9 @@ export function App() {
               等了 90 秒，跑完之后卡片确实出现了，但没有任何东西告诉他「结束了」，
               跟真的卡住长得一模一样。这里补一条一闪而过的绿色提示，不是警告，
               就是「办完了」。 */}
-          {agent && (agent.state === 'failed' || agent.state === 'skipped' || agent.state === 'ok') && (
+          {agentResult && (agentResult.state === 'failed' || agentResult.state === 'skipped' || agentResult.state === 'ok') && (
             <Alert
-              type={agent.state === 'failed' ? 'error' : agent.state === 'skipped' ? 'warning' : 'success'}
+              type={agentResult.state === 'failed' ? 'error' : agentResult.state === 'skipped' ? 'warning' : 'success'}
               showIcon
               closable
               closeText={BANNER_CLOSE}
@@ -3852,16 +3878,32 @@ export function App() {
               // 屏幕上出现一个错名字。kind 缺省（启动时补合并的历史状态、
               // SSE 重连错过 running）按拆解回退。
               message={
-                agent.state === 'failed'
-                  ? `AI ${agentWord(agent.kind).name}失败`
-                  : agent.state === 'skipped'
-                    ? agentWord(agent.kind).none
-                    : agentWord(agent.kind).ok
+                agentResult.state === 'failed'
+                  ? `AI ${agentWord(agentResult.kind).name}失败`
+                  : agentResult.state === 'skipped'
+                    ? agentWord(agentResult.kind).none
+                    : agentWord(agentResult.kind).ok
               }
               // board 的汇报是多行纯文本，React 默认把 \n 压成空格——pre-wrap
               // 保住换行。white-space 是继承属性，短消息标题不受影响。
-              description={<span style={{ whiteSpace: 'pre-wrap' }}>{agent.message}</span>}
-              onClose={() => setAgent(null)}
+              description={<span style={{ whiteSpace: 'pre-wrap' }}>{agentResult.message}</span>}
+              onClose={() => setAgentResult(null)}
+            />
+          )}
+
+          {/* 排上了一次自动拆解：倒计时 + 「立即拆解」/「这次不拆」。跟下面的
+              失败/完成横幅不共用——那几个是「结果」，这个是「即将发生的事」，
+              文案和动作都不一样，硬塞进同一个 Alert 只会让 JSX 更难读。
+              
+              **它在结果横幅的下面**：结果优先。两者同时在的场合只有一种——
+              一次拆解失败了、而自动排期又重新排上了（见上面 `agentResult`
+              那段）——那时候先看见的应该是「刚才没成」和它的原因，倒计时是
+              下一件事。*/}
+          {agent?.state === 'scheduled' && agent.at && (
+            <ScheduledBanner
+              at={agent.at}
+              onRunNow={() => guard(() => api.expand())}
+              onSkip={() => guard(() => api.expandSkip())}
             />
           )}
         </div>

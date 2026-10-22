@@ -190,7 +190,7 @@ describe('QuickAdd', () => {
     type('买牛奶');
     enter();
     await waitFor(() => expect(created).toHaveLength(1));
-    expect(await screen.findByText('已添加。没填今天的时间，这条在「按来源」里')).toBeTruthy();
+    expect(await screen.findByText('已添加。没定时间，这条在「按来源」里')).toBeTruthy();
   });
 
   it('indent 让左边多空 28px——「今天」的行留了那一段给排序抓手，不跟着让就跟下面每个勾选圈错开 24px', () => {

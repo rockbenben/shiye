@@ -4,6 +4,7 @@ import { task } from '../test-utils.js';
 
 const NOW = new Date(2026, 7, 24, 12);
 const todayEnd = new Date(2026, 7, 24, 23, 59).toISOString();
+const tomorrowEnd = new Date(2026, 7, 25, 23, 59).toISOString();
 const fresh = (over = {}) => task({ id: 'n1', title: '新的', status: 'todo', ...over });
 
 describe('createdNote', () => {
@@ -13,12 +14,50 @@ describe('createdNote', () => {
 
   it('「今天」里建了一条没时间的：会落进「按来源」，必须说', () => {
     expect(createdNote('today', fresh(), NOW, 'all'))
-      .toBe('已添加。没填今天的时间，这条在「按来源」里');
+      .toBe('已添加。没定时间，这条在「按来源」里');
+  });
+
+  /**
+   * **最常见的一格：日期在将来。**
+   *
+   * 人在「今天」里写「明天下午三点给猫买猫粮」，日期被认走了、截止落在明天
+   * 15:00 —— 他**填了时间**，所以不能跟他说「没填今天的时间」（他没漏，他会
+   * 回头去检查自己写的话）。而它落的地方是「接下来」的「明天」那一组，不是
+   * 「按来源」。
+   */
+  it('「今天」里建了一条明天到期的：说「日期不在今天」，指「接下来」——不说「没填时间」', () => {
+    expect(createdNote('today', fresh({ due: tomorrowEnd }), NOW, 'all'))
+      .toBe('已添加。日期不在今天，这条在「接下来」里');
+  });
+
+  it('定了开始时间、还没到能开始：说清楚是哪一种，指「接下来」', () => {
+    expect(createdNote('today', fresh({ startAt: tomorrowEnd }), NOW, 'all'))
+      .toBe('已添加。还没到能开始的时间，这条在「接下来」里');
   });
 
   it('「按来源」筛选停在别的档上：新卡一张都不会出现，说清是筛选挡住了', () => {
     expect(createdNote('source', fresh(), NOW, 'done'))
       .toBe('已添加。当前筛选是「已完成」，这条是待办，清除筛选才看得到');
+  });
+
+  /**
+   * **「接下来」按截止分桶装下全部没了结的任务**，新任务当场落在其中一组
+   * （没定时间 → 「没有时间」）。原来这一支没有，被兜底接走了，于是弹一句
+   * 「这条在『按来源』里」——**而那张新卡就在他眼前**。
+   */
+  it('「接下来」里新建的：它就在这一屏里，不弹「在别处」', () => {
+    expect(createdNote('upcoming', fresh(), NOW, 'all')).toBeNull();
+    expect(createdNote('upcoming', fresh({ due: tomorrowEnd }), NOW, 'all')).toBeNull();
+  });
+
+  it('「接下来」的筛选挡住了新卡：说清是筛选挡的', () => {
+    expect(createdNote('upcoming', fresh(), NOW, 'done'))
+      .toBe('已添加。当前筛选是「已完成」，这条是待办，清除筛选才看得到');
+  });
+
+  it('情境那个去处：情境是预填的，它就在这一屏里', () => {
+    expect(createdNote('context:out', fresh({ context: 'out' }), NOW, 'all')).toBeNull();
+    expect(createdNote('context:out', fresh({ context: null }), NOW, 'all')).toBe('已添加。这条在「按来源」里');
   });
 
   it('「按来源」没筛选：不说话', () => {

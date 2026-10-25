@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readAll, renameIntoPlace, syncAll } from './entityStore.js';
+import { readAll, renameIntoPlace, syncAll, writeOne } from './entityStore.js';
 import { migrate } from './migrate.js';
 
 // 模型层（类型/常量/默认值）切到了 `model.ts`：网页那边也要用它们，而这个
@@ -197,6 +197,22 @@ function fillTaskShape(t: Task): Task {
  */
 export const readTasks = (): Task[] => readAll<Task>(paths().tasks).map(fillTaskShape);
 export const writeTasks = (v: Task[]): void => syncAll(paths().tasks, v);
+
+/**
+ * **只写这一条任务，别的文件一个都不碰。**
+ *
+ * `writeTasks(整份数组)` 底下是 `syncAll`，它会**删掉不在新数组里的文件**。
+ * 对「拿到全量 → 算一遍 → 写回」的路子那是对的（服务端是 `data/tasks/`
+ * 的唯一写者，网页和 AI 都只读），但对**后台自动改期**这条路不够安全：
+ * 读盘和写盘之间用户正在网页上新建了一条任务，那条任务就会被当成
+ * 「不在新数组里」删掉——AGENTS.md 开头那段说的正是这件事
+ * （「这中间用户在网页上点掉、删掉的任何东西，都不该被你收工时的一次
+ * 整体回写覆盖掉」）。
+ *
+ * 所以自动顺延走这一条：自己动过的那几条，一个文件一次原子写，
+ * 别的文件连碰都不碰。
+ */
+export const writeTask = (t: Task): void => writeOne(paths().tasks, t);
 export const readProposals = (): Proposal[] => readAll<Proposal>(paths().proposals);
 export const writeProposals = (v: Proposal[]): void => syncAll(paths().proposals, v);
 export const readLists = (): List[] => readAll<List>(paths().lists);

@@ -185,6 +185,34 @@ export const HABIT_EVERY = ['day', 'week'] as const satisfies readonly RepeatKin
 export const canBeHabit = (repeat: Repeat | null | undefined): boolean =>
   repeat != null && HABIT_EVERY.includes(repeat.every as never);
 
+/**
+ * **这条重复要不要「过零点自动顺延」——判据在这儿，只在这儿。**
+ *
+ * 「每天重复」的任务有一种别的档没有的性质：**这一天没做完，不要紧**。
+ * 过了 0 点它自己变成第二天的同一条（时刻不变），昨天那一次不算过期、
+ * 不算拖延、也不消耗「还剩几次」的额度。判据和动作分别在
+ * `server/src/repeat.ts` 的 `rolloverPatch` 和 `server/src/rollover.ts`。
+ *
+ * ## 为什么只认「每天」
+ *
+ * - **`every: 'day'` 且 `interval: 1`**：每一次都落在日历的同一种格子上，
+ *   漏掉一次的自然去处就是「明天那一次」。
+ * - **`from: 'done'` 的不认**：那种重复的间隔是「离上次做完过了多久」，
+ *   没做完就没有「下一次」，自动挪过去等于替他编了一个节奏。
+ * - **别的档不认**：「每周一」漏一次的自然去处是「下一个命中的星期几」，
+ *   不是「明天」——挪到周二会把「钉在周一」这件事弄丢。艾宾浩斯的下一档
+ *   间隔取决于复习到第几步，同理。
+ *
+ * 形状跟 `canBeHabit` 一样：一份判据 + 一个函数，别处不许再写一遍。
+ */
+export const canRollOverDaily = (repeat: Repeat | null | undefined): boolean =>
+  repeat != null
+  && repeat.every === 'day'
+  // `interval` / `from` 缺了都落默认值（`task.ts` 的 `checkRepeat` 就是这么
+  // 补的），但磁盘上的旧数据是 `migrate.ts` 原样搬过来的，可能压根没这两个键。
+  && (repeat.interval ?? 1) === 1
+  && repeat.from !== 'done';
+
 export interface Repeat {
   every: RepeatKind;
   interval: number;

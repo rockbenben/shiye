@@ -12,6 +12,7 @@ import { toIcs } from './ics.js';
 import { logLanWarningIfNeeded, resolveBindHost } from './lanBind.js';
 import { mergeOutbox } from './outbox.js';
 import { fireDailySummary, fireReminders } from './reminder.js';
+import { rollOverDailyTasks } from './rollover.js';
 import { dataDir, ensureDataFiles, readCountdowns, readInbox, readProposals, readSettings, readTasks } from './store.js';
 
 /**
@@ -199,6 +200,27 @@ async function alreadyOurs(): Promise<boolean> {
 // 断言「绑的是哪个 host」），判断逻辑和提示文案抽出去之后至少那一半是能测的；
 // 起监听这个动作本身留在这儿手工验证（见 android/冒烟清单.md、README）。
 const hostname = resolveBindHost(process.env);
+
+/**
+ * **每天重复的任务过了 0 点自动顺延。**
+ *
+ * 挂在两处：启动时补一次（服务关了几天、那几天没做过的，第一次扫到就一次
+ * 推到今天），以及定时器上每轮扫一遍（三十秒一轮，跨过 0 点最多半分钟
+ * 就挪过去了——「今天」这一格在半夜就该是今天的，不该等到早上开机）。
+ *
+ * 扫的动作是**幂等**的（挪过的截止日期落在今天，第二遍不再在「该挪」的
+ * 范围里），所以挂在定时器上不会越跑越多，也不会反复写盘。
+ */
+function runRollover(): void {
+  try {
+    const rolled = rollOverDailyTasks();
+    if (rolled.length > 0) console.log(`[顺延] ${rolled.length} 条每天重复的任务挪到了今天`);
+  } catch (e) {
+    // 跟同一趟 tick 上的提醒、每日概览一样：**出错只记一行，不带走进程**。
+    console.warn('[顺延] 这一轮出错：', (e as Error).message);
+  }
+}
+
 const server = serve({ fetch: app.fetch, port, hostname }, () => {
   console.log(`办事师爷 ${url}`);
   console.log('这个窗口开着，网页才能用；用完关掉它就是停止，也可以按 Ctrl+C');
@@ -212,6 +234,10 @@ const server = serve({ fetch: app.fetch, port, hostname }, () => {
   // 没有匹配的文件（正常情况）时 mergeOutbox 内部扫到空列表，直接返回，无副作用。
   // 这一次扫描也顺带重试了上次因为校验失败而留在磁盘上的坏文件。
   mergeOutbox(bus);
+
+  // 每天重复的任务：补一次顺延。服务停着的这几天里没做过的，第一次扫到就
+  // 一次推到今天——「当天没完成也不要紧」跨关机也成立。
+  runRollover();
 
   // 办事师爷.ics：启动时先按当前任务写一份（上面这次补合并如果真的合并了新任务，
   // 这里已经能看到最新状态），之后任务变了就重写——挂在已经在发的
@@ -233,6 +259,11 @@ const server = serve({ fetch: app.fetch, port, hostname }, () => {
   // 就是一次内存里的 toIcs + 一次字符串比较，零额外写盘。
   const everyMs = Number(process.env.REMIND_INTERVAL_MS) || 30_000;
   setInterval(() => {
+    // 顺延排在提醒**前面**：挪完之后提醒才落在新的一天上，判「到点没」用的
+    // 才是挪过之后的位置。反过来先判提醒的话，昨天那一条会被当成「到点」
+    // 先盖了章（`CATCH_UP_MS` 之外只盖章不响），挪过去之后今天的这一次
+    // 就没人响了。
+    runRollover();
     void fireReminders(bus).catch((e: Error) => console.warn('[提醒] 这一轮出错：', e.message));
     // 每日概览搭同一趟 tick，不另起一个定时器：它要的判断（到点没有、今天
     // 发过没有）三十秒一次的精度绰绰有余，而多一个 setInterval 就多一处

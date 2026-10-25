@@ -1,4 +1,7 @@
 import type { Reminder, Repeat, Subtask, Task } from './store.js';
+import { canRollOverDaily } from './model.js';
+import { localDay } from './dailySummary.js';
+import { isSettled } from './task.js';
 import { holidayYearKnown, isLegalHoliday, isLegalWorkday, lunarOf, solarFromLunar } from './chineseDays.js';
 
 /**
@@ -339,6 +342,134 @@ export function skipPatch(t: Task, at: Date): SkipPatch | null {
     // 原来一个都不带。
     startAt: shift(t.startAt, step.delta),
     endAt: shift(t.endAt, step.delta),
+  };
+}
+
+/**
+ * **今天同一个时刻**。用来「规则已经到期，但这一次还留在今天」。
+ *
+ * 取的是原来那个时刻的**时分秒**，配上今天的日期——所以一条每天九点的
+ * 任务挪过来还是九点，一条全天的（本地零点）挪过来还是全天。
+ */
+const sameTimeToday = (ms: number, at: Date): Date => {
+  const src = new Date(ms);
+  const d = new Date(at);
+  d.setHours(src.getHours(), src.getMinutes(), src.getSeconds(), src.getMilliseconds());
+  return d;
+};
+
+/**
+ * **每天重复的任务，过了 0 点自动顺延——这一份是「挪到哪儿、挪成什么样」。**
+ *
+ * ## 它是什么
+ *
+ * 「每天重复」的任务有一种别的档没有的性质：**这一天没做完，不要紧**。
+ * 过了 0 点它自己变成第二天的同一条：日期换成新的一天，**时刻不变**。
+ * 昨天那一次不算过期、不算拖延，也不消耗「还剩几次」的额度。
+ *
+ * ## 它跟「跳过本次」是两条路，不是一条
+ *
+ * `skipPatch` 是**人**按的：这一次我不做了，日程往前挪一格，次数减一
+ * （README 那条「一门上五次的课，翘掉一次也还是在那五个日子里结束」）。
+ * 自动顺延是**服务端**做的：这一次没来得及做，它自己挪到今天，次数**不减**
+ * ——「每天背单词、复习五次」不该因为人某天太忙就少一次机会。
+ *
+ * 两条路共用的东西很多（due、提醒、时间段、检查项怎么挪），所以挪动的
+ * 算法规格复用同一份；但「次数减不减」「算不算拖延」两处是**故意不同**的，
+ * 所以不合成一个函数——合成一个就得分出一个「是不是自动的」的开关，
+ * 而开关迟早会被用错在另一个方向上。
+ *
+ * ## 挪到哪一天
+ *
+ * **「下一个该来的日子」= 落在今天或之后的那一次**，不是「下一次出现」。
+ *
+ * 这两个不是一回事：服务停了一天、下午两点才开机，这一次的去处仍然是
+ * 「今天那一次」（只是已经过了它的时刻），不是「明天那一次」——
+ * 否则「今天」这一格会被白跳过一天。`advance` 那套「一路跳到 at 之后」
+ * 的算法在这里是错的（它是给「完成」「跳过」用的，那两件事发生在当下）。
+ */
+export interface RolloverPatch {
+  due: string;
+  reminders: Reminder[];
+  subtasks: Subtask[];
+  /**
+   * 规则本身留不留。留 = 这条重复还活着；`null` = 到此为止，它变成一条
+   * 普通任务（最后那一次还留在今天，做完就完了）。
+   */
+  repeat: Repeat | null;
+  /** 时间段的两端，跟着 due 一起平移——跟 `skipPatch` 同一个理由。 */
+  startAt: string | null;
+  endAt: string | null;
+}
+
+/**
+ * 把一条每天重复的任务挪到今天。**不该挪就返回 `null`**（不动它）。
+ *
+ * 不挪的几种情形：不是每天重复的（判据在 `model.ts` 的 `canRollOverDaily`）、
+ * 人已经对它做过判断的（完成 / 搁置 / 放弃）、没有截止日期的、
+ * **以及今天的那一次**（截止日期落在今天或之后——今天零点的「今天」不许挪）。
+ */
+export function rolloverPatch(t: Task, at: Date): RolloverPatch | null {
+  // 「现在」本身坏了就一条都不动。`localDay(NaN)` 会算出 "NaN-NaN-NaN"，
+  // 而 `sameTimeToday` 拿它去 `toISOString()` 直接抛 RangeError——
+  // 一个坏时刻不该让整个服务里的顺延全炸。
+  if (Number.isNaN(at.getTime())) return null;
+  const rule = t.repeat;
+  if (!rule || !canRollOverDaily(rule)) return null;
+  if (isSettled(t.status)) return null;
+  if (!t.due) return null;
+  const dueMs = Date.parse(t.due);
+  if (Number.isNaN(dueMs)) return null;
+
+  // **「今天」按本地日历天算，不按 UTC 镜头。** `localDay` 是服务端唯一那份
+  // 「本地日期」的定义（`dailySummary.ts`），拿它比就不必在这儿再写一份
+  // 「一天从哪一刻开始」——同一件事两个定义，迟早有一处飘。
+  //
+  // `localDay` 出来的是零填充的 `YYYY-MM-DD`，**字典序就是时间序**，
+  // 所以直接比大小即可（`dailySummary.ts` 的 `isTaskOverdue` 也是这么比的）。
+  const today = localDay(at);
+  // **只有「属于更早那一天」的才挪。** 今天（含今天零点）的那一次是今天的：
+  // 本地零点在这个应用里的意思是「这一整天」，不是「零点那一刻」，
+  // 挪了就等于把今天这一格搬空了。
+  if (localDay(new Date(dueMs)) >= today) return null;
+
+  // 「下一个该来的日子」：从原来那个日子往后推，推到落在今天或之后为止。
+  // 服务停了三天也是一次推到今天，中间那几天不留痕——「当天没完成不要紧」
+  // 说的就是这件事。
+  let next: Date | null = nextOccurrence(rule, new Date(dueMs));
+  for (let guard = 0; next && localDay(next) < today; guard++) {
+    if (guard >= 1000) return null;
+    next = nextOccurrence(rule, next);
+  }
+
+  // **规则已经到期了**：次数用完（`count` 存的是「还要再重复几次」，0 就是
+  // 「这是最后一条」）、或者过了 `until`、或者算不出下一次。
+  // 这种情况下这一次挪到**今天同一个时刻**，规则本身摘掉——它到今天为止。
+  const ended = next === null
+    || (rule.count !== null && rule.count !== undefined && rule.count <= 0);
+  const target = ended ? sameTimeToday(dueMs, at) : (next as Date);
+
+  // 提醒、开始时刻、结束时刻**整体平移同一个量**，章全部清掉（不清的话
+  // 新的一天那一次永远不会响）。跟 `skipPatch` 一个做法，一个理由。
+  const delta = target.getTime() - dueMs;
+  return {
+    due: target.toISOString(),
+    reminders: t.reminders.map((r) => {
+      const ms = Date.parse(r.at);
+      return { at: Number.isNaN(ms) ? r.at : new Date(ms + delta).toISOString(), firedAt: null };
+    }),
+    // 检查项重置：勾掉的那几项属于被挪走的那一次。跟 `nextInstance` 一样。
+    subtasks: t.subtasks.map((s) => ({ ...s, done: false })),
+    // **次数不减**：自动顺延不消耗「还剩几次」的额度，只有完成才减。
+    //
+    // **复制一份，不共用同一个对象**：这条记录的新旧两版会同时存在于
+    // 内存里（`applyTaskPatch` 是 `{...prev, ...patch}`），共用一个 `repeat`
+    // 就等于让两版共享一份可变状态——将来谁就地改了 `repeat.count`，
+    // 两版一起变，而它们本来该是两次不同的occurrence。`stepRepeat` 那边
+    // 每次都造新的，理由一样。
+    repeat: ended ? null : { ...rule },
+    startAt: shift(t.startAt, delta),
+    endAt: shift(t.endAt, delta),
   };
 }
 

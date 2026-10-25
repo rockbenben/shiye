@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ebbinghausGap, nextOccurrence, nextInstance, skipPatch } from './repeat.js';
+import { ebbinghausGap, nextOccurrence, nextInstance, rolloverPatch, skipPatch } from './repeat.js';
 import type { Repeat, Task } from './store.js';
 import { REPEAT_KINDS } from './store.js';
+import { canRollOverDaily } from './model.js';
 import { sanitizeTaskPatch } from './task.js';
 
 // 整分支审查 E：既有的时区债，第三处。夹具原来用固定 UTC 'Z' 时间戳
@@ -809,5 +810,157 @@ describe('nextInstance：时间段两端平移同样的量', () => {
       startAt: '2026-09-01T01:00:00.000Z', endAt: '下周三', repeat: rule({ every: 'week' }),
     });
     expect(nextInstance(done, new Date('2026-09-01T05:00:00.000Z'))!.endAt).toBe('下周三');
+  });
+});
+
+/**
+ * **每天重复的任务，过了 0 点自动顺延。**
+ *
+ * 这一族回答的是「昨天没做完，今天会变成什么样」——**这是这个应用原来完全没有
+ * 的一条路**：重复只由人的动作推进（完成 `nextInstance`、手动跳过
+ * `skipPatch`），所以昨天没做完的每天重复任务会一直红着「过期 N 天」，
+ * 而且永远不会有「今天那一次」。
+ *
+ * 跟 `skipPatch` 的区别有两条，是这个文件里最要紧的两条：
+ * - **次数不减**：自动顺延不消耗「还剩几次」的额度（手动跳过才减）。
+ * - **挪的是「今天那一次」**，不是「下一次出现」——服务停了一天、下午两点
+ *   才开机，这一次仍然落在今天。
+ */
+describe('rolloverPatch：每天重复的任务过了 0 点自动顺延', () => {
+  /** 过了 0 点五分钟。 */
+  const NOW = () => local(2026, 8, 15, 0, 5);
+  const daily = (over: Partial<Task> = {}) =>
+    task({ due: local(2026, 8, 14, 9).toISOString(), repeat: R({ every: 'day' }), ...over });
+
+  it('挪到今天，**时刻不变**', () => {
+    const p = rolloverPatch(daily(), NOW())!;
+    expect(p.due).toBe(local(2026, 8, 15, 9).toISOString());
+  });
+
+  it('今天的那一次不动——今天零点的「今天」也是今天的', () => {
+    expect(rolloverPatch(daily({ due: local(2026, 8, 15, 9).toISOString() }), NOW())).toBeNull();
+    expect(rolloverPatch(daily({ due: local(2026, 8, 15, 0).toISOString() }), NOW())).toBeNull();
+  });
+
+  it('服务停了三天：一次推到今天，中间那几天不留痕', () => {
+    const p = rolloverPatch(daily({ due: local(2026, 8, 12, 9).toISOString() }), NOW())!;
+    expect(p.due).toBe(local(2026, 8, 15, 9).toISOString());
+  });
+
+  it('下午两点才开机：还是「今天那一次」，不是「明天那一次」', () => {
+    const p = rolloverPatch(daily(), local(2026, 8, 15, 14))!;
+    expect(p.due).toBe(local(2026, 8, 15, 9).toISOString());
+  });
+
+  it('全天任务（本地零点）挪过来还是全天的今天零点', () => {
+    const p = rolloverPatch(daily({ due: local(2026, 8, 14, 0).toISOString() }), NOW())!;
+    expect(p.due).toBe(local(2026, 8, 15, 0).toISOString());
+  });
+
+  it('提醒跟着挪同样的量，章清掉——不清的话今天这一次永远不会响', () => {
+    const p = rolloverPatch(daily({
+      reminders: [{ at: local(2026, 8, 14, 8).toISOString(), firedAt: '2026-08-14T00:00:00.000Z' }],
+    }), NOW())!;
+    expect(p.reminders[0].at).toBe(local(2026, 8, 15, 8).toISOString());
+    expect(p.reminders[0].firedAt).toBeNull();
+  });
+
+  it('勾掉的检查项重置——那几项属于被挪走的那一次', () => {
+    const p = rolloverPatch(daily({ subtasks: [{ text: '拉数据', done: true }] }), NOW())!;
+    expect(p.subtasks).toEqual([{ text: '拉数据', done: false }]);
+  });
+
+  it('有时间段的：两端跟着 due 一起走，时长不变', () => {
+    const p = rolloverPatch(task({
+      due: local(2026, 8, 14, 12).toISOString(),
+      startAt: local(2026, 8, 14, 9).toISOString(),
+      endAt: local(2026, 8, 14, 12).toISOString(),
+      repeat: R({ every: 'day' }),
+    }), NOW())!;
+    expect(p.startAt).toBe(local(2026, 8, 15, 9).toISOString());
+    expect(p.endAt).toBe(local(2026, 8, 15, 12).toISOString());
+  });
+
+  it('**次数不减**——自动顺延不消耗「还剩几次」的额度，只有完成才减', () => {
+    expect(rolloverPatch(daily({ repeat: R({ count: 3 }) }), NOW())!.repeat?.count).toBe(3);
+  });
+
+  it('次数用完了：这次挪到今天，规则摘掉——它到今天为止', () => {
+    const p = rolloverPatch(daily({ repeat: R({ count: 0 }) }), NOW())!;
+    expect(p.repeat).toBeNull();
+    expect(p.due).toBe(local(2026, 8, 15, 9).toISOString());
+  });
+
+  it('过了重复截止：同上，规则摘掉', () => {
+    const p = rolloverPatch(daily({
+      repeat: R({ until: local(2026, 8, 14, 23, 59).toISOString() }),
+    }), NOW())!;
+    expect(p.repeat).toBeNull();
+    expect(p.due).toBe(local(2026, 8, 15, 9).toISOString());
+  });
+
+  it('不是每天档的不挪——「每周一」漏一次的去处是下一个命中的星期几，不是明天', () => {
+    expect(rolloverPatch(daily({ repeat: R({ every: 'week', weekdays: [1] }) }), NOW())).toBeNull();
+  });
+
+  it('按做完那天算的不挪——那种重复的间隔是「离上次做完过了多久」，没做完就没有下一次', () => {
+    expect(rolloverPatch(daily({ repeat: R({ from: 'done' }) }), NOW())).toBeNull();
+  });
+
+  it('每两天的不挪', () => {
+    expect(rolloverPatch(daily({ repeat: R({ interval: 2 }) }), NOW())).toBeNull();
+  });
+
+  it('艾宾浩斯的不挪——下一档间隔取决于复习到第几步', () => {
+    expect(rolloverPatch(daily({ repeat: R({ every: 'ebbinghaus' }) }), NOW())).toBeNull();
+  });
+
+  it('人已经做过判断的（完成 / 搁置 / 放弃）不挪', () => {
+    for (const status of ['done', 'later', 'abandoned'] as const) {
+      expect(rolloverPatch(daily({ status }), NOW()), status).toBeNull();
+    }
+  });
+
+  it('没有截止日期的不挪——没有日期可挪', () => {
+    expect(rolloverPatch(daily({ due: null }), NOW())).toBeNull();
+  });
+
+  it('不重复的不挪', () => {
+    expect(rolloverPatch(daily({ repeat: null }), NOW())).toBeNull();
+  });
+
+  it('新版本的 repeat 是复制的一份，不跟原来那条共用同一个对象', () => {
+    const t = daily();
+    const p = rolloverPatch(t, NOW())!;
+    expect(p.repeat).not.toBe(t.repeat);
+    expect(p.repeat).toEqual(t.repeat);
+  });
+
+  it('「现在」本身是坏时刻：一条都不动，也不抛', () => {
+    expect(rolloverPatch(daily(), new Date('不是时间'))).toBeNull();
+  });
+});
+
+describe('canRollOverDaily：谁该顺延', () => {
+  it('九档里只有「每天」这一档顺延', () => {
+    const yes = REPEAT_KINDS.filter((every) => canRollOverDaily({ ...R(), every }));
+    expect(yes).toEqual(['day']);
+  });
+
+  it('间隔不是一天的不顺延', () => {
+    expect(canRollOverDaily(R({ interval: 2 }))).toBe(false);
+  });
+
+  it('按做完那天算的不顺延', () => {
+    expect(canRollOverDaily(R({ from: 'done' }))).toBe(false);
+  });
+
+  it('不重复的不顺延', () => {
+    expect(canRollOverDaily(null)).toBe(false);
+    expect(canRollOverDaily(undefined)).toBe(false);
+  });
+
+  it('缺 interval / from 的老数据按默认值算——磁盘上的旧数据是 migrate 原样搬过来的', () => {
+    expect(canRollOverDaily({ every: 'day' } as unknown as Repeat)).toBe(true);
   });
 });

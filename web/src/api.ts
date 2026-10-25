@@ -1,5 +1,5 @@
 import { asArray, normalizeTaskArrays } from './lib/taskView.js';
-import type { ConflictFile, Countdown, Folder, InboxItem, Insight, List, Proposal, Settings, SmartFilter, Task, TrashItem } from './types.js';
+import type { AiReadiness, ConflictFile, Countdown, Folder, InboxItem, Insight, List, Proposal, Settings, SmartFilter, Task, TrashItem } from './types.js';
 // 推送体/回执体从服务端那份 import type，web 侧不抄第二份——`server/src/push.ts`
 // 是零 import 的平台无关文件，正是为两边共用同一份类型放在那里的（那个文件顶部
 // 有理由）。**从这里出发是两层**（`web/src/api.ts` → 仓库根），`lib/dataSource.ts`
@@ -60,6 +60,14 @@ export const api = {
   patchInbox: (id: string, patch: Partial<InboxItem>) => route(
     () => req<InboxItem>(`/api/inbox/${id}`, { method: 'PATCH', body: body(patch) }),
     () => localApi.patchInbox(id, patch),
+  ),
+  /** 一条收件箱原文一次变成 1..N 条任务（手动「变成任务」「拆成多条」共用）。
+   * 在线/离线都走同一次调用——离线那边在本地一次写任务、一次写收件箱，不再
+   * 由界面逐条建任务再补 PATCH：那样中途失败会留下半批任务，而且会覆盖掉
+   * AI 并发拆解写下的 taskIds。 */
+  inboxToTasks: (id: string, tasks: Partial<Task>[]) => route(
+    () => req<{ item: InboxItem; tasks: Task[] }>(`/api/inbox/${id}/to-tasks`, { method: 'POST', body: body({ tasks }) }),
+    () => localApi.inboxToTasks(id, tasks),
   ),
   deleteInbox: (id: string) => route(
     () => req<{ ok: true }>(`/api/inbox/${id}`, { method: 'DELETE' }),
@@ -169,6 +177,8 @@ export const api = {
   // 它塞进 state，界面显示的是假数据但看起来完全正常，用户改一下再保存
   // 还会把假数据整份 PUT 回服务端、覆盖掉桌面真实的 webhookUrl 之类。
   settings: () => route(() => req<Settings>('/api/settings'), offlineUnsupported('读取设置')),
+  /** AI 能不能开工；只读，离线时明确报错，不伪造 ready。 */
+  aiStatus: () => route(() => req<AiReadiness>('/api/ai/status'), offlineUnsupported('检查 AI')),
   /** 导出专用：这条回**每条记录的明文 `key`**（普通 `settings` 永远逐条打码）。
    * 备份要带得动密钥，换机才不用重填——代价见服务端 `LAN_WARNING`。 */
   settingsExport: () => route(() => req<Settings>('/api/settings/export'), offlineUnsupported('导出数据')),

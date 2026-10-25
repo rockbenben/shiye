@@ -213,6 +213,7 @@ describe('Sidebar：导航', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '新建清单' }));
     const input = screen.getByLabelText('清单名字');
+    expect(input.getAttribute('placeholder'), '输入框没说自己要按回车保存——点别处就直接取消').toContain('回车保存');
     fireEvent.change(input, { target: { value: '买菜' } });
     fireEvent.submit(input.closest('form')!);
 

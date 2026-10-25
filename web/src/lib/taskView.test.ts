@@ -176,8 +176,9 @@ describe('groupBySource', () => {
 
 describe('bubbleOverdue', () => {
   it('过期的排最前面，其余任务保持原有的相对顺序（不像 sortByUrgency 那样按截止时间重排）', () => {
-    // 同源组要保留 AI 拆解出的步骤顺序——只有「过期」这一件事值得打破它，
-    // 没过期的几条谁先谁后依然照抄 taskIds 数组本身的顺序。
+    // 同源组要保留拆解时写下的先后顺序（AI 拆的、手动拆成多条的都一样）——
+    // 只有「过期」这一件事值得打破它，没过期的几条谁先谁后依然照抄
+    // taskIds 数组本身的顺序。
     const step1 = task({ title: '第一步', due: '2026-08-31T00:00:00.000Z' });
     const step2 = task({ title: '第二步（过期）', due: '2026-08-01T00:00:00.000Z' });
     const step3 = task({ title: '第三步', due: '2026-08-15T00:00:00.000Z' });
@@ -445,6 +446,21 @@ describe('isReminderOverdue：提醒在更早的一天已经触发过、任务�
   it('done/later 不算——已经处理过或者已经主动搁置的，不用继续标', () => {
     expect(isReminderOverdue(task({ reminders: remindsAt(localIso(2026, 8, 9, 9, 0)), status: 'done' }), LOCAL_NOW)).toBe(false);
     expect(isReminderOverdue(task({ reminders: remindsAt(localIso(2026, 8, 9, 9, 0)), status: 'later' }), LOCAL_NOW)).toBe(false);
+  });
+
+  /**
+   * **提醒数组不一定按时刻排好序**——只有网页表单排过（`remindPreset.ts` 的
+   * `setNthReminder`），AI 写的 outbox 任务（`checkTaskPatch` 按客户端给的顺序
+   * 收下）、手改的文件、别的设备推上来的，都可能是乱序的。
+   *
+   * 原来判「有没有一个已经过去的提醒」只看 `reminders[0]`：数组是
+   * `[今天 09:00, 三天前 09:00]` 时，三天前那条早就响过、一直没处理，
+   * 却因为 `[0]` 是今天的而被判成「没过期」——那条任务连「已过期」的红标
+   * 都不会有，还会被「已过期」那一组漏掉。
+   */
+  it('**乱序的提醒数组也算**——看的是最早那条，不是第一条', () => {
+    const outOfOrder = remindsAt(localIso(2026, 8, 10, 6, 0)).concat(remindsAt(localIso(2026, 8, 9, 9, 0)));
+    expect(isReminderOverdue(task({ reminders: outOfOrder }), LOCAL_NOW)).toBe(true);
   });
 });
 

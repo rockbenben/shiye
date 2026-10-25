@@ -4,16 +4,34 @@ import { formKey } from '../lib/keymap.js';
 
 interface Props {
   onSubmit: (text: string) => Promise<void>;
+  /**
+   * 钉在手机屏幕底部的那一条：默认只占一行，边写边往上长（最多四行）。
+   * 宽屏侧栏那份仍然从两行起——那里有地方，而且它不在视线边缘。
+   */
+  compact?: boolean;
+  /**
+   * 草稿的落脚处。框会在模块切换、宽窄屏切换时被卸载重建；把草稿放在这个
+   * ref 里，重建时从它初始化，打了一半的字不会跟着组件一起消失。
+   *
+   * **不提到 App 的 state**：那会让每敲一个字重渲染整块看板；这里只需要一个
+   * 跨挂载存活的可变对象，ref 刚好。
+   */
+  draftRef?: { current: string };
 }
 
 /** 随手丢一句话进收件箱。不要求格式，格式是 AI 的活。 */
-export function InboxComposer({ onSubmit }: Props) {
+export function InboxComposer({ onSubmit, compact = false, draftRef }: Props) {
   const { message } = AntApp.useApp();
-  const [text, setText] = useState('');
-  // 同一个节点会被摆进两个位置（宽屏的侧栏 `.ink-nav-composer`、窄屏的
-  // `.ink-narrow-composer`），写死 id 就有两份同名 id 的风险。
+  const [text, setTextState] = useState(() => draftRef?.current ?? '');
+  // 这个 id 只用来把 h2 和输入框绑在一起。框会在两个容器之间搬（宽屏侧栏 /
+  // 窄屏屏幕底部那条常驻栏），写死 id 一旦哪天两处同时渲染就会撞名；useId
+  // 不依赖挂载位置。
   const nameId = useId();
   const [busy, setBusy] = useState(false);
+  const setText = (next: string) => {
+    setTextState(next);
+    if (draftRef) draftRef.current = next;
+  };
 
   const submit = async () => {
     const v = text.trim();
@@ -57,7 +75,7 @@ export function InboxComposer({ onSubmit }: Props) {
           e.preventDefault();
           void submit();
         }}
-        autoSize={{ minRows: 2, maxRows: 6 }}
+        autoSize={{ minRows: compact ? 1 : 2, maxRows: compact ? 4 : 6 }}
         // 这句原本在输入框上面单独占一行（App.tsx 的 .ink-rail-sub），跟框里
         // 的占位符「写点什么……」说的是同一件事，隔十几像素说了两遍。留占位符
         // 这一份：它就在你要落笔的地方，而且一开始打字就消失——「不用整理」

@@ -159,6 +159,8 @@ describe('SettingsModal：导出数据', () => {
     fireEvent.click(screen.getByText('导出数据'));
 
     await waitFor(() => expect(capturedBlob).not.toBeNull());
+    // 下载交给浏览器之后 UI 就没有下文了；这条回执确认「数据已打包、下载已发起」。
+    expect(await screen.findByText('已导出数据，浏览器会开始下载')).toBeTruthy();
 
     const text = await capturedBlob!.text();
     const parsed = JSON.parse(text);   // 不是合法 JSON 这里直接抛，测试失败
@@ -186,6 +188,22 @@ describe('SettingsModal：导出数据', () => {
 
     // 带时间戳，连着导出几次文件名不同，不会互相覆盖。
     expect(capturedFilename).toMatch(/^办事师爷数据-\d{8}-\d{6}\.json$/);
+  });
+});
+
+/**
+ * 失败横幅那条「去设置」靠这个 prop 一步落到 AI 那一页；不传时保持原来的
+ * 「打开在哪个分区就停在哪个分区」，不要顺手把 gear 的行为也改了。
+ */
+describe('SettingsModal：从外面指定打开的分区', () => {
+  it('initialSection="ai" 时打开就站在 AI 拆解页', () => {
+    render(
+      <AntApp>
+        <SettingsModal {...NAV} open value={settings} onClose={noop} onSave={async () => {}} initialSection="ai" />
+      </AntApp>,
+    );
+    expect(screen.getByRole('tab', { name: 'AI 拆解' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByText('谁来拆')).toBeTruthy();
   });
 });
 

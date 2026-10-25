@@ -80,7 +80,8 @@ interface GroupSectionProps {
  * 一起）和边注（每条任务自己的 aiComment，不是整组共用一条）。
  *
  * 「单独记的」（source 是 null）不画方括号——那条线视觉上说的是「这几条同源」，
- * 这组任务恰恰不同源（手工建的、或者来源笔记已经被删了），画出来是撒谎。
+ * 这组任务恰恰不同源（从「新任务」表单建的、或者来源笔记已经被删了），画出来
+ * 是撒谎。
  * 边注（如果这条任务恰好还留着 aiComment）照常显示：那是任务自己的记录，
  * 跟它现在归不归得进某个分组是两件事。 */
 function GroupSection({ group, now, onPatch, onEditTask, onDelete, onEditingChange, proposals, lists, allTasks, onDuplicate, onSkip, onBreakdown, onPromoteSubtask, focusMinutes, breakMinutes, offline, selection, onSelectionChange }: GroupSectionProps) {
@@ -137,14 +138,14 @@ function GroupSection({ group, now, onPatch, onEditTask, onDelete, onEditingChan
         <>
           <h2 id={headingId} className="ink-quote ink-source">{source.text}</h2>
           {/* asArray：跟 lib/taskView.ts 的 groupBySource 同一条防线，taskIds
-              手改错了类型也不该让这里崩。「拆成 N 条」是 AI 当时拆解出的历史
-              事实，读 taskIds 本身的长度，不是读筛选/删除之后还剩几张卡——
-              那两件事会让这个数字随手一点筛选按钮就变，或者任务被删之后
-              永久少报，见 #8 号复盘。 */}
+              手改错了类型也不该让这里崩。「拆成 N 条」是当时拆解出的历史事实
+              （AI 拆的、手动拆成多条都一样），读 taskIds 本身的长度，不是读
+              筛选/删除之后还剩几张卡——那两件事会让这个数字随手一点筛选按钮
+              就变，或者任务被删之后永久少报，见 #8 号复盘。 */}
           <p className="ink-source-meta ink-mono">
             {formatWhen(source.createdAt)} 写下 · 拆成 {asArray<string>(source.taskIds).length} 条
             {/* 按钮上那个数跟前面「拆成 N 条」**故意不是同一个数**：那个读的是
-                taskIds 的长度（AI 当时拆出几条，删了、筛掉了都不改），这个是
+                taskIds 的长度（当时拆出几条，删了、筛掉了都不改），这个是
                 这一刻屏幕上真会被选中的张数。两个数并排摆着不一样是对的——
                 点下去选中几张，对得上的是后面那个。 */}
             {pickBtn}
@@ -259,9 +260,9 @@ export function TaskBoard({ tasks, preRead, inbox, now, onPatch, onEditTask, onD
 
   // 「单独记的」那组内部按紧急程度排（过期置顶、按截止时间升序，不保留原顺序）
   // ——它没有叙事顺序可循。同源的组用 bubbleOverdue：过期任务浮到组内最前面，
-  // 其余仍按 taskIds 数组本身的顺序（AI 拆解时写下的先后步骤，重新按时间排
-  // 会把「先做这条、它卡住了才轮到下一条」的用意弄丢，只有「过期」这一件事
-  // 值得打破这个顺序）。组与组之间仍按 inbox.createdAt 升序——那对应手稿翻页
+  // 其余仍按 taskIds 数组本身的顺序（拆解时写下的先后——AI 拆的、手动拆成
+  // 多条的都是这个顺序；重新按时间排会把「先做这条、它卡住了才轮到下一条」的
+  // 用意弄丢，只有「过期」这一件事值得打破这个顺序）。组与组之间仍按 inbox.createdAt 升序——那对应手稿翻页
   // 的顺序，是这次重做的核心结构，不因为某一组里有过期任务就整组挪位置；
   // 跨组的「哪组该先看到」是另一个更大的产品决定，这次不动，见复盘报告。
   const groups = groupBySource(tasks, inbox)
@@ -318,8 +319,8 @@ export function TaskBoard({ tasks, preRead, inbox, now, onPatch, onEditTask, onD
             </div>
           ) : (
             // 「空的」两个字在有任务的时候都算不上一句话，在一台刚装好的机器上
-            // 更是把人拦在门外——这个视图正是手工建的任务落脚的地方（「单独记的」
-            // 那一组）。判据和文案在 lib/firstRun.ts，跟「今天」共用一句。
+            // 更是把人拦在门外——这个视图正是从「新任务」表单建的任务落脚的地方
+            // （「单独记的」那一组）。判据和文案在 lib/firstRun.ts，跟「今天」共用一句。
             <p className="ink-empty-note">{preRead ?? (isFirstRun(tasks) ? FIRST_RUN_HINT : '这个筛选下没有任务')}</p>
           )
         )}

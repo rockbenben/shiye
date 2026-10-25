@@ -3,6 +3,7 @@ import { App as AntApp, Button, Collapse, Dropdown, Input, List, Popconfirm, Pop
 import { DownOutlined, EditOutlined, RedoOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { InboxItem } from '../types.js';
 import { whenText } from '../lib/dueChip.js';
+import { splitCaptureSegments } from '../lib/composeDefaults.js';
 import { Markdown } from './Markdown.js';
 
 interface Props {
@@ -49,11 +50,25 @@ interface Props {
    * 分钟撞的就是这堵墙。
    */
   aiBlocked: string | null;
+  /**
+   * 已拆解的条目点回它拆出来的任务：按 id 现取标题。取不到（任务被删了）就
+   * 不画入口——点进去没有结果的按钮比不给入口更糟。
+   *
+   * **是函数不是整张表**：表要在 App 顶层读遍所有标题，一条坏数据会把整个
+   * 页面带崩；函数在收件箱这一层的错误边界里才读。
+   */
+  taskTitle?: (id: string) => string | undefined;
+  onOpenTask?: (id: string) => void;
+  /** 把一条收件箱原文按用户确认的多行拆成 N 条任务；返回真正建了几条。 */
+  onSplit: (id: string, lines: string[]) => Promise<number>;
 }
 
 interface RowProps {
   x: InboxItem;
   now: Date;
+  taskTitle?: (id: string) => string | undefined;
+  onOpenTask?: (id: string) => void;
+  onSplit: (id: string, lines: string[]) => Promise<number>;
   onDelete: (id: string) => void;
   /**
    * 「拆得不对，再来一轮」。`note` 是他补的那句要求，空串 = 单纯原样重拆。
@@ -171,10 +186,14 @@ function RedoButton({ id, onRedo }: { id: string; onRedo: (id: string, note: str
 /** 每一条收件箱记录。编辑态独立成一个组件（而不是渲染函数里塞 useState）——
  * List 的 renderItem 每条记录都会调一次，state 必须挂在真正的组件实例上，
  * 不然会撞上「同一个 state 被所有行共用」的 hooks 规则问题。 */
-function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingChange }: RowProps) {
+function InboxRow({ x, now, taskTitle, onOpenTask, onSplit, onDelete, onRedo, onMakeTask, onEditText, onEditingChange }: RowProps) {
   const { message } = AntApp.useApp();
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // 手动「拆成多条」的草稿：一行一条，初始按换行/分号预切（并去掉列表符号和
+  // 重新拆解追加的补充要求，规则在 splitCaptureSegments）；用户可以再改。
+  const [splitDraft, setSplitDraft] = useState<string | null>(null);
+  const [splitting, setSplitting] = useState(false);
 
   const startEdit = () => {
     setDraft(x.text);
@@ -204,6 +223,38 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
     }
   };
 
+  const linkedTasks = (x.taskIds ?? [])
+    .map((id) => ({ id, title: taskTitle?.(id) }))
+    .filter((t): t is { id: string; title: string } => t.title !== undefined);
+  const splitLines = (splitDraft ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const startSplit = () => {
+    setDraft(null);
+    setSplitDraft(splitCaptureSegments(x.text).join('\n'));
+    onEditingChange(x.id, true);
+  };
+  const cancelSplit = () => {
+    setSplitDraft(null);
+    onEditingChange(x.id, false);
+  };
+  const saveSplit = async () => {
+    if (splitLines.length < 2 || splitting) return;
+    setSplitting(true);
+    try {
+      const made = await onSplit(x.id, splitLines);
+      setSplitDraft(null);
+      onEditingChange(x.id, false);
+      void message.success(`已拆成 ${made} 条任务`);
+    } catch (e) {
+      // 失败时把编辑框和草稿留着——他刚改的那几行没有第二个来源。
+      void message.error((e as Error).message);
+    } finally {
+      setSplitting(false);
+    }
+  };
+
   return (
     <List.Item
       className={x.processed ? 'ink-note-done' : 'ink-note-pending'}
@@ -213,7 +264,19 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
               <Button key="s" size="small" type="text" loading={saving} disabled={!draft.trim() || saving} onClick={() => void save()}>保存</Button>,
               <Button key="c" size="small" type="text" disabled={saving} onClick={cancelEdit}>取消</Button>,
             ]
-          : [
+          : splitDraft !== null
+            ? [
+                <Button
+                  key="split-s"
+                  size="small"
+                  type="text"
+                  loading={splitting}
+                  disabled={splitLines.length < 2 || splitting}
+                  onClick={() => void saveSplit()}
+                >{splitLines.length < 2 ? '至少两行' : `拆成 ${splitLines.length} 条`}</Button>,
+                <Button key="split-c" size="small" type="text" disabled={splitting} onClick={cancelSplit}>取消</Button>,
+              ]
+            : [
               // 只有未处理的条目能改文字——已拆解的条目改原文不会重拆，编辑了也没有
               // 意义，服务端那边也这么挡（PATCH /api/inbox/:id）。已处理的条目原来
               // 就有的「重新拆解」按钮还在，翻回未处理之后就能编辑了。
@@ -246,7 +309,9 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
                   // **排在「编辑」前面**：这一行最常要做的事是「把它归位」，
                   // 不是「改改措辞」。没处理的才有这颗——已经拆过的再变一条
                   // 任务就是凭空多一条重复的。
-                  // 主按钮照旧一点就建，快路径一步都没多；▾ 里只挂一条「以后再说」。
+                  // 主按钮照旧一点就建，快路径一步都没多；▾ 里挂「以后再说」和
+                  // 「拆成多条…」——后者是给没有 AI、或者一段话里本来就有好几件事
+                  // 的用户留的手动出口，不抢主按钮的默认行为。
                   // **菜单里不再重复一条「现在就做」**：那就是主按钮自己，同一件事摆两个
                   // 入口只会让人怀疑它俩是不是有区别。
                   // **不用 `Dropdown.Button`**：antd 6 已经把它标成弃用（控制台里直接写着
@@ -263,8 +328,14 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
                     <Dropdown
                       trigger={['click']}
                       menu={{
-                        items: [{ key: 'later', label: '以后再说（直接搁置）' }],
-                        onClick: () => onMakeTask(x.id, { later: true }),
+                        items: [
+                          { key: 'later', label: '以后再说（直接搁置）' },
+                          { key: 'split', label: '拆成多条…' },
+                        ],
+                        onClick: ({ key }) => {
+                          if (key === 'split') startSplit();
+                          else onMakeTask(x.id, { later: true });
+                        },
                       }}
                     >
                       <Button size="small" type="text" icon={<DownOutlined />} aria-label="变成任务的其他" />
@@ -302,6 +373,24 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
             void save();
           }}
         />
+      ) : splitDraft !== null ? (
+        <div>
+          <Input.TextArea
+            value={splitDraft}
+            onChange={(e) => setSplitDraft(e.target.value)}
+            autoSize={{ minRows: 3, maxRows: 10 }}
+            autoFocus
+            aria-label="拆成多条的任务"
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+              e.preventDefault();
+              void saveSplit();
+            }}
+          />
+          <div className="ink-hint" style={{ marginTop: 6 }}>
+            一行一条，至少要两行。只做一件事的话，取消后用「变成任务」。
+          </div>
+        </div>
       ) : (
         <div>
           {/* **按 markdown 渲染，不是纯文本。** 随手记是「想到什么写什么」的
@@ -327,6 +416,26 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
               // 「变成任务」正好在（见上面那段），说得出口才接得上。
               (x.taskIds ?? []).length === 0 ? (
                 <span>没拆出任务——AI 觉得它不是一件要做的事</span>
+              ) : linkedTasks.length > 0 && onOpenTask ? (
+                linkedTasks.length === 1 ? (
+                  <button
+                    type="button"
+                    className="ink-note-open"
+                    onClick={() => onOpenTask?.(linkedTasks[0].id)}
+                  >已拆 {(x.taskIds ?? []).length} 条</button>
+                ) : (
+                  <Dropdown
+                    trigger={['click']}
+                    menu={{
+                      items: linkedTasks.map((t) => ({ key: t.id, label: t.title })),
+                      onClick: ({ key }) => onOpenTask?.(String(key)),
+                    }}
+                  >
+                    <button type="button" className="ink-note-open">
+                      已拆 {(x.taskIds ?? []).length} 条 <DownOutlined style={{ fontSize: 10 }} />
+                    </button>
+                  </Dropdown>
+                )
               ) : (
                 <span>已拆 {(x.taskIds ?? []).length} 条</span>
               )
@@ -345,7 +454,7 @@ function InboxRow({ x, now, onDelete, onRedo, onMakeTask, onEditText, onEditingC
   );
 }
 
-export function InboxSidebar({ items, now, onDelete, onRedo, onMakeTask, onEditText, onExpand, expanding, aiBlocked }: Props) {
+export function InboxSidebar({ items, now, onDelete, onRedo, onMakeTask, onSplit, onEditText, onExpand, expanding, aiBlocked, taskTitle, onOpenTask }: Props) {
   // 编辑器开着的条目 id——哪怕 AI 把它拆解掉（processed 变 true），也要继续
   // 摆在「未处理」列表里，不能被挪进已拆解折叠面板。折叠面板是另一个 List
   // 实例，挪过去等于组件被卸载重建，正在编辑的草稿会跟着无声消失（自动展开
@@ -382,7 +491,18 @@ export function InboxSidebar({ items, now, onDelete, onRedo, onMakeTask, onEditT
   const done = items.filter((x) => x.processed && !editingIds.has(x.id)).sort(byWritten);
 
   const row = (x: InboxItem) => (
-    <InboxRow x={x} now={now} onDelete={onDelete} onRedo={onRedo} onMakeTask={onMakeTask} onEditText={onEditText} onEditingChange={setEditing} />
+    <InboxRow
+      x={x}
+      now={now}
+      taskTitle={taskTitle}
+      onOpenTask={onOpenTask}
+      onDelete={onDelete}
+      onRedo={onRedo}
+      onMakeTask={onMakeTask}
+      onSplit={onSplit}
+      onEditText={onEditText}
+      onEditingChange={setEditing}
+    />
   );
 
   return (

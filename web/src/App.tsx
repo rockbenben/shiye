@@ -21,7 +21,7 @@ import { ColGrip, clampWidth } from './components/ColGrip.js';
 import { Sidebar, SKIP_IN_NAV } from './components/Sidebar.js';
 import { isNarrowNow, useIsNarrow, useIsTight } from './lib/narrow.js';
 import { agentWord } from './lib/agentWord.js';
-import { aiBlockedReason } from './lib/aiReady.js';
+import { aiBlockedReason, apiMissingFields } from './lib/aiReady.js';
 import { setBaseTitle } from './lib/pageTitle.js';
 import { SettingsModal } from './components/SettingsModal.js';
 import { ShortcutHelp } from './components/ShortcutHelp.js';
@@ -82,7 +82,7 @@ import { rescheduleLocalNotifications } from './lib/notifyNative.js';
 import { pushBackIfDirty, type PushSummary } from './lib/pushBack.js';
 import { nativeSharePort, subscribeShare } from './lib/shareNative.js';
 import { boardLocalTheme } from './theme.js';
-import type { ConflictFile, Countdown, Folder, InboxItem, Insight, List, Proposal, Settings, SmartFilter, Status, Task, TaskContext, TrashItem } from './types.js';
+import type { AiReadiness, ConflictFile, Countdown, Folder, InboxItem, Insight, List, Proposal, Settings, SmartFilter, Status, Task, TaskContext, TrashItem } from './types.js';
 import type { StatusFilter } from './lib/taskView.js';
 
 // 这里曾经有一份硬编码的 DEFAULT_SETTINGS 当 settings state 的初值。**整分支
@@ -169,10 +169,14 @@ const canQuickAdd = (v: string) => QUICKADD_VIEWS.has(v) || v.startsWith('list:'
  * 说的是「有东西但被挡住了」，这句说的是「真的还没有」。
  */
 /** 认不出的去处，标题和正文共用这一句——两处各写一遍迟早会分叉。 */
-/** 拆解结果那条提示自己消失前留多久（毫秒，只在页面可见时计时）。
+/** AI 结果提示的默认存活时间（毫秒，只在页面可见时计时）。
  *  6 秒：antd 的 notification 默认 4.5 秒，而这条带一句 description，
- *  给到能读完一句话的长度。 */
+ *  给到能读完一句话的长度。拆解成功那条例外，见下面 `AGENT_OK_EXPAND_TOAST_MS`。 */
 const AGENT_TOAST_MS = 6000;
+
+/** 拆解成功那条多留 4 秒：它上面有一颗「查看任务」，6 秒不够人读完再抬手点。
+ *  只在页面可见时计时（见下面那个 effect），切走时暂停、回来接着走。 */
+const AGENT_OK_EXPAND_TOAST_MS = 10000;
 
 /** 侧栏宽度存在哪儿。跟 `density` 那个键同一层，都是「这台设备上的偏好」。 */
 const NAV_WIDTH_KEY = 'navWidth';
@@ -320,12 +324,28 @@ export function App() {
   // 判断挡住。番茄钟时长这类只影响观感的读取方用 `settings?.focusMinutes`，
   // 落到 `TaskCard` 自己写明的默认值 25（它本来就是可选 prop）。
   const [settings, setSettings] = useState<Settings | null>(null);
+  // 服务端只读检查的结果：AI 是 CLI 还是接口、当前到底能不能开工。它在首屏
+  // 决定要不要提前说“还没接上”，不等用户写完一段话、等 60 秒再报错。
+  const [aiStatus, setAiStatus] = useState<AiReadiness | null>(null);
+  useEffect(() => {
+    if (!settings) {
+      setAiStatus(null);
+      return undefined;
+    }
+    let alive = true;
+    void api.aiStatus()
+      .then((s) => { if (alive) setAiStatus(s); })
+      .catch(() => { if (alive) setAiStatus(null); });
+    return () => { alive = false; };
+  }, [settings?.aiMode, settings?.aiCli, settings?.aiCliPath, settings?.aiEndpointId, settings?.aiEndpoints]);
   // 只记 id：横幅内容（标题、备注）现从 tasks 里现查，任务完成或被删掉时
   // 横幅要跟着消失——不加一份「这条还有效吗」的旁路状态去追这件事，用
   // tasks（页面已经有的那份数据）当唯一依据：查不到、或者查到的 status
   // 是 done，渲染时就把它滤掉。这是这个代码库的规矩：一个更新路径。
   const [due, setDue] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 从失败横幅点「去设置」时直接落到 AI 那一页；gear 那条路清空，保持上次的分区。
+  const [settingsSection, setSettingsSection] = useState<string | null>(null);
   // 离线记号（task-3-brief）。**这是「连不上服务端」在这个应用里唯一的
   // 表现**——这里曾经还有一个 `needsServerSetup`：手机没配过地址、又探不到
   // 本机服务时整页 return 一面「先填服务地址」的墙，把本地功能全挡在后面。
@@ -354,6 +374,12 @@ export function App() {
    * 就会有人漏掉其中一处。
    */
   const aiBlocked = aiBlockedReason(settings, offline);
+  // 首屏提示跟按钮共用同一份「缺哪几格」判据：服务端 `configProblem` 不把密钥
+  // 当必填，而三颗按钮对已知厂商仍要求密钥——只看服务端的话，缺密钥的云厂商
+  // 会被首屏放过、进了收件箱才发现按钮是灰的。
+  const aiMissing = settings ? apiMissingFields(settings) : [];
+  const aiSetupReason = aiMissing.length > 0 ? `接口配置还差：${aiMissing.join('、')}` : aiStatus?.reason;
+  const aiSetupNeeded = !!aiStatus && (!aiStatus.ready || aiMissing.length > 0);
   // 手机通知权限被拒的记号（本地通知那一批）。**只有 'denied' 挂横幅**：
   // 'not-native'（桌面/浏览器，压根没排过本地通知）和 'ok' 都沉默——桌面有
   // 自己的提醒路（fireReminders → Electron 原生通知 / PowerShell 兜底），
@@ -1161,9 +1187,9 @@ export function App() {
    *
    * **选择器认的是这个框自己（`.ink-composer`，`InboxComposer` 的根），不是
    * 装它的那个位置。** 原来写的是 `.ink-nav-composer textarea`——那是**侧栏
-   * 里**的容器；窄屏下随手记搬到了任务列表下面（`.ink-narrow-composer`，见
-   * NavShell 那段），那个选择器当场找不到东西，`N` 和命令面板里的「随手记」
-   * 在手机上变成两个按了没反应的入口。认组件自己的根，摆在哪儿都找得到。
+   * 里**的容器；窄屏下随手记钉在屏幕底部（`.ink-narrow-composer`，见下面
+   * 那段），那个选择器当场找不到东西，`N` 和命令面板里的「随手记」在手机上
+   * 变成两个按了没反应的入口。认组件自己的根，摆在哪儿都找得到。
    */
   const focusQuickCapture = () => {
     const box = () => document.querySelector<HTMLTextAreaElement>('.ink-composer textarea');
@@ -1873,14 +1899,24 @@ export function App() {
   );
 
   /**
-   * 建一条任务。**两个入口共用**：「新任务」那张表单和列表顶上那一行
-   * `QuickAdd`——手挑字段是这里栽过 Critical 的地方（tags/priority 曾经被
-   * 静默丢掉，见 App.test.tsx「新建任务时 TaskDraft 的字段不能被 App.tsx
-   * 手挑漏掉」那组测试），一份就够，别为第二个入口再抄一遍。加新字段时记得
-   * 这一行不会自动带上。
+   * 一份 `TaskDraft` 变成发给 API 的任务请求体。**新任务表单、列表顶上那一行
+   * `QuickAdd`，以及收件箱掉下来的任务共用这一份**——手挑字段曾经把
+   * tags/priority 静默丢掉过（见下面 `createTask` 那段注释），几处各抄一遍
+   * 迟早再漏一个。
    *
-   * firedAt 写 null 是对的——服务端会按时刻自己重算章，客户端发什么都不算数。
+   * `status` 不在这里：它由调用方单独给，见 `createTask`。
    */
+  const taskPatchFromDraft = (d: TaskDraft) => ({
+    title: d.title, notes: d.notes, due: d.due, startAt: d.startAt, endAt: d.endAt,
+    persistentReminder: d.persistentReminder, priority: d.priority, tags: d.tags,
+    listId: d.listId, section: d.section, repeat: d.repeat, parentId: d.parentId,
+    estimateMinutes: d.estimateMinutes,
+    habit: canBeHabit(d.repeat) ? d.habit : false,
+    waitingFor: d.waitingFor,
+    context: d.context,
+    reminders: d.reminders.map((at) => ({ at, firedAt: null })),
+  });
+
   /**
    * 收件箱里那条原话**直接变成一条任务**，不劳烦 AI（仿滴答清单：它那边收件箱
    * 里躺的本来就是任务）。
@@ -1891,6 +1927,8 @@ export function App() {
    *
    * 建完把这条收件箱记录标成已处理、并记下它拆出了哪条任务（`taskIds`）——
    * 跟 AI 拆解那条路留下的痕迹是同一种，「已拆解」那个折叠面板里点得进去。
+   * **这一趟是一个请求**（`api.inboxToTasks`）：期间 AI 把原文拆掉的话服务端
+   * 会拒绝，不会覆盖它已经写下的 taskIds。
    *
    * `view` 传 `'inbox'`：`composeDefaults` 认的「站在某个清单/标签里就归进去」
    * 那两支在这儿都不成立，收件箱不是任何一个清单的上下文。
@@ -1916,8 +1954,11 @@ export function App() {
       // `later`：直接建成搁置（GTD 的「将来也许」）。**建的时候就写，不是建完再发
       // 一条 PATCH 改状态**：后者中间那一下它真的以「待办」落了盘，会闪进「全部」、
       // 进得了徒教徒法、也可能卡在两次请求之间——而他刚刚表达的意思恰恰是「现在不做」。
-      const task = await createTask({ ...emptyDraft(), ...built, notes: body }, opts?.later ? 'later' : undefined);
-      await api.patchInbox(id, { processed: true, taskIds: [task.id] });
+      const patch = { ...emptyDraft(), ...built, notes: body };
+      await api.inboxToTasks(id, [{
+        ...taskPatchFromDraft(patch),
+        ...(opts?.later ? { status: 'later' as const } : {}),
+      }]);
       // 两句话分开说：一条直接搁置的任务**不会出现在「今天」「接下来」里**，
       // 报一句「已变成任务」会让人去那几屏里找它，而那几屏里没有。
       void message.success(opts?.later ? `已存成「以后再说」：${built.title}` : `已变成任务：${built.title}`);
@@ -1925,18 +1966,46 @@ export function App() {
   };
 
   /**
+   * 一条收件箱原文按他确认的几行**拆成多条任务**，不开 AI。
+   *
+   * 一段话里本来就装着好几件事的时候（「买猫粮；约牙医；交房租」），等 AI
+   * 一两分钟、还不一定拆对；这里让他自己看一眼、改两行，直接落成任务。
+   * 每一行都跟「变成任务」共用同一份 `smartDraft`，「明天下午三点交房租」
+   * 那一行照样带截止时间。
+   *
+   * **先全部校验、再发一次请求**：某一行只剩日期或标签（标题被 smartStripDate
+   * 剥空）时直接报错、一条都不建，编辑框和那几行留在原地。服务端在同一个请求
+   * 里建完整批并写回收件箱；AI 在编辑期间把这条拆掉的话会被拒绝，不会覆盖
+   * 它已经写下的 taskIds。
+   *
+   * 不经 guard()：InboxRow 要自己 await 到失败，把草稿留着。
+   */
+  const splitInboxInto = async (id: string, lines: string[]): Promise<number> => {
+    const defaults = composeDefaults('inbox', lists, settings, null, now);
+    const drafts = lines.map((line) => smartDraft(line, defaults, now, { presetToRemindAt }));
+    const emptyAt = drafts.findIndex((d) => !d.title);
+    if (emptyAt !== -1) throw new Error(`第 ${emptyAt + 1} 行只剩日期或标签，补一句要做的事再拆`);
+    const patches = drafts.map((d) => taskPatchFromDraft({ ...emptyDraft(), ...d }));
+    const r = await api.inboxToTasks(id, patches);
+    return r.tasks.length;
+  };
+
+  /**
+   * 建一条任务。**两个入口共用**：「新任务」那张表单和列表顶上那一行
+   * `QuickAdd`——手挑字段是这里栽过 Critical 的地方（tags/priority 曾经被
+   * 静默丢掉，见 App.test.tsx「新建任务时 TaskDraft 的字段不能被 App.tsx
+   * 手挑漏掉」那组测试），一份就够，别为第二个入口再抄一遍。加新字段时记得
+   * 这一行不会自动带上。
+   *
+   * firedAt 写 null 是对的——服务端会按时刻自己重算章，客户端发什么都不算数。
+   *
    * `status` 单独一个参数，不是 `TaskDraft` 的字段——那份草稿**刻意不含 status**
    * （见 TaskFields.tsx `TaskDraft` 顶上那段：状态由卡片上的流转按钮走，不是填
    * 出来的）。不给就是服务端 `newTask()` 的 'todo'，跟以前一样。
    */
   const createTask = (d: TaskDraft, status?: Status) => api.addTask({
     ...(status ? { status } : {}),
-    title: d.title, notes: d.notes, due: d.due, startAt: d.startAt, endAt: d.endAt, persistentReminder: d.persistentReminder, priority: d.priority, tags: d.tags, listId: d.listId, section: d.section,
-    repeat: d.repeat, parentId: d.parentId, estimateMinutes: d.estimateMinutes,
-    habit: canBeHabit(d.repeat) ? d.habit : false,
-    waitingFor: d.waitingFor,
-    context: d.context,
-    reminders: d.reminders.map((at) => ({ at, firedAt: null })),
+    ...taskPatchFromDraft(d),
   });
 
   // 批量删除的确认框——BatchBar 的删除按钮、命令面板里的「删除选中的 N 条」
@@ -2475,6 +2544,10 @@ export function App() {
         // 「有活儿」不等于「能干活」：配置没配、连不上服务时那颗「立即拆解」也
         // 灰着，并把原因摆在按钮下面。判据三颗 AI 按钮共用一份（lib/aiReady.ts）。
         aiBlocked={aiBlocked}
+        // 已拆解那一条能点回任务；标题按 id 现取（只在收件箱边界里读），
+        // 删掉的任务不画入口。
+        taskTitle={(id) => tasks.find((t) => t.id === id)?.title}
+        onOpenTask={openTask}
         onDelete={(id) => guard(() => api.deleteInbox(id))}
         // **不经 guard()**：失败必须让 RedoButton 自己 await 到，把他刚打的那句
         // 要求留在框里——跟下面 onEditText 是同一条理由。成功那句话在这儿说，
@@ -2489,6 +2562,8 @@ export function App() {
             : `${moved}这条已经翻回未处理；有一次 AI 正在跑，等它结束后再拆一次`);
         }}
         onMakeTask={makeTaskFromInbox}
+        // 同一类：失败要让 InboxRow await 到，把拆到一半的草稿留着。
+        onSplit={splitInboxInto}
         // 编辑态保存专用，不经 guard()：失败必须让 InboxRow 自己 await 到，
         // 把编辑框和草稿留着，不能被 guard 吞掉。
         onEditText={(id, text) => api.patchInbox(id, { text })}
@@ -3197,11 +3272,14 @@ export function App() {
   useEffect(() => {
     if (agentState !== 'ok' && agentState !== 'skipped') return undefined;
     // **board 的 ok 不自动消失。** 拆解/回顾的 ok 是「办完了，去看板/卡片上
-    // 看结果」的信号，结果在别处，信号 6 秒后收走无妨；总览的 ok 本身就是那段
+    // 看结果」的信号，结果在别处，过几秒收走无妨；总览的 ok 本身就是那段
     // 汇报——一整段人要读的字，自动收走等于把唯一产物删掉，跟「跑完什么都
     // 没发生」一模一样。skipped（没产出汇报）仍然是普通告知，照走。
     if (agentState === 'ok' && agentKind === 'board') return undefined;
-    let left = AGENT_TOAST_MS;
+    // 拆解成功那条带着「查看任务」，10 秒——6 秒不够读完再抬手点；其余仍按 6 秒。
+    let left = agentState === 'ok' && (agentKind === 'expand' || agentKind === undefined)
+      ? AGENT_OK_EXPAND_TOAST_MS
+      : AGENT_TOAST_MS;
     let since: number | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stop = () => {
@@ -3357,8 +3435,8 @@ export function App() {
    * 手机上清单侧栏改成划出来的抽屉，不待在文档流里。
    *
    * 之前它就摆在任务列表**上面**：竖栏躺平成顶上一条，紧接着是整条侧栏
-   * （导航 + 清单 + 标签 + 随手记），实测 390×844 上占掉七百多像素——
-   * **打开应用，第一屏一条任务都看不见**，得先把整个侧栏划过去。而这个
+   * （导航 + 清单 + 标签，当时连随手记也在里面），实测 390×844 上占掉七百多
+   * 像素——**打开应用，第一屏一条任务都看不见**，得先把整个侧栏划过去。而这个
    * 应用打开就是为了看今天要做什么。
    *
    * 照滴答清单的做法：它手机端的侧边栏是划出来/点出来的，不占列表那一屏
@@ -3369,18 +3447,59 @@ export function App() {
    * 理由不成立了；`Drawer` 留着靠的是它自己那几样现成的东西，不是同类相认。）
    *
    * **随手记不进抽屉。** 「随手记的成本不能变高」是这个产品的硬约束，
-   * 藏进一个要先点开的抽屉正是把成本抬高；它挪到任务列表**下面**，
-   * 顺序变成「今天要做什么 → 想到什么随手写 → 去别处看看」，正是手机上
-   * 这三件事的频次顺序。
+   * 藏进一个要先点开的抽屉正是把成本抬高；窄屏下它**钉在屏幕底部**，
+   * 任何滚动位置都是一眼看得见、一步点得到（见下面 `.ink-narrow-composer`
+   * 那一段和 theme.css 里那条规则）。
    */
   const isNarrow = useIsNarrow();
   /** 窄到放不下三栏（< 1000px）。详情那一栏在这一档退成整屏浮层，见 lib/narrow.ts。 */
   const isTight = useIsTight();
   const [navOpen, setNavOpen] = useState(false);
+  // 随手记的草稿放在 App 这一层（ref，不是 state）：框会在切模块、宽窄屏切换时
+  // 被卸载重建，而草稿不能跟着没。用 ref 而不是 state 是怕每敲一个字重渲染整块
+  // 看板——这里只需要一个跨挂载存活的可变对象。
+  const captureDraftRef = useRef('');
+  // 「先手动记」先导航再聚焦：不能在一帧之后猜框挂出来了没有，用 state 驱动
+  // 下面那个 effect，等视图/框真的就绪再聚焦。
+  const [focusCapturePending, setFocusCapturePending] = useState(false);
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  // 常驻栏的实际高度随字号、是否写着多行变化；spacer 和批量条都读这个变量，
+  // 不能一个按 72、一个按实测——那会在 200% 字号或输入框长高时重新叠在一起。
+  useEffect(() => {
+    if (!isNarrow || !inTaskModule) return undefined;
+    const el = dockRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const apply = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      if (h > 0) document.documentElement.style.setProperty('--ink-dock-height', `${h}px`);
+    };
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    apply();
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.removeProperty('--ink-dock-height');
+    };
+  }, [isNarrow, inTaskModule]);
+  // `view` 在依赖里：从「习惯」这类没有随手记的模块点「先手动记」时，第一次
+  // effect 跑完框还没挂出来，切到收件箱之后这一次才会真的找到它。
+  useEffect(() => {
+    if (!focusCapturePending) return;
+    const box = document.querySelector<HTMLTextAreaElement>('.ink-composer textarea');
+    if (!box) return;
+    box.focus();
+    setFocusCapturePending(false);
+  }, [focusCapturePending, view]);
   // 不经 guard()：失败要把输入框和草稿留着，让 InboxComposer 自己的 catch 去
   // 处理——guard() 会把 reject 吞掉，InboxComposer 就会误以为存成功了，把刚打
   // 的字清空。（这句原来写在下面那个 prop 上，提成变量之后跟着搬过来。）
-  const composer = <InboxComposer onSubmit={async (text) => { await api.addInbox(text); }} />;
+  const composer = (
+    <InboxComposer
+      compact={isNarrow}
+      draftRef={captureDraftRef}
+      onSubmit={async (text) => { await api.addInbox(text); }}
+    />
+  );
 
 
   /**
@@ -3544,7 +3663,7 @@ export function App() {
           // 任务去处」，别的原样导航过去。
           onSelect={(k) => navigate(k === TASKS_MODULE_KEY ? lastTaskViewRef.current : k)}
           onSearch={() => setSearching(true)}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => { setSettingsSection(null); setSettingsOpen(true); }}
         />
 
       {/* **顶栏整条删了。** 它只装着一个字号「办事师爷」和右边那一串状态，
@@ -3637,6 +3756,33 @@ export function App() {
                 （局域网 IP + 端口，不是 localhost）。
               </span>
             </div>
+          )}
+
+          {/* 首屏先说清楚 AI 是不是已经接上，不等用户写完一段话、等一分钟
+              再报错。只在真的空着的新机器上出现：已经有任务/收件箱条目时，
+              用户已经在流程里，失败横幅会负责说明；任务还在读或者读取失败时
+              也不来判断（`tasksLoaded` / `tasksFailed`），那边自己的红字在说
+              发生了什么事。判据是服务端只读检查 + 客户端「缺哪几格」
+              （`aiSetupNeeded`），跟收件箱那颗「立即拆解」共用同一套，不会出现
+              「首屏说没事、按钮却灰着」。两个出口都是现成的：去设置，或者先去
+              随手记写一条（收件箱里可以手动拆成多条）。 */}
+          {!offline && settings && aiStatus && aiSetupNeeded && tasksLoaded && !tasksFailed && tasks.length === 0 && inbox.length === 0 && (
+            <Alert
+              type="info"
+              showIcon
+              message="AI 拆解还没接上"
+              description={`当前没有可用的 AI${aiSetupReason ? `：${aiSetupReason}` : ''}。去设置接入本机命令行或接口；不接也能先写进「随手记」，再在收件箱里手动拆成多条。`}
+              action={(
+                <Space size={4}>
+                  <Button size="small" onClick={() => { setSettingsSection('ai'); setSettingsOpen(true); }}>
+                    去设置
+                  </Button>
+                  <Button size="small" onClick={() => { navigate('inbox'); setFocusCapturePending(true); }}>
+                    先手动记
+                  </Button>
+                </Space>
+              )}
+            />
           )}
 
           {/* 通知权限记号（本地通知那一批）：跟上面离线记号同族——常驻不是
@@ -3887,6 +4033,23 @@ export function App() {
               // board 的汇报是多行纯文本，React 默认把 \n 压成空格——pre-wrap
               // 保住换行。white-space 是继承属性，短消息标题不受影响。
               description={<span style={{ whiteSpace: 'pre-wrap' }}>{agentResult.message}</span>}
+              // 失败时把「设置 → AI 拆解」做成一步能到的地方，而不是让人自己在
+              // 十个分区里找——这是 failed 专属；ok 的「查看任务」是另一件事
+              // （见下），skipped 既没有可配的、也没有可看的。
+              //
+              // 拆解成功的 ok 给一颗「查看任务」：卡片确实出现在「按来源」里，但人
+              // 多半是在别的视图里等完这一轮，屏幕上只多一行字，回不到刚拆出来
+              // 的那几条。总览的 ok 本身就是汇报、回顾的 ok 要去卡片上看建议，
+              // 都不该长这一颗。
+              action={
+                agentResult.state === 'failed' ? (
+                  <Button size="small" onClick={() => { setSettingsSection('ai'); setSettingsOpen(true); }}>
+                    去设置
+                  </Button>
+                ) : agentResult.state === 'ok' && (agentResult.kind === 'expand' || agentResult.kind === undefined) ? (
+                  <Button size="small" onClick={() => navigate('source')}>查看任务</Button>
+                ) : undefined
+              }
               onClose={() => setAgentResult(null)}
             />
           )}
@@ -4045,9 +4208,10 @@ export function App() {
                 // 留着，让 InboxComposer 自己的 catch 去处理——跟 InboxSidebar
                 // 的 onEditText 是同一条道理，guard() 会把 reject 吞掉，
                 // InboxComposer 就会误以为存成功了，把刚打的字清空。
-                // **窄屏下这里给 null**：随手记不进抽屉，它摆到任务列表下面去
-                // 了（下面 .ink-narrow-composer 那一段）。「随手记的成本不能变高」
-                // 是这个产品的硬约束，藏进一个要先点开的抽屉正是把成本抬高。
+                // **窄屏下这里给 null**：随手记不进抽屉，它钉在屏幕底部
+                // 那一条常驻栏里（下面 .ink-narrow-composer 那一段）。
+                // 「随手记的成本不能变高」是这个产品的硬约束，藏进一个要先
+                // 点开的抽屉正是把成本抬高。
                 composer={isNarrow ? null : composer}
               />
             </NavShell>
@@ -4314,34 +4478,33 @@ export function App() {
                   有 {staleCount} 条已经过期了。<button type="button" className="ink-review-link" onClick={() => navigate('review')}>去回顾</button>那一屏，一颗按钮就能让 AI 回头看一遍、提点建议。
                 </p>
               )}
-              {/* 随手记。**窄屏专属的位置**：宽屏它在侧栏底下，而窄屏侧栏
-                  整条收进了抽屉，藏进去等于把「随手记的成本」抬高——那是这个
-                  产品的硬约束。摆在任务列表下面，顺序就成了「今天要做什么 →
-                  想到什么随手写 → 去别处看看（抽屉）」，正是手机上这三件事的
-                  频次顺序。
+              {/* 随手记。**窄屏专属的位置：钉在屏幕底部。** 宽屏它在侧栏
+                  底下；窄屏侧栏整条收进了抽屉，藏进去等于把「随手记的成本」
+                  抬高——那是这个产品的硬约束。
 
-                  **它跟着整页滚，所以列表一长就在首屏之外。** 390×844 上实测
-                  （「今天」，卡片档）：1 条任务时框顶 y=549 还在首屏，**3 条就
-                  掉出去了**（y=845），12 条要往下滚 1.8 屏，15 条 2.3 屏。
-                  桌面那次同样的事（看板把它顶到折线以下）是靠侧栏自己滚解决的，
-                  这边没有那个结构。
+                  **它原来在任务列表下面，跟着整页滚。** 390×844 实测（「今天」，
+                  卡片档）：1 条任务时框顶 y=549 还在首屏，3 条就掉出去了
+                  （y=845），12 条要往下滚 1.8 屏。当时认下这个代价，是因为
+                  「常驻可见」量出来要 171px = 20%（把标题和多行框压到最扁也有
+                  126px = 15%），而 `position: sticky` 作为这一列的最后一个孩子
+                  粘性区间为零、根本不生效。
 
-                  **仍然维持现状，理由是量过之后的三条：**
-                  ① 顶上那条「添加任务」是钉住的、永远 1 次点击，多数捕获它就
-                     接得住（日期/标签/`@情境` 都认）；随手记要的是「还说不成
-                     一件事」的那类文字，本来就少一些；
-                  ② 抽屉那条路还在——☰ → 收件箱，**恒定 2 次点击**，比滚 2.3 屏
-                     便宜。上面那句「藏进抽屉等于抬高成本」说的是「只留抽屉这
-                     一条」，不是说它不存在；
-                  ③ 任何「常驻可见」的做法都要永久吃掉这块屏：实测它高 171px
-                     ＝ 20%，把标题和多行框压到最扁也还有 126px ＝ 15%。
-                     （`position: sticky` 在这儿还直接不生效——它是这一列的最后
-                     一个孩子，粘性区间为零；桌面那份能用是因为上面有
-                     `margin-top: auto` 撑出的空间。）
-
-                  也就是说这不是「没想到」，是**量过之后认下的代价**。真要改，
-                  得先决定拿 15% 的屏换什么。 */}
-              {inTaskModule && isNarrow && <div className="ink-narrow-composer">{composer}</div>}
+                  **现在换了个形状，那笔账不成立了**：不是把整块侧栏输入框搬来
+                  常驻，而是一条**压扁的常驻栏**——标题视觉隐藏（`aria-labelledby`
+                  还指着它，读屏照样有名字）、输入框默认一行、提交按钮挪到同一行
+                  右侧。收起时默认约 72px（390 × 844 的 8.5%），写字时才往上长到
+                  四行；实际高度由 App 的 `ResizeObserver` 写进
+                  `--ink-dock-height`，字号变大时 spacer 和批量条一起跟着让位。`position: fixed` 在这里
+                  是对的：窄屏下滚的是文档本身（上面 `@media (max-width: 767px)`
+                  那段），没有「相对某一列定位」这回事；粘性那条「最后一个孩子区间
+                  为零」的限制也不适用。下面那个 spacer 补上常驻栏占掉的底部空间，
+                  最后一张卡才不会被它压住。 */}
+              {inTaskModule && isNarrow && (
+                <>
+                  <div className="ink-narrow-composer-spacer" aria-hidden />
+                  <div className="ink-narrow-composer" ref={dockRef}>{composer}</div>
+                </>
+              )}
             </Col>
             {/* 第三栏：详情面板（仿滴答清单）。**只在真的打开了一条任务时
                 才存在**——空着的一栏会白占三百像素，而这一屏本来就把正文收在
@@ -4554,12 +4717,13 @@ export function App() {
       <SettingsModal
         open={settingsOpen}
         value={settings}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => { setSettingsOpen(false); setSettingsSection(null); }}
         onSave={async (s) => { await api.saveSettings(s); }}
         navOptions={navOptions}
         navModes={navModes}
         onNavModes={changeNavModes}
         lists={lists}
+        initialSection={settingsSection}
       />
 
       <CommandPalette

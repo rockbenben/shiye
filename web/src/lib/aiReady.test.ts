@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { AiEndpoint, Settings } from '../types.js';
-import { aiBlockedReason } from './aiReady.js';
+import { aiBlockedReason, apiMissingFields } from './aiReady.js';
 
 /** 只填 AI 那几项，别的键用 `as` 抹掉——本函数只读 AI 那几项。 */
 const cfg = (o: Partial<Settings>): Settings => o as Settings;
@@ -13,12 +13,14 @@ describe('aiBlockedReason', () => {
     expect(aiBlockedReason(cfg({ aiMode: 'cli', aiCli: 'custom', aiCliPath: '' }), false)).toBeNull();
   });
 
-  /** 一家配齐了的记录，`api()` 拿它做底再改个别字段。 */
+  /** 一家配齐了的记录，`api()` 拿它做底再改个别字段。
+   *  用 `deepseek`（目录里的已知厂商，不是 `keyOptional`）当默认值——拿一个
+   *  认不出的 id 当夹具的话，「缺密钥」那条判据根本不会被走到。 */
   const full: AiEndpoint = { baseUrl: 'https://x/v1', key: 'sk-1', model: 'm' };
   const api = (over?: Partial<AiEndpoint>) =>
-    cfg({ aiMode: 'api', aiEndpointId: 'x', aiEndpoints: { x: { ...full, ...over } } });
+    cfg({ aiMode: 'api', aiEndpointId: 'deepseek', aiEndpoints: { deepseek: { ...full, ...over } } });
 
-  it('接口模式三样配齐了才放行', () => {
+  it('接口模式：已知要密钥的厂商，三样配齐了才放行', () => {
     expect(aiBlockedReason(api(), false)).toBeNull();
   });
 
@@ -28,6 +30,42 @@ describe('aiBlockedReason', () => {
     expect(r).toContain('密钥');
     expect(r).toContain('模型名');
     expect(r).toContain('设置'); // 得告诉他去哪儿
+  });
+
+  /**
+   * **不要钥匙的本机服务不能拿密钥拦。** 这是 README 里明写的一条（Ollama /
+   * LM Studio「不要密钥，留空」），也是服务端 `configProblem` 的判据；客户端
+   * 拦在这儿的话，用户只能随便编一个字符串糊弄过去。
+   */
+  it('目录里标了 keyOptional 的一家（本机模型）：密钥留空照样放行', () => {
+    const r = aiBlockedReason(cfg({
+      aiMode: 'api',
+      aiEndpointId: 'llm',
+      aiEndpoints: { llm: { baseUrl: 'http://127.0.0.1:11434/v1', key: '', model: 'qwen' } },
+    }), false);
+    expect(r).toBeNull();
+  });
+
+  it('自定义/认不出的端点：不按密钥拦——客户端分不清它是不是自建网关', () => {
+    const r = aiBlockedReason(cfg({
+      aiMode: 'api',
+      aiEndpointId: 'custom:192.168.1.9:8080',
+      aiEndpoints: { 'custom:192.168.1.9:8080': { baseUrl: 'http://192.168.1.9:8080/v1', key: '', model: 'local' } },
+    }), false);
+    expect(r).toBeNull();
+  });
+
+  it('已知要密钥的厂商（DeepSeek）：缺密钥照样拦下', () => {
+    expect(aiBlockedReason(api({ key: '' }), false)).toContain('密钥');
+  });
+
+  it('apiMissingFields 跟按钮共用同一份缺失项：云厂商缺密钥、本机模型不要求密钥', () => {
+    expect(apiMissingFields(api({ key: '' }))).toEqual(['密钥']);
+    expect(apiMissingFields(cfg({
+      aiMode: 'api',
+      aiEndpointId: 'llm',
+      aiEndpoints: { llm: { baseUrl: 'http://127.0.0.1:11434/v1', key: '', model: 'qwen' } },
+    }))).toEqual([]);
   });
 
   /**

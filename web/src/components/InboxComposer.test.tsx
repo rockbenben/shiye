@@ -41,6 +41,21 @@ describe('InboxComposer：回车换行，Ctrl+回车提交', () => {
 
     expect(onSubmit).toHaveBeenCalledWith('按按钮提交');
   });
+
+  /**
+   * 框会在切到「习惯」这类模块、以及宽窄屏切换时被卸载重建。草稿不能跟着
+   * 组件一起没——`draftRef` 是它跨挂载的落脚处。
+   */
+  it('卸载再挂回来，打了一半的字还在——草稿跟着 ref 走，不跟组件走', () => {
+    const draftRef = { current: '' };
+    const first = render(<InboxComposer draftRef={draftRef} onSubmit={vi.fn()} />);
+    fireEvent.change(screen.getByPlaceholderText(/想到什么写什么/), { target: { value: '写了一半' } });
+    expect(draftRef.current).toBe('写了一半');
+
+    first.unmount();
+    render(<InboxComposer draftRef={draftRef} onSubmit={vi.fn()} />);
+    expect((screen.getByPlaceholderText(/想到什么写什么/) as HTMLTextAreaElement).value).toBe('写了一半');
+  });
 });
 
 /**

@@ -621,6 +621,7 @@ export function Sidebar({
             <input
               className="ink-nav-addinput"
               aria-label="文件夹名字"
+              placeholder="文件夹名字，回车保存"
               autoFocus
               value={folderDraft}
               onChange={(e) => setFolderDraft(e.target.value)}
@@ -645,6 +646,7 @@ export function Sidebar({
             <input
               className="ink-nav-addinput"
               aria-label="清单名字"
+              placeholder="清单名字，回车保存"
               autoFocus
               value={draft}
               onChange={(e) => setDraft(e.target.value)}

@@ -260,7 +260,7 @@ describe('TaskBoard：筛选不能摘掉正在编辑的卡片', () => {
 });
 
 describe('TaskBoard：过期任务的排序', () => {
-  it('同源组内，过期任务浮到最前面，其余仍按 AI 拆解出的步骤顺序（taskIds 数组顺序）', () => {
+  it('同源组内，过期任务浮到最前面，其余仍按拆解时写下的顺序（taskIds 数组顺序）', () => {
     const src = note({ id: 'i1', taskIds: ['t1', 't2', 't3'] });
     const step1 = task({ id: 't1', title: '第一步不急', due: '2026-08-31T00:00:00.000Z' });
     const step2 = task({ id: 't2', title: '第二步过期了', due: '2026-08-01T00:00:00.000Z' });

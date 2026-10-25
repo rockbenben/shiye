@@ -1362,7 +1362,7 @@ describe('选中态 / 批量操作条：一个群青都不许有', () => {
     // 判红——那正是它存在的意义，所以这里是把新规则**纳入**守卫，不是绕开它。
     const rules = bare.match(/\n\s*\.ink-batch-[\w-]*[^{}]*\{[^}]*\}/g);
     expect(rules, '.ink-batch-* 规则块一条都没扫到').not.toBeNull();
-    expect(rules!.length, '应该有 5 条：.ink-batch-bar/count/list-select/tag-input + @media 里的窄屏 .ink-batch-bar').toBe(5);
+    expect(rules!.length, '应该有 6 条：.ink-batch-bar/count/list-select/tag-input + 767/480 两档窄屏 .ink-batch-bar').toBe(6);
     for (const r of rules!) {
       expect(r.toUpperCase(), r).not.toContain('#2E3ED4');
       expect(r, r).not.toContain('--ink-ai');
@@ -1388,6 +1388,15 @@ describe('选中态 / 批量操作条：一个群青都不许有', () => {
     expect(narrow![1]).toMatch(/transform:\s*none/);
     expect(narrow![1]).toMatch(/left:/);
     expect(narrow![1]).toMatch(/right:/);
+    // 手机底部还有随手记常驻栏（fixed，高度由 --ink-dock-height 实测）：批量条
+    // 不抬上去就会正好盖住输入框和「存下」。这条和 767 那一档用的是同一个算式。
+    expect(narrow![1]).toMatch(/bottom:\s*calc\(var\(--ink-dock-height\) \+ 12px\)/);
+  });
+
+  it('手机批量条抬到随手记常驻栏上方——两条 fixed 不能叠在一起', () => {
+    const narrow = insideMedia(bare, 'max-width: 767px');
+    const bar = declarationsFor(narrow, '.ink-batch-bar');
+    expect(bar, '批量条没有让开随手记常驻栏').toContain('bottom: calc(var(--ink-dock-height) + 12px)');
   });
 
   // 筛选栏（FilterBar 组件）：七维筛选，界面元件，不许有群青——CSS 这一层
@@ -3146,5 +3155,63 @@ describe('设置里的小分组标题：比节标题安静一档，而且第一�
   it('第一组不划线——它上面就是节标题，再来一道就是两条横线夹一个标题', () => {
     expect(first, '那条 :first-child 的例外不见了').not.toBeNull();
     expect(first![1]).toMatch(/border-top:\s*0/);
+  });
+});
+
+/**
+ * 日期 + 时间弹层在 320/360 宽的手机上原来按桌面并排铺（288 + 112），
+ * 右侧时间列和底部「确定」都被裁出视口——这个字段在手机上改不了。
+ * 下面几条钉住修法：堆叠、时间列占满、弹层限高，底部操作条常驻。
+ */
+describe('窄屏的日期 + 时间弹层：堆叠、限高，确认按钮够得着', () => {
+  const narrow = insideMedia(bare, 'max-width: 560px');
+
+  it('日历与时间列改成上下堆叠，时间列占满一行', () => {
+    const panel = declarationsFor(narrow, '.ant-picker-dropdown .ant-picker-datetime-panel');
+    expect(panel, '弹层还是左右并排——320/360 宽的屏幕会裁掉右边的时间列').toContain('flex-direction: column');
+    const time = declarationsFor(narrow, '.ant-picker-dropdown .ant-picker-time-panel');
+    expect(time, '时间列没有占满一行，堆叠后只剩左侧一条').toContain('width: 100%');
+  });
+
+  it('弹层限制在视口里，底部「此刻 / 确定」常驻', () => {
+    const container = declarationsFor(narrow, '.ant-picker-dropdown .ant-picker-panel-container');
+    expect(container, '没有限高：320×568 上「确定」会掉到屏幕外').toContain('max-height: 80dvh');
+    expect(container, '没有自己滚：限高之后下半截直接看不见').toContain('overflow-y: auto');
+    const footer = declarationsFor(narrow, '.ant-picker-dropdown .ant-picker-footer');
+    expect(footer, '底部操作条没有钉住，滚到时间列就找不到「确定」').toContain('position: sticky');
+    const dropdown = declarationsFor(narrow, '.ant-picker-dropdown');
+    expect(dropdown, '弹层仍贴着输入框的左边缘，320 宽时右边会超出 6px').toContain('left: 8px');
+  });
+});
+
+/**
+ * 窄屏随手记：**钉在屏幕底部**，收起时压成一行，并在流里给列表让位。
+ *
+ * 它原来跟着整页滚，390×844 上 3 条任务就把它顶出首屏（见 App.tsx 那段
+ * 注释里的实测数字）。改成常驻之后，这三条缺一不可：不 fixed 就够不着、
+ * 不压扁就打回 15% 的屏、不补 spacer 最后一张卡就被它压住。
+ */
+describe('窄屏随手记：钉底、压扁、给列表让位', () => {
+  it('固定在视口底部，压在详情浮层（z-index 30）下面', () => {
+    const bar = declarationsFor(bare, '.ink-narrow-composer');
+    expect(bar, '没有 fixed：滚到列表中间就够不着了').toContain('position: fixed');
+    expect(bar, '没有贴住底边').toContain('bottom: 0');
+    expect(bar, '和详情浮层同层或更高：打开一条任务时它会浮在详情上').toMatch(/z-index:\s*20/);
+  });
+
+  it('收起时输入框和提交按钮同一行，不是竖着摞三块', () => {
+    const box = declarationsFor(bare, '.ink-narrow-composer .ink-composer');
+    expect(box, '没有排成两列，按钮还在输入框下面').toContain('grid-template-columns');
+    expect(box, '输入框/按钮没有落到同一行的两个格子里').toContain('grid-template-areas');
+  });
+
+  it('流里补回常驻栏的高度——最后一张卡不能被它压住', () => {
+    const spacer = declarationsFor(bare, '.ink-narrow-composer-spacer');
+    expect(spacer, '没有占位：滚到底时最后一条任务藏在常驻栏底下').toMatch(/height:\s*var\(--ink-dock-height\)/);
+  });
+
+  it('默认高度和实测高度同一个变量：字号变大时 spacer / 批量条一起让位', () => {
+    const root = declarationsFor(bare, ':root');
+    expect(root, '根变量没有默认值，ResizeObserver 还没跑的那一帧会没有高度').toContain('--ink-dock-height: calc(72px + env(safe-area-inset-bottom, 0px))');
   });
 });

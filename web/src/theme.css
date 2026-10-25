@@ -30,6 +30,11 @@
      （WCAG 1.4.11 对控件要 3:1）。这个值在纸/页/侧栏三种面上是 3.43 / 3.79
      / 3.07，是沿 --rule→--dim 那条暖灰线上最浅的、三种面都过的一档。 */
   --scrollbar: #857E73;
+  /* 窄屏底部随手记常驻栏的高度（含安全区）。默认是收起态的一行；App 用
+     ResizeObserver 在字号变大、输入框长到多行时把它改写成实测像素。
+     spacer 和批量条都读这一个变量——两处各自写 72 的话，字号一大就会重新叠
+     在一起。 */
+  --ink-dock-height: calc(72px + env(safe-area-inset-bottom, 0px));
   /* --dim 跟 `color-mix(in srgb, var(--ink-you) 45%, transparent)` **不是同一个
      颜色**，别把它俩「统一」掉——这条被当成技术债挂了两批，2026-08-16 量过之后
      才发现前提就是错的：45% 那档叠在 --paper 上算出来是 #92908D，
@@ -1868,6 +1873,16 @@ body {
   color: var(--dim);
 }
 
+/* 「已拆 N 条」：点它能看到拆出来的任务。11px 的字撑不到 24px 的点击目标，
+   跟 .ink-review-link 同一条兜底；下划线是这一行里唯一「可以点」的记号。 */
+.ink-note-open {
+  border: 0; background: none; cursor: pointer; padding: 0;
+  font: inherit; color: var(--ink-you);
+  text-decoration: underline; text-underline-offset: 2px;
+  min-height: 24px; min-width: 24px;
+  display: inline-flex; align-items: center; gap: 2px;
+}
+
 .ink-done-collapse.ant-collapse .ant-collapse-header {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1927,12 +1942,77 @@ body {
   padding: 16px 8px;
 }
 
-/* 窄屏下随手记的位置：任务列表下面。上面留一道线跟列表分开——它跟上面那些
-   任务不是一件事。 */
+/* 窄屏下随手记的位置：**钉在屏幕底部的一条常驻栏**。
+   它原来摆在任务列表下面、跟着整页滚，390×844 上 3 条任务就把它顶出首屏
+   （见 App.tsx 那处注释）。现在无论滚到哪儿都一步够得着——这是「随手记的
+   成本不能变高」那条硬约束在窄屏上的兑现。
+
+   **压扁的只是收起时的样子，不是把侧栏那块原样搬来**：标题视觉隐藏（读屏
+   仍靠 `aria-labelledby` 拿到名字）、输入框一行、提交按钮放到同一行右侧，
+   收起时整条约 72px（实际高度由 App 实测后写进 `--ink-dock-height`）。写字时
+   输入框自己往上长（最多四行），常驻栏跟着长高；它 fixed 在视口上，底下那份
+   列表不会因此跳一下，spacer 和批量条则跟着让位。
+
+   `z-index: 20` 压在详情浮层（30）下面：打开一条任务时这一栏不该浮在它上面。 */
 .ink-narrow-composer {
-  margin-top: 24px;
-  padding-top: 16px;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--paper);
   border-top: 1px solid var(--rule);
+  box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.05);
+}
+
+.ink-narrow-composer .ink-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "box submit";
+  align-items: center;
+  column-gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+/* 名字只留给读屏：这一条是常驻栏，标题再占一行就把收起高度推回 15%。 */
+.ink-narrow-composer .ink-composer-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.ink-narrow-composer .ink-composer textarea {
+  grid-area: box;
+  min-height: 32px;
+  padding: 4px 6px;
+}
+
+.ink-narrow-composer .ink-composer-row {
+  grid-area: submit;
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+
+/* 触屏上按得到：默认 32px 高对一根手指偏窄，抬到 40。 */
+.ink-narrow-composer .ink-composer-row .ant-btn {
+  height: 40px;
+}
+
+/* 常驻栏不占文档流，得在流里补回它占掉的高度——不然最后一张卡永远被它
+   压住，滚到底也露不出来。高度读 `--ink-dock-height`：App 用 ResizeObserver
+   实测常驻栏（默认收起时约 72px，字号变大/输入框长到多行时跟着变）。 */
+.ink-narrow-composer-spacer {
+  height: var(--ink-dock-height);
 }
 
 /* 键盘提示在窄屏上整条藏掉：**手机上没有 Ctrl 键**，「Ctrl+Enter 存下」在那儿
@@ -5872,6 +5952,16 @@ textarea.ink-field-bare:focus {
   z-index: 20;
 }
 
+/* 手机底部还有随手记那条常驻栏（`.ink-narrow-composer`，高度见
+   `--ink-dock-height`）。两个都是 fixed：不把批量条抬上去的话，选中任务时它
+   会正好盖在输入框和「存下」上面——批量条在 DOM 里更靠后，同 z-index 下画在
+   上面。变量由 App 实测，字号变大时一起跟着长。 */
+@media (max-width: 767px) {
+  .ink-batch-bar {
+    bottom: calc(var(--ink-dock-height) + 12px);
+  }
+}
+
 /* 手机宽度下改成贴着两边的通栏底条。上面那条「做成居中的窄条、别像页脚横幅
    那样把最后一排卡片整条盖住」在宽屏是对的，390px 下却反过来：六个控件挤进
    一条约 200px 宽的窄条，flex-wrap 把它折成三行，变成一个浮在**屏幕正中**
@@ -5882,7 +5972,8 @@ textarea.ink-field-bare:focus {
   .ink-batch-bar {
     left: 12px;
     right: 12px;
-    bottom: 12px;
+    /* 跟 767 那档同一个变量：手机底部还有随手记常驻栏，批量条得让开它。 */
+    bottom: calc(var(--ink-dock-height) + 12px);
     transform: none;
     justify-content: center;
   }
@@ -7264,4 +7355,41 @@ textarea.ink-field-bare:focus {
   text-align: left;
   min-height: 24px;
   cursor: pointer;
+}
+
+/* 日期 + 时间弹层在手机上默认还是桌面那套左右并排：日历 288px + 时间列
+   112px，320/360 宽的屏幕右边会被裁掉，底部「确定」也一起出了视口——选完
+   时间按不到确认，等于这个字段在手机上改不了。改成上下堆叠，时间列占满
+   一行，弹层限制在视口内并把底部操作条钉住。560px 是留给这类双栏弹层的
+   余量，跟下面正文/侧栏那几档断点不共用。 */
+@media (max-width: 560px) {
+  .ant-picker-dropdown {
+    left: 8px !important;
+    right: auto !important;
+  }
+  .ant-picker-dropdown .ant-picker-datetime-panel {
+    flex-direction: column !important;
+  }
+  .ant-picker-dropdown .ant-picker-time-panel {
+    width: 100% !important;
+    max-height: 180px !important;
+    border-inline-start: 0 !important;
+    border-top: 1px solid var(--rule) !important;
+  }
+  .ant-picker-dropdown .ant-picker-time-panel-columns {
+    display: flex !important;
+  }
+  .ant-picker-dropdown .ant-picker-time-panel-column {
+    overflow-y: auto !important;
+  }
+  .ant-picker-dropdown .ant-picker-panel-container {
+    max-height: 80dvh !important;
+    overflow-y: auto !important;
+  }
+  .ant-picker-dropdown .ant-picker-footer {
+    position: sticky !important;
+    bottom: 0 !important;
+    z-index: 1 !important;
+    background: var(--sheet) !important;
+  }
 }

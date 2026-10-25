@@ -229,8 +229,8 @@ describe('QuickAdd', () => {
  * **一个东西只用一个名字。**
  *
  * 这颗按钮开的那张表单在别处一直叫「新任务表单」：快捷键表写着
- * `C 新任务表单`，设置里两条「新任务默认清单/优先级」的说明写着「只影响
- * 「新任务」表单的初值」。按钮原来自称「填完整的表单」——那是一句描述，
+ * `C 新任务表单`，设置里「任务默认值」那段总说明写着「只影响手工建的那条
+ * 路」。按钮原来自称「填完整的表单」——那是一句描述，
  * 不是名字，于是同一个东西在屏幕上有三种叫法。
  */
 describe('QuickAdd：那颗 ⌄ 的名字跟它开的表单一致', () => {
@@ -366,7 +366,7 @@ describe('QuickAdd：那一簇', () => {
     const { created, type, enter } = show({ lists: LISTS });
     type('明天写周报');
     fireEvent.click(document.querySelectorAll('.ink-quickadd-chip')[0]);
-    pick('本周五');
+    pick('周五');
     enter();
     await waitFor(() => expect(created).toHaveLength(1));
     // 23:59 不是笔误：认出来的「明天」本来就是**那天结束**（`smartInput.ts` 里
@@ -440,7 +440,7 @@ describe('QuickAdd：那一簇', () => {
     expect(due.textContent).toBe('8月25日 23:59');
     expect(due.className).toContain('ink-quickadd-chip-smart');
     fireEvent.click(due);
-    pick('本周五');
+    pick('周五');
     const after = document.querySelectorAll('.ink-quickadd-chip')[0];
     expect(after.textContent).toBe('8月28日 23:59');
     expect(after.className).not.toContain('ink-quickadd-chip-smart');

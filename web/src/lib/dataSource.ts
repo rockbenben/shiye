@@ -378,6 +378,47 @@ const unlocked = {
     return next;
   },
 
+  /**
+   * 离线版「一条原文变成 1..N 条任务」。跟服务端 `POST /api/inbox/:id/to-tasks`
+   * 同一套判据和同一种收尾：整批校验通过才写、任务只写一次、收件箱只写一次，
+   * 已经拆过且有任务的条目拒绝。
+   *
+   * 不在这里复用 `addTask`：那会把 N 条任务写成 N 次本地写、各自打一次脏记号，
+   * 中途失败就留下半批；而且 `addTask` 已经在 `LOCAL_WRITES` 里排过队，从锁
+   * 里面再调自己会死锁。
+   */
+  inboxToTasks: async (id: string, patches: Partial<Task>[]): Promise<{ item: InboxItem; tasks: Task[] }> => {
+    if (!Array.isArray(patches) || patches.length === 0) throw new Error('tasks 要是非空数组');
+    const inbox = await localInbox.read();
+    const i = inbox.findIndex((x) => x.id === id);
+    if (i < 0) throw new Error('没有这一条');
+    const item = inbox[i];
+    const existing = Array.isArray(item.taskIds) ? item.taskIds : [];
+    if (item.processed && existing.length > 0) {
+      throw new Error('这条已经拆过了，去「已拆解」里看它拆出来的任务');
+    }
+    for (const p of patches) {
+      if (!p.title?.trim()) throw new Error('标题不能为空');
+    }
+    const allTasks = await localTasks.read();
+    const tasks = patches.map((p) => newLocalTask({ ...p, title: p.title!.trim() }));
+    await localTasks.write([...allTasks, ...tasks]);
+    const next: InboxItem = {
+      ...item,
+      processed: true,
+      taskIds: [...new Set([...existing, ...tasks.map((t) => t.id)])],
+    };
+    try {
+      await localInbox.write(inbox.map((x, k) => (k === i ? next : x)));
+    } catch (e) {
+      await localTasks.write(allTasks);
+      throw e;
+    }
+    await dirtyTasks.mark(tasks.map((t) => [t.id, null]));
+    await dirtyInbox.mark([[id, item]]);
+    return { item: next, tasks };
+  },
+
   deleteInbox: async (id: string): Promise<{ ok: true }> => {
     const all = await localInbox.read();
     // 先把要删的那条捞出来当基准——本地删掉之后它就没别的副本了。
@@ -571,7 +612,7 @@ const unlocked = {
  * `localWrites.guard.test.ts` 盯着这份名单跟对象里真正会写的方法对得上。
  */
 export const LOCAL_WRITES = [
-  'addInbox', 'patchInbox', 'deleteInbox',
+  'addInbox', 'patchInbox', 'deleteInbox', 'inboxToTasks',
   'addTask', 'patchTask', 'skipTask', 'deleteTask', 'reorderTasks', 'patchTasksEach', 'deleteTasks',
   'restoreTrash',
 ] as const;

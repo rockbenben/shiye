@@ -585,6 +585,40 @@ describe('localApi：离线读 / 离线写 / 写完读回来', () => {
     expect((await localApi.inbox()).find((x) => x.id === 'i1')?.text).toBe('离线改过的文字');
   });
 
+  it('inboxToTasks：一次建多条、原文标已处理、taskIds 全记上，任务和收件箱都打脏记号', async () => {
+    await localInbox.write([inboxItem({ id: 'i1', text: '买猫粮；约牙医' })]);
+
+    const r = await localApi.inboxToTasks('i1', [{ title: '买猫粮' }, { title: '约牙医' }]);
+
+    expect(r.tasks.map((t) => t.title)).toEqual(['买猫粮', '约牙医']);
+    expect((await localApi.tasks()).map((t) => t.title)).toEqual(['买猫粮', '约牙医']);
+    expect((await localApi.inbox()).find((x) => x.id === 'i1')).toMatchObject({
+      processed: true,
+      taskIds: r.tasks.map((t) => t.id),
+    });
+    const dirty = await dirtyTasks.ids();
+    for (const t of r.tasks) expect(dirty).toContain(t.id);
+    expect(await dirtyInbox.ids()).toContain('i1');
+  });
+
+  it('inboxToTasks：已经拆过且有任务时拒绝，一条都不写——不能覆盖 AI 写下的 taskIds', async () => {
+    await localInbox.write([inboxItem({ id: 'i1', processed: true, taskIds: ['t-ai'] })]);
+
+    await expect(localApi.inboxToTasks('i1', [{ title: '再拆一条' }])).rejects.toThrow(/已经拆过/);
+
+    expect(await localApi.tasks()).toEqual([]);
+    expect((await localApi.inbox())[0].taskIds).toEqual(['t-ai']);
+  });
+
+  it('inboxToTasks：任何一条没有标题就整批不写', async () => {
+    await localInbox.write([inboxItem({ id: 'i1' })]);
+
+    await expect(localApi.inboxToTasks('i1', [{ title: '合法的' }, { title: '  ' }])).rejects.toThrow(/标题不能为空/);
+
+    expect(await localApi.tasks()).toEqual([]);
+    expect((await localApi.inbox())[0].processed).toBe(false);
+  });
+
   it('deleteInbox 打记号：离线删掉的收件箱条目，在线回填时不会被服务端那份带回来', async () => {
     await localInbox.write([inboxItem({ id: 'i1' }), inboxItem({ id: 'i2' })]);
     await localApi.deleteInbox('i1');

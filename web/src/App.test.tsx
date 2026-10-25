@@ -56,6 +56,9 @@ vi.mock('./api.js', () => ({
     inbox: vi.fn(async () => currentInbox),
     tasks: vi.fn(async () => { tasksFetchCount++; return currentTasks; }),
     settings: vi.fn(async () => settings),
+    // 首屏的 AI 状态检查。默认“已经接上”，免得每条既有用例都多出一条提示；
+    // 专门测首屏提示的用例自己 override。
+    aiStatus: vi.fn(async () => ({ mode: 'cli' as const, ready: true, cli: 'claude' })),
     lists: vi.fn(async () => { listsFetchCount++; return currentLists; }),
     // vi.mock() 工厂里就地拼一份 List，跟上面 addTask 同一个理由（task()
     // 夹具这时候还没定义，TDZ）。
@@ -115,6 +118,12 @@ vi.mock('./api.js', () => ({
     patchTasksEach: vi.fn(async (patches: unknown[]) => ({ updated: patches.length })),
     deleteTasks: vi.fn(async (ids: string[]) => ({ deleted: ids.length })),
     patchInbox: vi.fn(async () => ({})),
+    // 收件箱「变成任务 / 拆成多条」走的一次性端点。默认回一份空结果；
+    // 专门测这两条路的用例自己 override（mock 不在用例之间清）。
+    inboxToTasks: vi.fn(async (_id: string, patches: Partial<Task>[]): Promise<{ item: InboxItem; tasks: Task[] }> => ({
+      item: { id: 'i1', text: '', createdAt: '2026-08-01T00:00:00.000Z', processed: true, taskIds: [] },
+      tasks: patches.map((p, k) => ({ id: `inbox-task-${k + 1}`, title: '', notes: '', status: 'todo', due: null, startAt: null, endAt: null, reminders: [], persistentReminder: false, subtasks: [], source: 'user', aiComment: '', createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z', order: null, listId: null, section: null, tags: [], priority: 0, repeat: null, completedAt: null, postponeCount: 0, waitingFor: null, context: null, attachments: [], estimateMinutes: null, focusSessions: [], habit: false, pinned: false, reviewedAt: null, parentId: null, ...p } as Task)),
+    })),
     deleteInbox: vi.fn(async () => ({ ok: true })),
     addInbox: vi.fn(async () => ({})),
     saveSettings: vi.fn(async () => ({})),
@@ -3006,6 +3015,11 @@ describe('收件箱「变成任务」：第一行当标题，剩下的进备注'
     // 这个文件的 api mock 不在用例之间清，`not.toHaveBeenCalled()` 在全量跑时没意义
     // （实测：已经被前面的用例调了 20 次）。比的是**这一下有没有新增**。
     const patchesBefore = vi.mocked(api.patchTask).mock.calls.length;
+    vi.mocked(api.inboxToTasks).mockResolvedValueOnce({
+      item: { id: 'i1', text: '', createdAt: '2026-08-25T02:00:00.000Z', processed: true, taskIds: ['new-task'] },
+      tasks: [task({ id: 'new-task', title: '学日语' })],
+    });
+    const conversionBefore = vi.mocked(api.inboxToTasks).mock.calls.length;
     render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
     await waitFor(() => expect(navButton(/收件箱/)).toBeDefined());
     fireEvent.click(navButton(/收件箱/));
@@ -3021,13 +3035,57 @@ describe('收件箱「变成任务」：第一行当标题，剩下的进备注'
     });
     fireEvent.click(hit);
 
-    await waitFor(() => expect(api.addTask).toHaveBeenCalled());
-    const body = vi.mocked(api.addTask).mock.calls.at(-1)![0] as Record<string, unknown>;
+    await waitFor(() => expect(vi.mocked(api.inboxToTasks).mock.calls.length).toBe(conversionBefore + 1));
+    const [, patches] = vi.mocked(api.inboxToTasks).mock.calls.at(-1)!;
+    expect(patches).toHaveLength(1);
+    const body = patches[0] as Record<string, unknown>;
     expect(body.title).toBe('学日语');
     expect(body.notes).toBe('先把五十音图背下来');
     expect(body.status).toBe('later');
     // 建完没再补一次改状态的 PATCH——那正是这条测试要拦的退化实现。
     expect(vi.mocked(api.patchTask).mock.calls.length).toBe(patchesBefore);
+  });
+
+  /**
+   * 手动拆多条：一次请求建一批，服务端负责把 taskIds 记回原文。
+   * 逐行 `smartDraft` 的规则有单测，这里钉的是 App 这一层的接线：建出来的
+   * 是几条独立任务，不是一条标题里带着换行的任务。
+   */
+  it('▾ → 拆成多条：一次请求交出一批任务，不再逐条建再 PATCH', async () => {
+    currentInbox = [{
+      id: 'i1', text: '买猫粮；约牙医',
+      createdAt: '2026-08-25T02:00:00.000Z', processed: false, taskIds: [],
+    }];
+    vi.mocked(api.inboxToTasks).mockResolvedValueOnce({
+      item: { id: 'i1', text: '买猫粮；约牙医', createdAt: '2026-08-25T02:00:00.000Z', processed: true, taskIds: ['split-1', 'split-2'] },
+      tasks: [task({ id: 'split-1', title: '买猫粮' }), task({ id: 'split-2', title: '约牙医' })],
+    });
+    const conversionBefore = vi.mocked(api.inboxToTasks).mock.calls.length;
+    const inboxPatchesBefore = vi.mocked(api.patchInbox).mock.calls.length;
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await waitFor(() => expect(navButton(/收件箱/)).toBeDefined());
+    fireEvent.click(navButton(/收件箱/));
+    await screen.findByText('变成任务');
+
+    fireEvent.click(document.querySelector('.ant-dropdown-trigger') as HTMLElement);
+    const hit = await waitFor(() => {
+      const el = [...document.querySelectorAll('.ant-dropdown-menu-item')]
+        .find((e) => e.textContent?.includes('拆成多条'));
+      if (!el) throw new Error('菜单里没有「拆成多条」');
+      return el;
+    });
+    fireEvent.click(hit);
+
+    const box = (await screen.findByLabelText('拆成多条的任务')) as HTMLTextAreaElement;
+    expect(box.value).toBe('买猫粮\n约牙医');
+    fireEvent.click(screen.getByRole('button', { name: /拆成 2 条/ }));
+
+    await waitFor(() => expect(vi.mocked(api.inboxToTasks).mock.calls.length).toBe(conversionBefore + 1));
+    const [id, patches] = vi.mocked(api.inboxToTasks).mock.calls.at(-1)!;
+    expect(id).toBe('i1');
+    expect((patches as Partial<Task>[]).map((p) => p.title)).toEqual(['买猫粮', '约牙医']);
+    // 收尾由那一次端点完成；客户端不许再补一条 PATCH（会覆盖服务端的原子结果）。
+    expect(vi.mocked(api.patchInbox).mock.calls.length).toBe(inboxPatchesBefore);
   });
 
 });
@@ -7645,14 +7703,17 @@ describe('App：AI 拆解结果那条提示', () => {
     act(() => { handlers.onAgentStatus?.({ state, message }); });
   };
 
-  it('「拆解完成」几秒后自己消失', async () => {
+  it('「拆解完成」带「查看任务」，所以留 10 秒才自己消失', async () => {
     vi.useFakeTimers();
     try {
       render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
       await act(async () => { await Promise.resolve(); });
-      推状态('ok', '拆出 3 条');
+      act(() => { handlers.onAgentStatus?.({ state: 'ok', kind: 'expand', message: '拆出 3 条' }); });
       expect(screen.queryByText('AI 拆解完成')).not.toBeNull();
+      // 6 秒时不能走：那颗「查看任务」还没被读到手。
       act(() => { vi.advanceTimersByTime(6_000); });
+      expect(screen.queryByText('AI 拆解完成'), '带「查看任务」的横幅 6 秒就被收走了').not.toBeNull();
+      act(() => { vi.advanceTimersByTime(4_000); });
       expect(screen.queryByText('AI 拆解完成'), '到点了还赖着').toBeNull();
     } finally { vi.useRealTimers(); }
   });
@@ -7680,8 +7741,7 @@ describe('App：AI 拆解结果那条提示', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('页面切走的时候不计时——回来还看得见', async () => {
-    vi.useFakeTimers();
+  it('页面切走的时候不计时——回来还看得见', async () => {    vi.useFakeTimers();
     const spy = vi.spyOn(document, 'visibilityState', 'get');
     try {
       spy.mockReturnValue('hidden');
@@ -7693,9 +7753,33 @@ describe('App：AI 拆解结果那条提示', () => {
       // 切回来，这才开始计时
       spy.mockReturnValue('visible');
       act(() => { document.dispatchEvent(new Event('visibilitychange')); });
-      act(() => { vi.advanceTimersByTime(6_000); });
+      act(() => { vi.advanceTimersByTime(10_000); });
       expect(screen.queryByText('AI 拆解完成')).toBeNull();
     } finally { spy.mockRestore(); vi.useRealTimers(); }
+  });
+
+  /**
+   * 拆完的成果在「按来源」里，人却多半是在别的那一屏等完这一轮——
+   * 只给一句「AI 拆解完成」等于让他自己去找。这颗按钮把最后一步接上；
+   * 回顾没有这样一处汇总（建议挂在各自的卡上），所以不长这一颗。
+   */
+  it('拆解成功的横幅给一颗「查看任务」，点了落到「按来源」', async () => {
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await act(async () => { await Promise.resolve(); });
+    act(() => { handlers.onAgentStatus?.({ state: 'ok', kind: 'expand', message: '拆出 3 条' }); });
+
+    const banner = screen.getByText('AI 拆解完成').closest('.ant-alert') as HTMLElement;
+    fireEvent.click(within(banner).getByRole('button', { name: '查看任务' }));
+    await screen.findByRole('heading', { level: 1, name: '按来源' });
+  });
+
+  it('回顾跑完不给「查看任务」——没有一处「刚做出来的东西」可看', async () => {
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await act(async () => { await Promise.resolve(); });
+    act(() => { handlers.onAgentStatus?.({ state: 'ok', kind: 'review', message: '分析完成' }); });
+
+    const banner = screen.getByText('AI 回顾完成').closest('.ant-alert') as HTMLElement;
+    expect(within(banner).queryByRole('button', { name: '查看任务' })).toBeNull();
   });
 
   /**
@@ -7766,6 +7850,19 @@ describe('App：AI 拆解结果那条提示', () => {
 
     act(() => { handlers.onAgentStatus?.({ state: 'running', kind: 'expand' }); });
     expect(screen.queryByText('AI 拆解失败'), '新的一轮开始了，旧结果还赖着').toBeNull();
+  });
+
+  it('失败横幅里的「去设置」直接落到 AI 拆解那一页', async () => {
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await act(async () => { await Promise.resolve(); });
+    推状态('failed', 'AI 命令行工具没找到');
+
+    const banner = screen.getByText('AI 拆解失败').closest('.ant-alert') as HTMLElement;
+    fireEvent.click(within(banner).getByRole('button', { name: '去设置' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('tab', { name: 'AI 拆解' }).getAttribute('aria-selected')).toBe('true');
+    expect(within(dialog).getByText('谁来拆')).toBeTruthy();
   });
 
   it('总览汇报里的换行保留下来——纯文本的 \\n 不能被压成一行', async () => {
@@ -7881,6 +7978,60 @@ describe('任务还没读到的那一段，不能替用户说「没有任务」'
 });
 
 /**
+ * 新机器首屏：AI 没接上时，用户应该在写第一段话之前就知道，而不是等 60 秒
+ * 自动拆解失败。提示只在这台机器真的空着时出现；有任务/收件箱条目时让失败
+ * 横幅负责说明。
+ */
+describe('首屏 AI 状态提示', () => {
+  it('没接上时直接说明，并能一步去设置', async () => {
+    currentTasks = [];
+    currentInbox = [];
+    vi.mocked(api.aiStatus).mockResolvedValueOnce({
+      mode: 'cli',
+      ready: false,
+      cli: 'claude',
+      reason: '没找到 claude',
+    });
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+
+    expect(await screen.findByText('AI 拆解还没接上')).toBeTruthy();
+    expect(screen.getByText(/没找到 claude/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '去设置' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('tab', { name: 'AI 拆解' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('已经有任务时不显示——用户已经在流程里，失败横幅会负责', async () => {
+    vi.mocked(api.aiStatus).mockResolvedValueOnce({ mode: 'cli', ready: false, cli: 'claude' });
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    await screen.findAllByText('交房租');
+    expect(screen.queryByText('AI 拆解还没接上')).toBeNull();
+  });
+
+  /**
+   * 服务端 `configProblem` 不把密钥当必填（本机模型不要钥匙），但客户端对已知
+   * 云厂商仍要求密钥。只看服务端的话，缺密钥的 DeepSeek 会被首屏放过，用户
+   * 进了收件箱才发现「立即拆解」是灰的——两边必须共用客户端这份缺失判断。
+   */
+  it('接口模式：服务端说 ready，但已知厂商缺密钥，首屏仍然提示', async () => {
+    currentTasks = [];
+    currentInbox = [];
+    vi.mocked(api.settings).mockResolvedValueOnce({
+      ...settings,
+      aiMode: 'api' as const,
+      aiEndpointId: 'deepseek',
+      aiEndpoints: { deepseek: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', key: '' } },
+    });
+    vi.mocked(api.aiStatus).mockResolvedValueOnce({ mode: 'api', ready: true });
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+
+    expect(await screen.findByText('AI 拆解还没接上')).toBeTruthy();
+    expect(screen.getByText(/接口配置还差：密钥/)).toBeTruthy();
+  });
+});
+
+/**
  * **「未归类」这一屏的组头不许写「全部」。**
  *
  * 这一屏的页面标题是「未归类」、侧栏那个徽标也写着「未归类 N」，而组头写的是
@@ -7906,5 +8057,57 @@ describe('App：「未归类」那一屏的组头', () => {
     // 拿 startsWith 去比，两条断言会同时落空——第一条假红、第二条假绿。
     expect(heads.some((h) => h.includes('未归类')), '组头该写「未归类」').toBe(true);
     expect(heads.some((h) => h.includes('全部')), '组头不该写「全部」——侧栏那个「全部」是另一批').toBe(false);
+  });
+});
+
+/**
+ * 随手记的草稿跟着 App 走，不跟组件走。框在切到「习惯」这类没有侧栏的模块时
+ * 会被卸载；回来时从 `captureDraftRef` 初始化，打了一半的字不能没。
+ */
+describe('App：随手记草稿跨模块', () => {
+  it('在「今天」打了一半，切到习惯再回来，字还在', async () => {
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+    const box = await waitFor(() => {
+      const el = document.querySelector('.ink-composer textarea') as HTMLTextAreaElement | null;
+      if (!el) throw new Error('随手记还没挂出来');
+      return el;
+    });
+    fireEvent.change(box, { target: { value: '写了一半' } });
+
+    const modules = () => screen.getByRole('navigation', { name: '模块' });
+    fireEvent.click(within(modules()).getByRole('button', { name: '习惯' }));
+    await screen.findByRole('heading', { level: 1, name: '习惯' });
+    expect(document.querySelector('.ink-composer textarea'), '习惯模块本来就没有随手记').toBeNull();
+
+    fireEvent.click(within(modules()).getByRole('button', { name: '任务' }));
+    await screen.findByRole('heading', { level: 1, name: '今天' });
+    await waitFor(() => {
+      expect((document.querySelector('.ink-composer textarea') as HTMLTextAreaElement).value).toBe('写了一半');
+    });
+  });
+});
+
+/**
+ * 「先手动记」以前是 navigate 之后只等一个 rAF 就找框。从「习惯」这种没有
+ * 随手记的模块点它，那一帧框还没挂出来，`focusQuickCapture` 的兜底会把刚跳到的
+ * 收件箱再覆盖成别的任务视图。现在用 state 驱动 effect，等视图真的就绪再聚焦。
+ */
+describe('App：先手动记', () => {
+  it('从没有随手记的模块点它，落到收件箱并把光标送进框里', async () => {
+    currentTasks = [];
+    currentInbox = [];
+    vi.mocked(api.aiStatus).mockResolvedValueOnce({ mode: 'cli', ready: false, cli: 'claude' });
+    render(<NoMotion><AntApp><App /></AntApp></NoMotion>);
+
+    await waitFor(() => expect(navButton(/习惯/)).toBeDefined());
+    const modules = () => screen.getByRole('navigation', { name: '模块' });
+    fireEvent.click(within(modules()).getByRole('button', { name: '习惯' }));
+    await screen.findByRole('heading', { level: 1, name: '习惯' });
+
+    fireEvent.click(await screen.findByRole('button', { name: '先手动记' }));
+    await screen.findByRole('heading', { level: 1, name: '收件箱' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(document.querySelector('.ink-composer textarea'));
+    });
   });
 });

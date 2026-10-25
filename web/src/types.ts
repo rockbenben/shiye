@@ -46,6 +46,16 @@ export type WeekStart = 0 | 1 | 6;
  */
 export type AiCliKind = 'claude' | 'agy' | 'codex' | 'gemini' | 'aider' | 'custom';
 
+/** `GET /api/ai/status` 的只读检查结果。**跟 `server/src/aiStatus.ts` 的
+ *  `AiReadiness` 手动对齐**——两边的字段名/取值飘了没有跨包同步测试，靠这里的
+ *  注释和两端各自的字面量类型提醒。 */
+export type AiReadiness = {
+  mode: 'cli' | 'api';
+  ready: boolean;
+  cli?: string;
+  reason?: string;
+};
+
 
 export interface Subtask {
   text: string;

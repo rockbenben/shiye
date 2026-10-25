@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { composeDefaults, mergePicked, smartDraft, splitCapture } from './composeDefaults.js';
+import { composeDefaults, mergePicked, smartDraft, splitCapture, splitCaptureSegments } from './composeDefaults.js';
 import type { List } from '../types.js';
 
 const list = (over: Partial<List> = {}): List =>
@@ -288,6 +288,39 @@ describe('splitCapture', () => {
     expect(r.head).toBe('标题');
     expect(r.body).toBe(['第一行备注', '第二行备注'].join(NEWLINE));
     expect(r.body).not.toContain(CR);
+  });
+});
+
+describe('splitCaptureSegments（手动拆成多条）', () => {
+  it('按换行和中文/英文分号切，去空白、丢空段', () => {
+    expect(splitCaptureSegments('交房租；妈妈生日；  和房东确认  '))
+      .toEqual(['交房租', '妈妈生日', '和房东确认']);
+    expect(splitCaptureSegments('第一行\r\n第二行;第三行'))
+      .toEqual(['第一行', '第二行', '第三行']);
+  });
+
+  it('不切普通逗号——一句话里用逗号连接两件事不该被拆碎', () => {
+    expect(splitCaptureSegments('给妈妈买花，顺便订个蛋糕'))
+      .toEqual(['给妈妈买花，顺便订个蛋糕']);
+  });
+
+  it('整段空白/只有分隔符时给空数组', () => {
+    expect(splitCaptureSegments('  ；;\n ')).toEqual([]);
+  });
+
+  it('预填时摘掉「重新拆解」追加的补充要求——整段、包括带分号/多行的', () => {
+    expect(splitCaptureSegments('买菜\n\n补充要求（第 2 轮）：按周分开'))
+      .toEqual(['买菜']);
+    expect(splitCaptureSegments('买菜\n\n补充要求（第 2 轮）：拆得粗；按周分开\n再按天'))
+      .toEqual(['买菜']);
+    // 只认行首的标记；正文里顺口写到这几个字不能被当成追加要求整段删掉。
+    expect(splitCaptureSegments('我在补充要求（第 2 轮）：这里不是标记'))
+      .toEqual(['我在补充要求（第 2 轮）：这里不是标记']);
+  });
+
+  it('预填时去掉常见 markdown 列表前缀——粘一份清单进来不该让标题带着记号', () => {
+    expect(splitCaptureSegments('- 找搬家公司\n* 退租\n1. 交房租\n- [ ] 接孩子\n[x] 倒垃圾'))
+      .toEqual(['找搬家公司', '退租', '交房租', '接孩子', '倒垃圾']);
   });
 });
 

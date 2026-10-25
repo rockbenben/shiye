@@ -407,20 +407,21 @@ const isSameLocalDay = (iso: string | null, d: Date): boolean => {
 
 /**
  * 那三颗快捷档。**「添加任务」那一行上的日期 chip 也读这一份**（`QuickAdd`），
- * 两处各列一套「今天/明天/本周五」的话，改一处另一处不会有人想起来。
+ * 两处各列一套「今天/明天/周五」的话，改一处另一处不会有人想起来。
  */
 export const quickDayChips = (now: Date): Array<{ label: string; date: Date }> => {
   const at = (offset: number) => {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
     return d;
   };
-  // 「本周五」= 今天起最近的周五（今天就是周五就用今天），跟「接下来」那一屏
-  // 说「这周五」的口径一致。
+  // 周五 = 今天起最近的周五（今天就是周五就用今天）。**标签写「周五」而不是
+  // 「本周五」**：周六、周日点它落到的是下周五，写「本周」会指着一个已经过去
+  // 的日子；快捷档里的「周五」读作「最近的周五」，两种星期都成立。
   const fri = at((5 - now.getDay() + 7) % 7);
   return [
     { label: '今天', date: at(0) },
     { label: '明天', date: at(1) },
-    { label: '本周五', date: fri },
+    { label: '周五', date: fri },
   ];
 };
 

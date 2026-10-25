@@ -191,6 +191,35 @@ export function splitCapture(text: string): { head: string; body: string } {
   return { head: lines[i].trim(), body: lines.slice(i + 1).join('\n').trim() };
 }
 
+/**
+ * 手动「拆成多条」的初始切分：换行和中文/英文分号。
+ *
+ * **不切逗号**：一句话里用逗号连接两件事太常见（「给妈妈买花，顺便订个蛋糕」），
+ * 自动切开会把一句正常的话拆碎；分号/换行才是人主动写的分隔。切完只是给
+ * 编辑框一个初始值，用户可以再改，不直接落盘。
+ *
+ * **预填时顺手去掉两类不是任务的东西**：
+ * - 「重新拆解」追加在原文末尾的 `补充要求（第 N 轮）：…`。它不是用户的原话，
+ *   而是给 AI 的指令；而且它可能带分号/多行，必须先整段摘掉、再按分号切，
+ *   否则一句要求会漏成半条任务。它总是追加在末尾，所以从第一个标记删到结尾。
+ * - markdown 列表前缀（`- ` / `* ` / `1. ` / `- [ ] `）。从别处粘一份清单进来
+ *   是随手记的常见用法，标题里不该带着这些记号。
+ */
+export function splitCaptureSegments(text: string): string[] {
+  const withoutRedoNotes = text
+    .replace(/\r\n?/g, '\n')
+    .replace(/(?:^|\n)[ \t]*补充要求（第 \d+ 轮）：[\s\S]*$/, '');
+  return withoutRedoNotes
+    .split(/\n|[；;]/)
+    .map((s) => s
+      .trim()
+      .replace(/^[-*+]\s+/, '')
+      .replace(/^\d+[.)]\s+/, '')
+      .replace(/^\[[ xX]\]\s+/, '')
+      .trim())
+    .filter(Boolean);
+}
+
 export function smartDraft(
   raw: string,
   defaults: ComposeDefaults,

@@ -16,6 +16,7 @@ const NOW = new Date(2026, 7, 20, 12, 0, 0);
 
 const noop = () => {};
 const noopAsync = async () => {};
+const splitNoop = async () => 0;
 
 // antd 会在「恰好两个汉字、没有图标」的按钮里插一个空格——「重新拆解」四个字
 // 又带图标，理论上不会中招，但跟 TaskBoard.test.tsx 保持同一个防御写法，
@@ -29,7 +30,7 @@ describe('InboxSidebar：重新拆解按钮', () => {
         now={NOW}
         items={[item({ id: 'pending-1', processed: false })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={noopAsync}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -46,7 +47,7 @@ describe('InboxSidebar：重新拆解按钮', () => {
           now={NOW}
           items={[item({ id: 'done-1', processed: true, taskIds: ['t1'] })]}
           onDelete={noop}
-          onRedo={onRedo} onMakeTask={vi.fn()}
+          onRedo={onRedo} onMakeTask={vi.fn()} onSplit={splitNoop}
           onEditText={noopAsync}
           onExpand={noop}
           expanding={false} aiBlocked={null}
@@ -111,7 +112,7 @@ describe('InboxSidebar：待拆解为 0 条时「立即拆解」禁用——点�
         now={NOW}
         items={[item({ processed: true, taskIds: ['t1'] })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={noopAsync}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -121,7 +122,7 @@ describe('InboxSidebar：待拆解为 0 条时「立即拆解」禁用——点�
   });
 
   it('收件箱本身是空的：按钮同样禁用', () => {
-    render(<InboxSidebar now={NOW} items={[]} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync} onExpand={noop} expanding={false} aiBlocked={null} />);
+    render(<InboxSidebar now={NOW} items={[]} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync} onExpand={noop} expanding={false} aiBlocked={null} />);
     expect(screen.getByRole('button', { name: /立即拆解/ }).hasAttribute('disabled')).toBe(true);
   });
 
@@ -131,7 +132,7 @@ describe('InboxSidebar：待拆解为 0 条时「立即拆解」禁用——点�
         now={NOW}
         items={[item({ processed: false })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={noopAsync}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -148,7 +149,7 @@ describe('InboxSidebar：编辑文字（只有未处理的条目能改）', () =
         now={NOW}
         items={[item({ id: 'pending-1', processed: false })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={noopAsync}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -164,7 +165,7 @@ describe('InboxSidebar：编辑文字（只有未处理的条目能改）', () =
         now={NOW}
         items={[item({ id: 'pending-1', text: '原文', processed: false })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={onEditText}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -191,7 +192,7 @@ describe('InboxSidebar：编辑文字（只有未处理的条目能改）', () =
         now={NOW}
         items={[item({ id: 'pending-1', text: '原文', processed: false })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={onEditText}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -214,7 +215,7 @@ describe('InboxSidebar：编辑文字（只有未处理的条目能改）', () =
           now={NOW}
           items={[item({ id: 'pending-1', text: '原文', processed: false })]}
           onDelete={noop}
-          onRedo={noop} onMakeTask={vi.fn()}
+          onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
           onEditText={onEditText}
           onExpand={noop}
           expanding={false} aiBlocked={null}
@@ -241,7 +242,7 @@ describe('InboxSidebar：编辑文字（只有未处理的条目能改）', () =
       item({ id: 'c', text: 'C原文', processed: false }),
     ];
     const { rerender } = render(
-      <InboxSidebar now={NOW} items={items} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={onEditText} onExpand={noop} expanding={false} aiBlocked={null} />,
+      <InboxSidebar now={NOW} items={items} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={onEditText} onExpand={noop} expanding={false} aiBlocked={null} />,
     );
 
     // 打开第二行（B）的编辑器，改了草稿但还没保存。
@@ -257,7 +258,7 @@ describe('InboxSidebar：编辑文字（只有未处理的条目能改）', () =
         now={NOW}
         items={[item({ id: 'b', text: 'B原文', processed: false }), item({ id: 'c', text: 'C原文', processed: false })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={onEditText}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -278,7 +279,7 @@ describe('InboxSidebar：编辑文字（只有未处理的条目能改）', () =
         now={NOW}
         items={[item({ id: 'a', text: '原文', processed: false })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={noopAsync}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -294,7 +295,7 @@ describe('InboxSidebar：编辑文字（只有未处理的条目能改）', () =
         now={NOW}
         items={[item({ id: 'a', text: '原文', processed: true, taskIds: ['t1'] })]}
         onDelete={noop}
-        onRedo={noop} onMakeTask={vi.fn()}
+        onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={noopAsync}
         onExpand={noop}
         expanding={false} aiBlocked={null}
@@ -318,7 +319,7 @@ describe('InboxSidebar：删除要先确认', () => {
     const onDelete = vi.fn();
     render(
       <AntApp>
-        <InboxSidebar now={NOW} items={[item(over)]} onDelete={onDelete} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync} onExpand={noop} expanding={false} aiBlocked={null} />
+        <InboxSidebar now={NOW} items={[item(over)]} onDelete={onDelete} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync} onExpand={noop} expanding={false} aiBlocked={null} />
       </AntApp>,
     );
     return { onDelete };
@@ -370,7 +371,7 @@ describe('InboxSidebar：按写下的先后排', () => {
   it('待拆解那份：先写的在上面——这是一条要从头处理的队列，等得最久的排最前', () => {
     // 故意按「新的在前」传进去：不排序的实现会原样吐回来，这条就红。
     const items = [at(20, { text: '后写的' }), at(10, { text: '先写的' })];
-    render(<AntApp><InboxSidebar now={NOW} items={items} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
+    render(<AntApp><InboxSidebar now={NOW} items={items} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
     const got = texts('.ink-note-pending').map((s) => s ?? '');
     expect(got.findIndex((s) => s.includes('先写的'))).toBeLessThan(got.findIndex((s) => s.includes('后写的')));
   });
@@ -380,7 +381,7 @@ describe('InboxSidebar：按写下的先后排', () => {
       at(20, { text: '后写的', processed: true, taskIds: ['t1'] }),
       at(10, { text: '先写的', processed: true, taskIds: ['t2'] }),
     ];
-    render(<AntApp><InboxSidebar now={NOW} items={items} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
+    render(<AntApp><InboxSidebar now={NOW} items={items} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
     // 已拆解那份收在折叠面板里，展开之前根本不在 DOM 里。
     fireEvent.click(screen.getByText('已拆解 2 条'));
     const got = texts('.ink-note-done').map((s) => s ?? '');
@@ -389,7 +390,7 @@ describe('InboxSidebar：按写下的先后排', () => {
 
   it('时间解析不了的不把整份顺序打乱——落 0 排最前，不抛', () => {
     const items = [at(10, { text: '正常的' }), item({ text: '坏的', createdAt: '前天' })];
-    render(<AntApp><InboxSidebar now={NOW} items={items} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
+    render(<AntApp><InboxSidebar now={NOW} items={items} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
     const got = texts('.ink-note-pending').map((s) => s ?? '');
     expect(got.some((s) => s.includes('正常的'))).toBe(true);
     expect(got.some((s) => s.includes('坏的'))).toBe(true);
@@ -406,21 +407,21 @@ describe('InboxSidebar：按写下的先后排', () => {
 describe('InboxSidebar：时间戳用相对说法', () => {
   it('今天写的读作「今天 HH:mm」，不是 YYYY-MM-DD', () => {
     const t = new Date(2026, 7, 20, 8, 12).toISOString();
-    render(<AntApp><InboxSidebar now={NOW} items={[item({ createdAt: t })]} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
+    render(<AntApp><InboxSidebar now={NOW} items={[item({ createdAt: t })]} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
     expect(screen.getByText('今天 08:12')).toBeTruthy();
     expect(screen.queryByText(/2026-08-20/)).toBeNull();
   });
 
   it('久一点的落回「几月几日 HH:mm」——那时候「几天前」已经不如日期好用了', () => {
     const t = new Date(2026, 7, 1, 9, 0).toISOString();
-    render(<AntApp><InboxSidebar now={NOW} items={[item({ createdAt: t })]} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
+    render(<AntApp><InboxSidebar now={NOW} items={[item({ createdAt: t })]} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>);
     expect(screen.getByText('8月1日 09:00')).toBeTruthy();
   });
 });
 
 describe('InboxSidebar：随手记按 markdown 渲染', () => {
   const show = (items: InboxItem[]) => render(
-    <AntApp><InboxSidebar now={NOW} items={items} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>,
+    <AntApp><InboxSidebar now={NOW} items={items} onExpand={noop} onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync} expanding={false} aiBlocked={null} /></AntApp>,
   );
   const MD = '搬家那摊事：\n\n- 找搬家公司\n- 退租提前 **30 天**\n\n> 房东原话：押金月底退';
 
@@ -483,6 +484,7 @@ describe('InboxSidebar：变成任务', () => {
         onDelete={() => {}}
         onRedo={() => {}}
         onMakeTask={onMakeTask}
+        onSplit={splitNoop}
         onEditText={async () => {}}
         onExpand={() => {}}
         expanding={false} aiBlocked={null}
@@ -534,6 +536,79 @@ describe('InboxSidebar：变成任务', () => {
 });
 
 /**
+ * 手动拆成多条——没有 AI、或者一段话里本来就装着好几件事时的出口。
+ * 切分规则在 `lib/composeDefaults.ts` 的 `splitCaptureSegments`，这里测接线。
+ */
+describe('InboxSidebar：拆成多条', () => {
+  const show = (text: string, onSplit = vi.fn(async () => 2)) => {
+    render(
+      <AntApp>
+        <InboxSidebar
+          items={[item({ id: 'i1', text, processed: false, taskIds: [] })]}
+          now={NOW}
+          onDelete={noop}
+          onRedo={noop}
+          onMakeTask={vi.fn()}
+          onSplit={onSplit}
+          onEditText={noopAsync}
+          onExpand={noop}
+          expanding={false} aiBlocked={null}
+        />
+      </AntApp>,
+    );
+    return onSplit;
+  };
+  const openSplit = async () => {
+    fireEvent.click(document.querySelector('.ant-dropdown-trigger') as HTMLElement);
+    const hit = await waitFor(() => {
+      const el = [...document.querySelectorAll('.ant-dropdown-menu-item')]
+        .find((e) => e.textContent?.includes('拆成多条'));
+      if (!el) throw new Error('菜单里没有「拆成多条」');
+      return el;
+    });
+    fireEvent.click(hit);
+    return screen.getByLabelText('拆成多条的任务') as HTMLTextAreaElement;
+  };
+
+  it('按换行和分号预切，确认后每一行交出去', async () => {
+    const onSplit = show('买猫粮；约牙医', vi.fn(async () => 2));
+    const box = await openSplit();
+    expect(box.value).toBe('买猫粮\n约牙医');
+
+    fireEvent.click(screen.getByRole('button', { name: /拆成 2 条/ }));
+    await waitFor(() => expect(onSplit).toHaveBeenCalledWith('i1', ['买猫粮', '约牙医']));
+  });
+
+  it('他改过的行原样交出去，空行不算', async () => {
+    const onSplit = show('原来的整段', vi.fn(async () => 2));
+    const box = await openSplit();
+    fireEvent.change(box, { target: { value: '  买菜  \n\n 接孩子 \n' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /拆成 2 条/ }));
+    await waitFor(() => expect(onSplit).toHaveBeenCalledWith('i1', ['买菜', '接孩子']));
+  });
+
+  it('只剩一行时不能拆——那是「变成任务」的活，不是拆', async () => {
+    show('原来就一件事', vi.fn(async () => 1));
+    const box = await openSplit();
+    fireEvent.change(box, { target: { value: '只剩这一件事' } });
+
+    const go = screen.getByRole('button', { name: '至少两行' }) as HTMLButtonElement;
+    expect(go.disabled).toBe(true);
+  });
+
+  it('拆失败时那几行留在框里、编辑态不关——他刚改的字没有第二个来源', async () => {
+    show('一件事；另一件事', vi.fn(async () => { throw new Error('磁盘满了'); }));
+    const box = await openSplit();
+    fireEvent.change(box, { target: { value: '一件事\n另一件事' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /拆成 2 条/ }));
+    await waitFor(() => expect(screen.getByText('磁盘满了')).toBeDefined());
+    expect((screen.getByLabelText('拆成多条的任务') as HTMLTextAreaElement).value).toBe('一件事\n另一件事');
+  });
+});
+
+/**
  * 这一栏空着的时候说得出**下一步**。
  *
  * 原来只有一句「没有待拆解的」——它回答了「这一栏空着」，没回答「东西从哪儿来」。
@@ -545,7 +620,7 @@ describe('InboxSidebar：空着的时候给出下一步', () => {
     <AntApp>
       <InboxSidebar
         now={NOW} items={items}
-        onDelete={noop} onRedo={noop} onMakeTask={vi.fn()}
+        onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop}
         onEditText={noopAsync} onExpand={noop} expanding={false} aiBlocked={null}
       />
     </AntApp>,
@@ -578,7 +653,7 @@ describe('InboxSidebar：AI 跑不了的时候那颗按钮', () => {
       <InboxSidebar
         items={[item()]}
         now={NOW}
-        onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync}
+        onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync}
         onExpand={noop} expanding={false} aiBlocked={aiBlocked}
       />
     </AntApp>,
@@ -614,7 +689,7 @@ describe('InboxSidebar：AI 跑不了的时候,那条不需要 AI 的路得被�
       <InboxSidebar
         items={items}
         now={NOW}
-        onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onEditText={noopAsync}
+        onDelete={noop} onRedo={noop} onMakeTask={vi.fn()} onSplit={splitNoop} onEditText={noopAsync}
         onExpand={noop} expanding={false} aiBlocked={aiBlocked}
       />
     </AntApp>,
@@ -642,5 +717,54 @@ describe('InboxSidebar：AI 跑不了的时候,那条不需要 AI 的路得被�
   it('AI 能用时那句指路照旧', () => {
     show(null, []);
     expect(screen.getByText(/等着拆/)).toBeTruthy();
+  });
+});
+describe('InboxSidebar：已拆解能点回拆出来的任务', () => {
+  const titles = (map: Record<string, string>) => (id: string) => map[id];
+  const show = (
+    items: InboxItem[],
+    taskTitle: (id: string) => string | undefined,
+    onOpenTask: (id: string) => void,
+  ) => render(
+    <AntApp>
+      <InboxSidebar
+        now={NOW}
+        items={items}
+        taskTitle={taskTitle}
+        onOpenTask={onOpenTask}
+        onDelete={noop}
+        onRedo={noop}
+        onMakeTask={vi.fn()} onSplit={splitNoop}
+        onEditText={noopAsync}
+        onExpand={noop}
+        expanding={false}
+        aiBlocked={null}
+      />
+    </AntApp>,
+  );
+
+  it('拆出一条时，点计数直接打开那条任务', async () => {
+    const onOpenTask = vi.fn();
+    show([item({ processed: true, taskIds: ['t1'] })], titles({ t1: '买菜' }), onOpenTask);
+    fireEvent.click(screen.getByRole('button', { name: /已拆解 1 条/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '已拆 1 条' }));
+    expect(onOpenTask).toHaveBeenCalledWith('t1');
+  });
+
+  it('拆出多条时，先在下拉里挑一条再打开', async () => {
+    const onOpenTask = vi.fn();
+    show([item({ processed: true, taskIds: ['t1', 't2'] })], titles({ t1: '买菜', t2: '买米' }), onOpenTask);
+    // 折叠头数的是「几条收件箱原文」，不是拆出几条任务；这一条只有一条原文。
+    fireEvent.click(screen.getByRole('button', { name: /已拆解 1 条/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /已拆 2 条/ }));
+    fireEvent.click(await screen.findByText('买米'));
+    expect(onOpenTask).toHaveBeenCalledWith('t2');
+  });
+
+  it('任务已经删掉时不画一个点进去没有结果的入口', async () => {
+    show([item({ processed: true, taskIds: ['gone'] })], titles({}), vi.fn());
+    fireEvent.click(screen.getByRole('button', { name: /已拆解 1 条/ }));
+    expect(screen.queryByRole('button', { name: '已拆 1 条' })).toBeNull();
+    expect(screen.getByText('已拆 1 条')).toBeTruthy();
   });
 });

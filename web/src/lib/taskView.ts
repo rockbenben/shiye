@@ -353,9 +353,9 @@ const byWhen = (t: Task): number => {
  * 比较器返回 NaN 会被当成「相等」，于是最该先做的那几张之间完全不排序，
  * 顺序全看它们在文件里的先后。
  *
- * 「单独记的」那组任务彼此没有叙事顺序（不像同源任务有 AI 拆解出的先后步骤，
- * 那种顺序直接沿用 inbox.taskIds 数组本身的顺序，见 groupBySource），
- * 退回到按紧急程度排是唯一说得通的排法。
+ * 「单独记的」那组任务彼此没有叙事顺序（不像同源任务有拆解时写下的先后——AI
+ * 拆的、手动拆成多条的都有，那种顺序直接沿用 inbox.taskIds 数组本身的顺序，
+ * 见 groupBySource），退回到按紧急程度排是唯一说得通的排法。
  */
 export function sortByUrgency(tasks: Task[], now: Date): Task[] {
   return [...tasks].sort((a, b) =>
@@ -364,9 +364,9 @@ export function sortByUrgency(tasks: Task[], now: Date): Task[] {
 
 /**
  * 过期置顶，但**不**像 `sortByUrgency` 那样把剩下的也按截止时间重排——同源组
- * 有 AI 拆解出的步骤顺序（taskIds 数组本身的顺序，见 groupBySource），那个
- * 顺序有意义（先做这条、它卡住了才轮到下一条），只有「过期」这一件事值得
- * 打破它。用在 TaskBoard 给同源组排序：过期的浮到组内最前面，没过期的几条
+ * 有拆解时写下的先后顺序（taskIds 数组本身的顺序，AI 拆的、手动拆成多条的
+ * 都一样，见 groupBySource），那个顺序有意义（先做这条、它卡住了才轮到下一条），
+ * 只有「过期」这一件事值得打破它。用在 TaskBoard 给同源组排序：过期的浮到组内最前面，没过期的几条
  * 之间维持原来的相对顺序（`Array.prototype.sort` 在现代引擎里是稳定排序，
  * 两个都不过期时比较器返回 0 就是「保持原样」，不是碰巧）。
  *
@@ -410,11 +410,13 @@ export interface TaskGroup {
  * 跟手稿翻页的顺序一致。
  *
  * 一个任务在所有 inbox 条目的 taskIds 里都找不到，就落进最后一组「单独记的」：
- * 这一条判据天然覆盖两种情况——手工建的任务（source: 'user'，从来没进过任何
- * taskIds）、和来源条目被删掉的任务（曾经在某个 taskIds 里，那条 inbox 记录
- * 现在已经不存在了，所以同样找不到）。不用额外去查 task.source 或者记一份
- * 「这条任务原来属于哪条」的旁路状态，删除操作本身已经让这条血缘线索消失，
- * 用「现在找不找得到」代替「记住它曾经在哪」，少一条要维护的状态。
+ * 这一条判据天然覆盖两种情况——手工建的任务（从任务表单建的、没有来源条目）、
+ * 和来源条目被删掉的任务（曾经在某个 taskIds 里，那条 inbox 记录现在已经不存在
+ * 了，所以同样找不到）。**不能拿 `source` 判**：手动「变成任务」「拆成多条」
+ * 建出来的任务 `source` 也是 `'user'`，但它们有 taskIds，照样该归到那句话那组。
+ * 不用额外去查 task.source 或者记一份「这条任务原来属于哪条」的旁路状态，删除
+ * 操作本身已经让这条血缘线索消失，用「现在找不找得到」代替「记住它曾经在哪」，
+ * 少一条要维护的状态。
  */
 /** 排序用的 inbox 写下时间。缺失或解析不出来的沉到最后——跟 byWhen() 同一条教训：
  * NaN 参与比较恒为「相等」，混在中间的一条坏记录会让比较器对它牵扯到的每一对
@@ -512,15 +514,25 @@ function isSameLocalDay(iso: string | null, now: Date): boolean {
 /**
  * 最早的那个提醒时刻，没有就是 null。
  *
- * **数组是按时刻排好序的**（`lib/remindPreset.ts` 的 `setNthReminder` 存的时候
- * 就排过），所以第一条就是最早那条——「有没有一个已经过去的提醒」这个问题
- * 只看它就够。
+ * **自己算最早，不取 `reminders[0]`。** 原来这里靠「数组是按时刻排好序的」
+ * （`lib/remindPreset.ts` 的 `setNthReminder` 存的时候排过）——那条只对**网页
+ * 表单**成立：AI 写的 outbox 任务（`server/src/task.ts` 的 `checkTaskPatch`
+ * 按客户端给的顺序收下，不排）、手改的文件、别的设备推上来的，都可能是乱序的。
+ * 一旦乱序，「有没有一个已经过去的提醒」这个问题就会答错：提醒 `[今天 09:00,
+ * 三天前 09:00]` 里三天前那条早就响过、一直没处理，却因为 `[0]` 是今天的而被
+ * 判成「没过期」——那条任务连「已过期」的红标都不会有。
  *
  * 这个注释以前写的是「这一版界面只做到一条提醒」——那已经不成立了，表单现在
  * 编辑得了任意多个。凡是「任意一个提醒满足某条件」的判断都不能再只看它，
  * 见下面 `hasReminderOn`。
  */
-const firstReminderAt = (t: Task): string | null => t.reminders[0]?.at ?? null;
+const firstReminderAt = (t: Task): string | null => {
+  const times = asArray<Reminder>(t.reminders)
+    .map((r) => r?.at)
+    .filter((at): at is string => typeof at === 'string' && !Number.isNaN(Date.parse(at)));
+  if (times.length === 0) return null;
+  return times.reduce((a, b) => (Date.parse(a) <= Date.parse(b) ? a : b));
+};
 
 /**
  * **界面上该显示哪一个提醒**：还没到的里面最早的那个；全都过去了就显示最后
@@ -529,13 +541,19 @@ const firstReminderAt = (t: Task): string | null => t.reminders[0]?.at ?? null;
  * 卡片和行档原来直接取 `reminders[0]`，也就是**最早**那个。一条任务只有一个
  * 提醒时这没区别；有好几个时它会一直显示那个早就响过的时刻，而人想知道的是
  * 「下一次什么时候响」——8/20 响过、8/25 还有一个，卡片却写着「提醒 8月20日」。
+ *
+ * **同样自己算最早/最晚，不靠数组的顺序**（理由见上面 `firstReminderAt`）。
  */
 export function displayReminderAt(t: Task, now: Date): string | null {
   const times = asArray<Reminder>(t.reminders)
     .map((r) => r?.at)
     .filter((at): at is string => typeof at === 'string' && !Number.isNaN(Date.parse(at)));
   if (times.length === 0) return null;
-  return times.find((at) => Date.parse(at) >= now.getTime()) ?? times[times.length - 1];
+  const future = times.filter((at) => Date.parse(at) >= now.getTime());
+  // 还没到的里面最早的那个；全都过去了就是最近刚响过的那次（最晚的那个）。
+  return future.length > 0
+    ? future.reduce((a, b) => (Date.parse(a) <= Date.parse(b) ? a : b))
+    : times.reduce((a, b) => (Date.parse(a) >= Date.parse(b) ? a : b));
 }
 
 /**

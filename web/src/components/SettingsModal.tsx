@@ -37,6 +37,8 @@ interface Props {
   navModes: NavModes;
   /** 存 localStorage 那半在 App 里（跟 density/groupSort 同一个形状）。 */
   onNavModes: (next: NavModes) => void;
+  /** 打开时直接落在哪一页（`SETTING_SECTIONS` 的 key）；空 = 保持上次那一页。 */
+  initialSection?: string | null;
 }
 
 /**
@@ -133,7 +135,7 @@ const TABLE_LABELS = Object.entries(IMPORT_LABELS)
   .filter(([k]) => k !== 'settings')
   .map(([, label]) => label);
 
-export function SettingsModal({ open, value, onClose, onSave, navOptions, navModes, onNavModes, lists }: Props) {
+export function SettingsModal({ open, value, onClose, onSave, navOptions, navModes, onNavModes, lists, initialSection = null }: Props) {
   const { message } = AntApp.useApp();
   // 草稿跟着 value 可空——**没读到设置就没有草稿**，也就没有任何东西可以被
   // 保存。这不是「渲染出表单再拦住保存」（那样 `draft` 里仍然躺着一份编出来
@@ -162,6 +164,14 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
   useEffect(() => {
     if (open) setDraft(value);
   }, [open, value]);
+
+  // 从失败横幅那条路进来时直接落到 AI 那一页；gear 那条路传 null，保持用户
+  // 上次停在的分区（这个弹层不卸载，分区本来就会记住）。
+  useEffect(() => {
+    if (!open || !initialSection) return;
+    setImportPreview(null);
+    setSection(initialSection);
+  }, [open, initialSection]);
 
   const save = async () => {
     // draft 为空时那几页根本不渲染表单，这里走不到——但 save 是个独立的函数，
@@ -220,6 +230,9 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
+      // 浏览器接管下载之后就没有下文了；这条回执只确认「数据已经打包、下载已
+      // 经发起」，不管浏览器是否真的落盘（拦截下载时那句在浏览器那边）。
+      void message.success('已导出数据，浏览器会开始下载');
     } catch (e) {
       void message.error((e as Error).message);
     } finally {
@@ -509,7 +522,7 @@ export function SettingsModal({ open, value, onClose, onSave, navOptions, navMod
           {section === 'defaults' && (
             <>
               <Typography.Paragraph type="secondary" style={{ marginTop: 0, fontSize: 12 }}>
-                这几项<b>只影响手工建的那条路</b>（列表顶上那一行「添加任务」和新任务表单）。AI 拆出来的任务归哪个清单、排哪一天，是它读了你那句话之后的判断，不该被这台机器上的一个偏好盖掉。
+                这几项<b>只影响手工建的那条路</b>（列表顶上那一行「添加任务」、新任务表单，以及收件箱里的「变成任务」「拆成多条」）。AI 拆出来的任务归哪个清单、排哪一天，是它读了你那句话之后的判断，不该被这台机器上的一个偏好盖掉。
               </Typography.Paragraph>
               <Form.Item label="默认清单">
                 <Select

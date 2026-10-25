@@ -45,27 +45,18 @@
 # 不是因为 20 跑不过，是因为「声明支持而 CI 不跑」和「不声明」之间，
 # 后者诚实。要重新支持 20，先把它加回矩阵再改 engines，别只改一头。
 #
-# ── ELECTRON_SKIP_BINARY_DOWNLOAD ──
+# ── Electron 二进制 ──
 #
-# `desktop/` 的 electron 是 devDependency，跳过省掉一次上百 MB 的下载，同时少
-# 一个会 flaky 的外部依赖。typecheck 走 `tsconfig.typecheck.json`，不需要二进制。
+# Electron 42 起不再在 postinstall 下载二进制，`ELECTRON_SKIP_BINARY_DOWNLOAD`
+# 也已经不在 Electron 45 的 `install.js` 里了——那个环境变量现在是个空操作，
+# 留着只会让人以为它在省下载。
 #
-# ⚠️ **这里原来写的理由是「没有任何测试 import electron」——那句话现在是假的**：
-# `desktop/src/main.test.ts` 第一屏就 `import { app } from 'electron'`，而且真的
-# `await import('./main.js')` 把主进程跑了一遍。真正成立的理由是另一条：
-# `vi.mock('electron', factory)` 是**模块解析阶段**的替换，`electron/index.js`
-# 那句 `module.exports = getElectronPath()`（不存在就现场 spawn 一次下载）压根
-# 不会被执行——包能被解析到就够了，不需要 dist 里那个二进制。
-#
-# 这条不是推的，是实测的：把 `node_modules/electron/path.txt` 和 `install.js`
-# 一起挪走（让它连偷偷下载都做不到）再跑 `desktop/src/`，**全绿**。
-# 上面那句假话是本机对着这一批核出来的——真 runner 上有没有人靠它做过判断，
-# 日志里看不出来；哪天有人靠它做判断，先重跑这个实验。
-#
-# **2026-10-21 升 Electron 45 时重核过一遍**：这台机器上 electron 的
-# `dist/` 和 `path.txt` 本来就不在（postinstall 跳过了下载），所以
-# `desktop/src/` 直接就是在「没有二进制」的条件下跑的——**197 条全绿**，
-# 跟 CI 上 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` 的形态一模一样。
+# `desktop/src/main.test.ts` 确实 `import { app } from 'electron'`，但
+# `vi.mock('electron', factory)` 在模块解析阶段就替换掉了，`electron/index.js`
+# 那句 `getElectronPath()`（不存在就现场下载）不会执行。实测把 `node_modules/electron`
+# 的 `dist/` 和 `path.txt` 都挪走再跑 `desktop/src/`，**197 条全绿**。
+# 这里不跑 `npx install-electron`，因为这一 job 不做打包；真正出包的 Release
+# 由 electron-builder 自己下载它需要的 Electron zip（见 release.yml 的注释）。
 #
 # ── 不跑 `dist:desktop` ──
 #
@@ -107,8 +98,6 @@ jobs:
           cache: npm
 
       - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
       # runner 的规格。`vitest.config.ts` 的 MAX_WORKERS 是按核数算的，出问题时
       # 要能对着这几个数看——第二、三次 CI 红在「一个 worker 非正常退出」，而

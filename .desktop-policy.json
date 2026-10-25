@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 2,
+  "status": "project-deviations",
+  "verifiedOn": "2026-10-25",
+  "framework": "electron",
+  "channel": "stable",
+  "platforms": ["windows-x64", "macos-arm64", "macos-x64", "linux-x64"],
+  "packageManager": "npm (npm ci in CI; package-lock.json is the source of truth)",
+  "node": "26 (Node 26 becomes Active LTS on 2026-10-28; engines and CI already use 26)",
+  "distribution": {
+    "primary": "github-releases",
+    "windows": "nsis (official, updatable) + zip (portable convenience; does not self-update)",
+    "macos": "dmg + zip (both arm64 and x64)",
+    "linux": "AppImage only (deb/rpm deferred; see deviations)"
+  },
+  "updater": "electron-updater on Windows NSIS only; macOS/Linux are manual updates (see deviations)",
+  "signing": {
+    "windows": "unsigned; SmartScreen warning documented in README",
+    "macos": "unsigned; Gatekeeper warning and manual-open instructions documented in README",
+    "linux": "no OS signing; SHA256SUMS and attestation are produced by the release workflow"
+  },
+  "versionSource": "git tag vX.Y.Z; desktop/package.json version is asserted equal before packaging",
+  "release": "validate (tests) -> build matrix (--publish never) -> single publish job; the `release` environment has required reviewer rockbenben (configured 2026-10-25)",
+  "actionPins": "major tags; no Dependabot",
+  "immutableReleases": "not enabled yet",
+  "deviations": [
+    {
+      "rule": "platforms",
+      "value": ["windows-x64", "macos-arm64", "macos-x64", "linux-x64"],
+      "reason": "Windows/Linux arm64 have no actual users or real-device verification yet; do not ship untested architectures.",
+      "revisitWhen": "first Windows/Linux arm64 user report, or 2027-01-31"
+    },
+    {
+      "rule": "windows-unsigned",
+      "reason": "Personal project, no code-signing certificate; README and release notes warn about SmartScreen.",
+      "revisitWhen": "wider public distribution or Azure Artifact Signing becomes available"
+    },
+    {
+      "rule": "macos-not-notarized",
+      "reason": "No Apple Developer ID; README documents the Gatekeeper workaround and macOS auto-update is intentionally off.",
+      "revisitWhen": "Apple Developer ID and notarization are available"
+    },
+    {
+      "rule": "linux-package-formats",
+      "value": ["AppImage"],
+      "reason": "AppImage is the only Linux format with a working updatable story here; deb/rpm need an author email and are deferred.",
+      "revisitWhen": "Linux package-manager demand, or an email address is added to the package author"
+    },
+    {
+      "rule": "macos-no-updater",
+      "reason": "electron-updater is gated to Windows NSIS; unsigned macOS builds cannot use ShipIt, so macOS stays on manual updates.",
+      "revisitWhen": "macOS builds are signed and notarized"
+    },
+    {
+      "rule": "linux-no-updater",
+      "reason": "The updater is currently gated to Windows; Linux AppImage users stay on manual updates until the Linux updater path is verified.",
+      "revisitWhen": "Linux AppImage auto-update is implemented and tested on a real Linux machine"
+    }
+  ],
+  "notes": "audit.mjs reads `platforms` and `deviations[]`. A deviation with reason + revisitWhen is treated as accepted; unknown rule names are documentation only. Keep this file in sync with desktop/electron-builder.yml and .github/workflows/release.yml."
+}

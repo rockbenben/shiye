@@ -108,9 +108,9 @@ npmRebuild: false
 # 接了 electron-updater（desktop/src/updater.ts），包里得有 app-update.yml、
 # Release 上得有 latest.yml/blockmap，这两样只有配了 publish 才会生成。
 # **上传仍然不归 builder**：`dist:desktop` 脚本带着 `--publish never`（根
-# package.json，`identity-literals.test.ts` 钉着），发 Release 的动作照旧由
-# release.yml 的 softprops/action-gh-release 做——和「每个平台各自发同一个
-# tag」那套矩阵姿势不变。
+# package.json，`identity-literals.test.ts` 钉着），发 Release 的动作由
+# release.yml 的单一 publish job（gh release）做——不再是每个平台各自往同一个
+# tag 上挂。
 #
 # 原来这里写的是 `publish: null` 加一段「本仓库没有接 electron-updater（全仓
 # 零引用）」的论证，那是 0.1.x 的事实，2026-09-26 起作废。当初踩过的坑不变：

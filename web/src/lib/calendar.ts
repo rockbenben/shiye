@@ -200,6 +200,33 @@ function localMidnight(d: Date): Date {
 }
 
 /**
+ * **往后数 n 个月，落在这个月的同一天——目标月没有这一天就夹到它最后一天。**
+ *
+ * 全仓库唯一一份「跨月」算术（负数就是往前数）。**必须夹**，因为
+ * `new Date(2026, 1, 31)` 是「2 月 31 日」，而 2 月只有 28 天 → **3 月 3 日**：
+ * 跨月的目的地落回了原月。三个用得到它的地方都栽过这一下：
+ *
+ * - `smartInput.ts` 的「N 个月后」「下个月」——1 月 31 号说「一个月后」得到
+ *   「两个月零三天后」；
+ * - `habitStats.ts` 的翻月——3 月 31 号点「上个月」，月历还是三月。
+ *
+ * 夹逼的口径跟 `server/src/repeat.ts` 的月重复支一致（「31 号 clamp 到 2/28」），
+ * 也跟 `calendar.ts` 自己那个 `shiftAnchor` 的月档一致（它绕开溢出的办法是
+ * 「先把日号归 1 再挪月份」，落在的是那个月的 1 号）——同一个仓库里对「目标月
+ * 没有这一天」该落哪儿的答案必须一样。
+ *
+ * 时分照原样带过去（跟日号一样），调用方要的是「那一天的同一个钟点」。
+ */
+export function monthShift(d: Date, n: number): Date {
+  const target = new Date(d.getFullYear(), d.getMonth() + n, 1);
+  const last = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  return new Date(
+    target.getFullYear(), target.getMonth(), Math.min(d.getDate(), last),
+    d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds(),
+  );
+}
+
+/**
  * `d` 所在周的第一天。取值见 `types.ts` 的 `WeekStart`。
  *
  * 算法对每一档是同一句：往回退 `(今天是周几 - 周首) mod 7` 天。`+ 7` 再取模是

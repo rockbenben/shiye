@@ -389,3 +389,45 @@ describe('rescheduleDayPatch（批量「改到某天」）', () => {
     expect(p.due).toBe(iso(2026, 9, 2, 23, 59));
   });
 });
+
+/**
+ * **「只有开始时间」的情形——GTD 那个 tickler。**
+ *
+ * 「等新电脑到了再装环境」就是这个样子：开始时间有、结束时间和截止时间都没有。
+ * 编辑表单里「开始 / 结束 / 截止」是三个互相独立、都能清空的选择器
+ * （`TaskFields.tsx`），所以这不是手改文件才到得了的形状。
+ *
+ * 原来这一支的 `prev`（锚点）算不出来 → 走「没有可平移的东西」那支 → **补一个
+ * 「明天 23:59」的截止时间，而开始时间原地不动**。后果有两层：
+ * - **截止时间落在开始时间之前**（一句自相矛盾的话）；
+ * - 那条任务因为「还没开始」仍旧不进「今天」/「接下来」/「推荐」——**按了跟没按
+ *   一样**，还多了一个他没写过的截止时间。
+ *
+ * 跟上面那条「有时间段的」同一个道理：挪的是整条，不是补一个 `due`。
+ */
+describe('只有开始时间：改期挪的是那个开始时间', () => {
+  const tickler = (over: Partial<Task> = {}) =>
+    task({ title: '装环境', due: null, startAt: iso(2026, 8, 22, 9), endAt: null, ...over });
+
+  it('改到明天：开始时间挪到明天九点，钟点照旧', () => {
+    expect(reschedulePatch(tickler(), 'tomorrow', NOW).startAt).toBe(iso(2026, 8, 23, 9));
+  });
+
+  it('**不再凭空补一个 `due`**——那是他没说过的一句话，还跟开始时间自相矛盾', () => {
+    expect(reschedulePatch(tickler(), 'tomorrow', NOW)).not.toHaveProperty('due');
+  });
+
+  it('有截止时间的照旧：截止时间和开始时间一起挪', () => {
+    const p = reschedulePatch(tickler({ due: iso(2026, 8, 22, 18) }), 'tomorrow', NOW);
+    expect(p.due).toBe(iso(2026, 8, 23, 18));
+    // **开始时间也得挪**——原来它原地不动，于是截止时间（明天）落在开始时间
+    // （下个月）之前，那条任务仍旧「还没开始」、不进「今天」。
+    expect(p.startAt).toBe(iso(2026, 8, 23, 9));
+  });
+
+  it('「推迟一小时」也挪那个开始时间——不然开始时间和它的截止时间分家', () => {
+    const p = postponePatch(tickler({ due: iso(2026, 8, 22, 18) }), POSTPONE_MINUTES)!;
+    expect(p.startAt).toBe(iso(2026, 8, 22, 10));
+    expect(p.due).toBe(iso(2026, 8, 22, 19));
+  });
+});

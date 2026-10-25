@@ -1,5 +1,5 @@
 import type { Task } from '../types.js';
-import { dayKey, weekStartOf } from './calendar.js';
+import { dayKey, monthShift, weekStartOf } from './calendar.js';
 import { habitDoneDays, habitStreak, isCheckinDay, isHabit, weeklyTarget } from './habit.js';
 import type { WeekStart } from '../types.js';
 
@@ -245,14 +245,17 @@ function longestWeeks(doneDays: Set<string>, t: Task, weekStart: WeekStart): num
 /**
  * `now` 往前/往后数 n 个月，**日号和时分照原样带过去**（本地墙钟，不碰 UTC）。
  *
- * 两件事都得保住：
+ * 跨月的算术在 `calendar.ts` 的 `monthShift`（全仓库唯一一份）：日号照原样带过去，
+ * 目标月没有这一天时夹到那个月的最后一天。原来这里把日号照抄进目标月，而
+ * 3 月 31 号翻上个月是「2 月 31 日」→ **3 月 3 日**——落回本月，点「上个月」
+ * 月历还是三月，上个月那份打卡记录根本翻不到。
+ *
+ * 两件还得保住的事：
  * - 保住日号：`monthGrid` 用「今天几号」判哪几天还没到（`future`）。翻成
  *   那个月的一号，月历上除了 1 号全被标成「还没到」——实测八条断言当场红。
  * - 保住传进来的那个 Date 不被改：不写 `now.setMonth(...)`，调用方拿 `now`
  *   还要算今天、连续天数，就地改等于「翻了个月，今天变成上个月」。
  */
-const shiftMonth = (now: Date, n: number): Date =>
-  new Date(now.getFullYear(), now.getMonth() + n, now.getDate(), now.getHours(), now.getMinutes());
 
 /**
  * 每个习惯一份概览。
@@ -289,7 +292,7 @@ export function habitStats(all: Task[], now: Date, weekStart: WeekStart = 1, mon
     // 全都解析不出来（极端情况）就退回 `now`：那天之前没有可信的起点，分母从今天算。
     const starts = instances.map((t) => Date.parse(t.createdAt)).filter((n) => !Number.isNaN(n));
     const startKey = dayKey(starts.length > 0 ? new Date(Math.min(...starts)) : now);
-    const days = monthGrid(doneDays, shiftMonth(now, monthOffset), startKey, rep);
+    const days = monthGrid(doneDays, monthShift(now, monthOffset), startKey, rep);
     out.push({
       title,
       taskId: rep.id,

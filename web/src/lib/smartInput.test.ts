@@ -320,6 +320,34 @@ describe('parseSmartInput：N 天后 / N 周后 / N 个月后 / N 年后', () =>
   });
 
   /**
+   * **月底说「N 个月后」落在目标月的最后一天，不溢出到下下个月。**
+   *
+   * 原来那一支靠 `setMonth` 的进位，而 `setMonth` 在 31 号加一个月时是
+   * 「2 月 31 日」→ 2 月只有 28 天 → **3 月 3 日**：用户说「一个月后」，拿到的是
+   * 「两个月零三天后」。实测（1 月 31 日 + 1 个月 = 3 月 3 日）。
+   *
+   * 夹逼的口径跟 `server/src/repeat.ts` 的月重复支一致（「31 号 clamp 到 2/28」）。
+   */
+  it('月底说「N 个月后」夹到目标月的最后一天', () => {
+    const jan31 = new Date(2026, 0, 31, 10);
+    expect(parseSmartInput('1个月后交房租', jan31).due)
+      .toBe(new Date(2026, 1, 28, 23, 59).toISOString());
+    // 30 号那天同理：2 月 28 号，而不是 3 月 2 号
+    const jan30 = new Date(2026, 0, 30, 10);
+    expect(parseSmartInput('1个月后交房租', jan30).due)
+      .toBe(new Date(2026, 1, 28, 23, 59).toISOString());
+  });
+
+  /**
+   * **「下个月」同一处夹逼。** 1 月 31 号说「下个月」是 2 月，不是 3 月 3 号。
+   */
+  it('月底说「下个月」落在下个月', () => {
+    const jan31 = new Date(2026, 0, 31, 10);
+    expect(parseSmartInput('下个月交房租', jan31).due)
+      .toBe(new Date(2026, 1, 28, 23, 59).toISOString());
+  });
+
+  /**
    * **N 年后**是这一族的第四个，补的是 Things 明写而我们独缺的那一档
    * （《Using Natural Language Input》：「Use *w* for weeks,
    * *mo* for months, and *y* for years」）。「两年后换护照」「三年后车检」

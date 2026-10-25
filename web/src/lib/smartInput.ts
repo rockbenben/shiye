@@ -2,6 +2,8 @@ import type { Repeat, TaskContext } from '../types.js';
 // 情境的中文名从这里来，不在这个文件里抄第二份——那份名单同时供侧栏、
 // 筛选栏、卡片记号用，抄一份出来的那天就开始飘。
 import { CONTEXT_LABEL, CONTEXTS } from './taskView.js';
+// 跨月的算术（全仓库唯一一份）从这儿来。
+import { monthShift } from './calendar.js';
 
 /**
  * 「智能识别」——从一句随手写的标题里认出时间、重复、标签。
@@ -257,11 +259,16 @@ function takeDate(src: string, now: Date): { rest: string; part: DatePart | null
   rest = take(rest, new RegExp(`${NUM}\\s*个?月(?:以|之)?后`), (m) => {
     const n = cnNum(m[1]);
     if (n === null || n < 1) return false;
-    const d = startOfDay(now);
-    // setMonth 自己进位；31 号加一个月会溢出到下月初——这里是「大约 N 个月后」，
-    // 一天的偏差不值得为它写一套夹逼。
-    d.setMonth(d.getMonth() + n);
-    return hit(d, `${n}个月后`);
+    // **夹到目标月的最后一天**，不靠 `setMonth` 的溢出。
+    //
+    // 原来这里写的是「31 号加一个月会溢出到下月初——一天的偏差不值得为它写
+    // 一套夹逼」。**那个账算错了**：1 月 31 日加一个月是「2 月 31 日」，而 2 月
+    // 只有 28 天 → 3 月 3 日（实测）。那不是一天的偏差，是差三周——用户说的是
+    // 「一个月后」，拿到的是「两个月零三天后」。
+    //
+    // 夹逼在 `calendar.ts` 的 `monthShift` 里（全仓库唯一一份跨月算术），口径
+    // 跟 `server/src/repeat.ts` 的月重复支一致（「31 号 clamp 到 2/28」）。
+    return hit(monthShift(startOfDay(now), n), `${n}个月后`);
   });
   if (part) return { rest, part };
 
@@ -275,7 +282,8 @@ function takeDate(src: string, now: Date): { rest: string; part: DatePart | null
    *
    * **跟月那档一样用 `setFullYear`，不换算成 365 天**：闰年差一天，而人说
    * 「两年后」要的是日历上的同一天。2 月 29 日加一年会溢出成 3 月 1 日——
-   * 跟月那档同一个态度，这是「大约 N 年后」，一天的偏差不值得为它写夹逼。
+   * **这一档的偏差就是一天**（「大约 N 年后」，为它写一套夹逼不值得）；月那档
+   * 差的是三周（31 号 + 1 个月落到 3 月 3 日），那个必须夹。
    */
   rest = take(rest, new RegExp(`${NUM}\\s*年(?:以|之)?后`), (m) => {
     const n = cnNum(m[1]);
@@ -342,9 +350,9 @@ function takeDate(src: string, now: Date): { rest: string; part: DatePart | null
   });
   if (part) return { rest, part };
   rest = take(rest, /(下+)个?月/, (m) => {
-    const d = startOfDay(now);
-    d.setMonth(d.getMonth() + m[1].length);
-    return hit(d, `${m[1]}个月`);
+    // 同样要夹到目标月的最后一天（跟上面「N 个月后」那一支同一个理由）：
+    // 1 月 31 日说「下个月」不该落到 3 月 3 日。
+    return hit(monthShift(startOfDay(now), m[1].length), `${m[1]}个月`);
   });
   return { rest, part };
 }

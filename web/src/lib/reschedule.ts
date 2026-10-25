@@ -27,6 +27,21 @@ export function shiftTimesPatch(t: Task, shift: number): Partial<Task> {
   if (hasTimeBlock(t)) {
     patch.startAt = new Date(Date.parse(t.startAt as string) + shift).toISOString();
     patch.endAt = new Date(Date.parse(t.endAt as string) + shift).toISOString();
+  } else if (t.startAt && !t.endAt) {
+    // **只有开始时间、压根没有结束时间**（GTD 那个 tickler、「从 9 月 1 日开始，
+    // 9 月 5 日之前交」那条）：那条开始时间就是它除了截止日期之外的另一个日期，
+    // **得跟截止时间一起挪**。
+    //
+    // 原来它原地不动，于是「改到明天」之后截止时间到了明天、开始时间还留在
+    // 下个月：**截止时间落在开始时间之前**（一句自相矛盾的话），而那条任务
+    // 因为「还没开始」仍旧不进「今天」/「接下来」/「推荐」——按了跟没按一样。
+    // 跟上面那对「开始 + 结束」是同一件事：挪的是整条，不是一个字段。
+    //
+    // **`endAt` 在、但 `endAt <= startAt`（一句自相矛盾的话）不算这一支**：
+    // 那不是「只有开始时间」，是一个坏掉的时间段，而它退回「只认 due」是
+    // `hasTimeBlock` 那个判据定的（`reschedule.test.ts` 里钉着）。
+    const ms = Date.parse(t.startAt);
+    if (!Number.isNaN(ms)) patch.startAt = new Date(ms + shift).toISOString();
   }
   const due = t.due ? Date.parse(t.due) : NaN;
   if (!Number.isNaN(due)) patch.due = new Date(due + shift).toISOString();
@@ -152,9 +167,34 @@ function moveToDayPatch(t: Task, target: Date, now: Date, pastToDayEnd: boolean)
   // 有时间段的不走这一支，理由见上面 ③ 末尾那段。
   const at = pastToDayEnd && !block && kept.getTime() <= now.getTime() ? dayEnd : kept;
 
-  // 锚点算不出来（没有时间段、`due` 也空着或坏着）：没有可平移的东西，
-  // 「改到明天」就是给它一个明天的截止时间——跟改动前一字不差。
-  if (prev === null) return { due: at.toISOString() };
+  // 锚点算不出来（没有时间段、`due` 也空着或坏着）：**不一定是没有可挪的东西。**
+  //
+  // **「只有开始时间」的情形**：那条开始时间就是它唯一的日期（GTD 那个
+  // tickler——「等新电脑到了再装环境」就是这个样子），「改到明天」该挪的是它。
+  //
+  // 原来这一支直接给它补一个「明天 23:59」的截止时间，而开始时间原地不动，
+  // 于是**截止时间落在开始时间之前**（一句自相矛盾的话），而那条任务因为
+  // 「还没开始」仍旧不进「今天」/「接下来」/「推荐」：按了跟没按一样，
+  // 还多了一个他没写过的截止时间。④ 那句「挪的是整条，不是补一个 `due`」
+  // 对有时间段的情形成立，对只有开始时间的情形原来没覆盖到。
+  //
+  // 挪的时候**钟点照旧**（开始时间是几点就是几点），只换日子——跟 ①
+  // 「原来几点还是几点」同一条。
+  if (prev === null) {
+    const startMs = t.startAt && !t.endAt ? Date.parse(t.startAt) : NaN;
+    if (!Number.isNaN(startMs)) {
+      const s = new Date(startMs);
+      return {
+        startAt: new Date(
+          target.getFullYear(), target.getMonth(), target.getDate(),
+          s.getHours(), s.getMinutes(), s.getSeconds(), s.getMilliseconds(),
+        ).toISOString(),
+      };
+    }
+    // 真的什么都没有（没有时间段、没有开始时间、`due` 也空着或坏着）：
+    // 「改到明天」就是给它一个明天的截止时间——跟改动前一字不差。
+    return { due: at.toISOString() };
+  }
 
   const delta = at.getTime() - prev.getTime();
   const moved = shiftTimesPatch(t, delta);

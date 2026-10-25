@@ -22,6 +22,7 @@ import { toastRaw } from './reminder.js';
 import { createAutoExpand } from './autoExpand.js';
 import { createAgentRunner, type Spawner } from './expand.js';
 import { maskKey, testAi, type Fetcher } from './aiApi.js';
+import { aiReadiness } from './aiStatus.js';
 import { mergeEndpoint, sanitizeSettings } from './settings.js';
 import { skipPatch } from './repeat.js';
 import { checkTaskPatch, isSettled, sanitizeProposalPatch } from './task.js';
@@ -479,6 +480,69 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
     if (text !== undefined) autoExpand.forget(next.id);
 
     return c.json(next);
+  });
+
+  /**
+   * 把一条收件箱原文一次变成 1..N 条任务——手动「变成任务」和「拆成多条」
+   * 共用这一条路。
+   *
+   * **为什么不是客户端建 N 条再 PATCH**：两个写之间隔着好几轮网络/磁盘，
+   * 中间任何一步失败都会留下「几条任务已经在看板上、原文却还没标已处理」的
+   * 半成品；重试一次就多一份重复任务。更糟的是 AI 可能在这期间把原文拆掉，
+   * 最后那次 PATCH 会把它的 `taskIds` 整个覆盖掉——任务还在，但跟原文失联。
+   * 这里把「检查原文状态 → 建任务 → 更新 taskIds」收在一次请求里，并在写
+   * 任务之后、写收件箱失败时回滚任务，窗口小得多。
+   *
+   * **已经拆过、而且确实有任务的条目拒绝**。但 `processed: true` +
+   * `taskIds: []` 要放行：那是 AI 判「这不是任务」的中间态，界面上那条
+   * 「变成任务」就是给它留的出口，不能一起挡掉。
+   */
+  app.post('/api/inbox/:id/to-tasks', async (c) => {
+    const body = (await jsonBody(c)) as { tasks?: unknown } | null;
+    if (!body || !Array.isArray(body.tasks) || body.tasks.length === 0) {
+      return c.json({ error: 'tasks 要是非空数组' }, 400);
+    }
+    const inbox = readInbox();
+    const i = inbox.findIndex((x) => x.id === c.req.param('id'));
+    if (i < 0) return c.json({ error: '没有这一条' }, 404);
+    const item = inbox[i];
+    const existingTaskIds = Array.isArray(item.taskIds) ? item.taskIds : [];
+    if (item.processed && existingTaskIds.length > 0) {
+      return c.json({ error: '这条已经拆过了，去「已拆解」里看它拆出来的任务' }, 409);
+    }
+
+    const all = readTasks();
+    const created: Task[] = [];
+    for (const [idx, raw] of body.tasks.entries()) {
+      const r = checkTaskPatch(raw);
+      if (!r.ok) return c.json({ error: `第 ${idx + 1} 条：${r.field} ${r.reason}`, field: r.field }, 400);
+      if (!r.value.title) return c.json({ error: `第 ${idx + 1} 条：标题不能为空`, field: 'title' }, 400);
+      const task = newTask({ ...r.value, title: r.value.title });
+      if (task.parentId) {
+        const why = checkParentLink([...all, ...created], task.id, task.parentId);
+        if (why) return c.json({ error: `第 ${idx + 1} 条：${why}`, field: 'parentId' }, 400);
+      }
+      // 跟 POST /api/tasks 同一条：建出来就是已完成的，完成时刻在这一刻盖。
+      created.push(task.status === 'done' && !task.completedAt
+        ? { ...task, completedAt: task.createdAt }
+        : task);
+    }
+
+    writeTasks([...all, ...created]);
+    const next: InboxItem = {
+      ...item,
+      processed: true,
+      taskIds: [...new Set([...existingTaskIds, ...created.map((t) => t.id)])],
+    };
+    try {
+      writeInbox(inbox.map((x, k) => (k === i ? next : x)));
+    } catch (e) {
+      // 收件箱没写成就把任务撤回去：宁可这次整体失败，也不留下一批没有来源
+      // 的孤儿任务。
+      writeTasks(all);
+      throw e;
+    }
+    return c.json({ item: next, tasks: created }, 201);
   });
 
   /**
@@ -1212,6 +1276,10 @@ export function createApp(bus?: Bus, spawnFn?: Spawner, fetchFn: Fetcher = fetch
   });
 
   app.get('/api/settings', (c) => c.json(maskAiEndpoints(readSettings())));
+
+  // 只读的 AI 可用性检查：首屏据此告诉用户「AI 还没接上」。不返回密钥，
+  // 也不启动 CLI；检查 PATH 里的命令文件是否存在。
+  app.get('/api/ai/status', (c) => c.json(aiReadiness(readSettings())));
 
   /**
    * 导出专用的设置读取：**每条记录的 `key` 都给明文**。普通 GET 永远逐条打码，

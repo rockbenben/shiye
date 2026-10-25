@@ -500,6 +500,7 @@ describe('createAgentRunner：支持多款 CLI', () => {
     const last = seen[seen.length - 1] as { state: string; message: string };
     expect(last.state).toBe('failed');
     expect(last.message).toContain('确认 agy 在 PATH 里');
+    expect(last.message, '没装 CLI 时得把不用 AI 的「变成任务」也指出来').toContain('变成任务');
   });
 
   it('设置设为 custom 时，spawn 传入自定义可执行文件与模板参数', () => {

@@ -26,8 +26,9 @@ export interface AgentStatus {
   /**
    * 这条状态是四件事里的哪一件跑出来的。前端按它选横幅标题——「拆解完成」
    * 「回顾完成」「总览」「拆细完成」是四个不同的结果，标题写死成「拆解完成」会让回顾、
-   * 总览和拆细顶着错名字；board 的 ok 还靠它决定「别在 6 秒后自动消失」（总览的
-   * 汇报文本本身就是产物，不是「去看板看新卡片」的信号）。
+   * 总览和拆细顶着错名字；前端还靠它决定提示怎么收：总览的 ok 不自动消失
+   * （汇报文本本身就是产物），拆解的 ok 因为多了一颗「查看任务」留 10 秒。
+   * 其余成功/告知类仍按 6 秒收走。
    *
    * scheduled/idle 是 autoExpand 的排期信号、不挂 kind；mergeOutbox 在启动时
    * 补合并历史坏文件也没有 kind（那时候没有「这一次运行」）——缺省按拆解的
@@ -418,7 +419,7 @@ export function createAgentRunner(bus?: Bus, spawnFn: Spawner = crossSpawn as Sp
       // 这是「没装对应 CLI」最常见的现场。**得把另一条路说出来**：设置里
       // 改成「调接口」就不需要这个命令行了，而光看这句报错的人不会知道有这个选项。
       const message = e.code === 'ENOENT'
-        ? `AI 命令行工具没找到，确认 ${invocation.displayName} 在 PATH 里；或者去设置 → AI 拆解，改成「调接口」`
+        ? `AI 命令行工具没找到，确认 ${invocation.displayName} 在 PATH 里；或者去设置 → AI 拆解，改成「调接口」。不想配 AI 的话，收件箱每条下面的「变成任务」也能直接建任务。`
         : `启动 AI 失败：${e.message}`;
       emit({ state: 'failed', message });
       onSettled?.();

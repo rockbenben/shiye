@@ -288,6 +288,69 @@ describe('收件箱', () => {
     expect(body.error).toMatch(/重新拆解/);
     expect(readInbox()[0].text).toBe('原文');   // 没有被改动
   });
+
+  describe('POST /api/inbox/:id/to-tasks：一次建 1..N 条并回填 taskIds', () => {
+    it('建两条任务、原文标已处理，taskIds 跟返回的任务对得上', async () => {
+      const item = (await (await post('/api/inbox', { text: '买猫粮；约牙医' })).json()) as InboxItem;
+      const res = await app.request(`/api/inbox/${item.id}/to-tasks`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tasks: [{ title: '买猫粮' }, { title: '约牙医' }] }),
+      });
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { item: InboxItem; tasks: Task[] };
+      expect(body.tasks.map((t) => t.title)).toEqual(['买猫粮', '约牙医']);
+      expect(readTasks()).toHaveLength(2);
+      expect(readInbox()[0].processed).toBe(true);
+      expect(readInbox()[0].taskIds).toEqual(body.tasks.map((t) => t.id));
+    });
+
+    it('**已经拆过、而且有任务：拒绝，不覆盖已有的 taskIds**——AI 并发拆完时走这条', async () => {
+      const item = (await (await post('/api/inbox', { text: '原文' })).json()) as InboxItem;
+      await patch(`/api/inbox/${item.id}`, { processed: true, taskIds: ['t-ai'] });
+
+      const res = await app.request(`/api/inbox/${item.id}/to-tasks`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tasks: [{ title: '手动再拆一条' }] }),
+      });
+      expect(res.status).toBe(409);
+      expect(readTasks()).toHaveLength(0);
+      expect(readInbox()[0].taskIds).toEqual(['t-ai']);
+    });
+
+    it('**AI 判「不是任务」留下的 processed:true + 空 taskIds 要放行**——「变成任务」就是给它的出口', async () => {
+      const item = (await (await post('/api/inbox', { text: '原文' })).json()) as InboxItem;
+      await patch(`/api/inbox/${item.id}`, { processed: true, taskIds: [] });
+
+      const res = await app.request(`/api/inbox/${item.id}/to-tasks`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tasks: [{ title: '还是一件要做的事' }] }),
+      });
+      expect(res.status).toBe(201);
+      expect(readTasks()).toHaveLength(1);
+      expect(readInbox()[0].taskIds).toHaveLength(1);
+    });
+
+    it('任何一条不合法就整批不建、原文也不动——不能留下半批任务', async () => {
+      const item = (await (await post('/api/inbox', { text: '原文' })).json()) as InboxItem;
+      const res = await app.request(`/api/inbox/${item.id}/to-tasks`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tasks: [{ title: '合法的' }, { title: '   ' }] }),
+      });
+      expect(res.status).toBe(400);
+      expect(readTasks()).toHaveLength(0);
+      expect(readInbox()[0].processed).toBe(false);
+      expect(readInbox()[0].taskIds).toEqual([]);
+    });
+
+    it('条目不存在回 404', async () => {
+      const res = await app.request('/api/inbox/没有这一条/to-tasks', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tasks: [{ title: 'x' }] }),
+      });
+      expect(res.status).toBe(404);
+      expect(readTasks()).toHaveLength(0);
+    });
+  });
 });
 
 describe('任务', () => {
@@ -991,6 +1054,25 @@ describe('PATCH /api/tasks 与 DELETE /api/tasks：多选之后一起改/删，�
 });
 
 describe('设置', () => {
+  it('GET /api/ai/status：接口三项没填全就说缺什么，填全了 ready', async () => {
+    const put = (body: unknown) => app.request('/api/settings', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    await put({ aiMode: 'api', aiEndpointId: 'e1' });
+    const missing = await (await get('/api/ai/status')).json() as { mode: string; ready: boolean; reason?: string };
+    expect(missing.mode).toBe('api');
+    expect(missing.ready).toBe(false);
+    expect(missing.reason, '没填全时得说清缺什么，不然设置页里也不知道该补哪格').toContain('接口地址还没填');
+
+    await put({
+      aiMode: 'api',
+      aiEndpointId: 'e1',
+      aiEndpoints: { e1: { baseUrl: 'https://example.com/v1', key: 'sk-test', model: 'test-model' } },
+    });
+    const ready = await (await get('/api/ai/status')).json() as { mode: string; ready: boolean };
+    expect(ready).toEqual({ mode: 'api', ready: true });
+  });
+
   it('PUT 存下来，GET 读回来', async () => {
     const res = await app.request('/api/settings', {
       method: 'PUT',
